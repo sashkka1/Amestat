@@ -1,15 +1,16 @@
 // Подключение проекта Supabase одной командой: `npm run setup:supabase`.
 //
-// Читает .env.local и делает всё, что иначе пришлось бы кликать в панели:
-//   1. supabase link + db push — накатывает миграции из supabase/migrations.
-//   2. Заводит пользователя сайта в Auth (AMESTAT_LOGIN_EMAIL / PASSWORD), если его нет.
-//   3. Вписывает его в public.owners — без этого RLS не отдаст ни строки.
-//   4. Выключает регистрацию и ставит Site URL / Redirect URLs на адрес Pages.
-//   5. Кладёт адрес и service_role в ../data/amestat.json для сборщика в Sashboard —
-//      только если скрипт запущен внутри хаба (рядом лежит его settings.gradle.kts).
+// Читает .env.local. Обязательных значений три: адрес, публичный ключ, service_role.
+// С ними скрипт кладёт ключи сборщику в Sashboard; всё остальное делает, если дали чем:
+//   1. Миграции из supabase/migrations — с токеном (link + push) или с одним паролем
+//      базы (push по адресу базы). Без того и другого — руками в SQL Editor.
+//   2. Пользователь сайта в Auth + строка в public.owners — если дали почту и пароль.
+//   3. Регистрация выключена, Site URL / Redirect URLs — если дали токен.
+//   4. ../data/amestat.json для сборщика — если рядом лежит Sashboard.
+// Что пропущено — перечисляется в конце как «руками в панели».
 //
-// Повторный запуск безопасен: миграции уже накаченные пропускаются, пользователь и
-// строка owners не дублируются. Ничего не печатает из ключей.
+// Повторный запуск безопасен: накаченные миграции пропускаются, пользователь и строка
+// owners не дублируются. Ничего не печатает из ключей.
 
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -18,6 +19,7 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const envPath = resolve(root, ".env.local");
+const manual = [];
 
 function fail(text) {
   console.error(`✗ ${text}`);
@@ -40,27 +42,23 @@ function readEnv(path) {
 const env = readEnv(envPath);
 const need = (name) => {
   const v = env[name];
-  if (!v) fail(`в .env.local пусто ${name}`);
+  if (!v) fail(`в .env.local пусто ${name} — это обязательное`);
   return v;
 };
+const maybe = (name) => env[name] || "";
 
-// Обязательных три: без них не работает ни сайт, ни сборщик. Остальное — замена кликам
-// в панели: пусто — шаг пропускается, и в конце печатается, что сделать руками.
-const url = need("NEXT_PUBLIC_SUPABASE_URL").replace(/\/$/, "");
-const anon = need("NEXT_PUBLIC_SUPABASE_ANON_KEY");
+const url = need("NEXT_PUBLIC_SUPABASE_URL").replace(/\/(rest\/v1\/?)?$/, "");
+const anon = need("NEXT_PUBLIC_SUPABASE_ANON_KEY") || need("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY");
 const service = need("SUPABASE_SERVICE_ROLE_KEY");
-const dbPassword = env.SUPABASE_DB_PASSWORD || "";
-const accessToken = env.SUPABASE_ACCESS_TOKEN || "";
-const loginEmail = env.AMESTAT_LOGIN_EMAIL || "";
-const loginPassword = env.AMESTAT_LOGIN_PASSWORD || "";
-const siteUrl = (env.AMESTAT_SITE_URL || "").replace(/\/?$/, "/");
+const dbPassword = maybe("SUPABASE_DB_PASSWORD");
+const accessToken = maybe("SUPABASE_ACCESS_TOKEN");
+const loginEmail = maybe("AMESTAT_LOGIN_EMAIL");
+const loginPassword = maybe("AMESTAT_LOGIN_PASSWORD");
+const siteUrl = maybe("AMESTAT_SITE_URL").replace(/\/?$/, "/");
 
 const ref = new URL(url).hostname.split(".")[0];
 if (!/^[a-z]{20}$/.test(ref)) fail(`не похоже на адрес проекта Supabase: ${url}`);
 console.log(`проект ${ref}`);
-
-/** Что осталось сделать руками — печатается в конце одним списком. */
-const manual = [];
 
 // ---------------------------------------------------------------------------- CLI
 function cli(args) {
@@ -68,23 +66,24 @@ function cli(args) {
   const res = spawnSync(isWin ? "supabase.exe" : "supabase", args, {
     cwd: root,
     stdio: "inherit",
-    env: { ...process.env, SUPABASE_ACCESS_TOKEN: accessToken },
+    env: accessToken ? { ...process.env, SUPABASE_ACCESS_TOKEN: accessToken } : process.env,
     shell: isWin,
   });
   if (res.status !== 0) fail(`supabase ${args[0]} ${args[1] ?? ""} завершился с кодом ${res.status}`);
 }
 
-// 1. Миграции — нужны токен и пароль базы. Нет их — SQL вставляется в панели руками.
-if (dbPassword && accessToken) {
+// 1. Миграции.
+if (accessToken && dbPassword) {
   console.log("→ supabase link");
   cli(["link", "--project-ref", ref, "--password", dbPassword, "--yes"]);
   console.log("→ supabase db push");
   cli(["db", "push", "--password", dbPassword, "--yes"]);
+} else if (dbPassword) {
+  console.log("→ supabase db push (по паролю базы, без токена)");
+  const dbUrl = `postgresql://postgres:${encodeURIComponent(dbPassword)}@db.${ref}.supabase.co:5432/postgres`;
+  cli(["db", "push", "--db-url", dbUrl, "--yes"]);
 } else {
-  console.log("→ миграции: пропущено (нет SUPABASE_ACCESS_TOKEN и/или SUPABASE_DB_PASSWORD)");
-  manual.push(
-    "Миграции: панель → SQL Editor → вставить и выполнить по очереди файлы supabase/migrations/*.sql (по порядку имён).",
-  );
+  manual.push("Миграции: SQL Editor → выполнить по очереди supabase/migrations/*.sql (или дай SUPABASE_DB_PASSWORD — накачу сам)");
 }
 
 // ---------------------------------------------------------------------------- HTTP
@@ -106,7 +105,15 @@ const adminHeaders = service.startsWith("eyJ")
   ? { apikey: service, Authorization: `Bearer ${service}` }
   : { apikey: service };
 
-// 2. Пользователь сайта и 3. замок owners — нужны почта и пароль. Нет их — в панели руками.
+// Схема на месте? Без таблицы owners дальше идти некуда.
+let schemaReady = false;
+{
+  const probe = await call("GET", `${url}/rest/v1/owners?select=user_id&limit=1`, undefined, adminHeaders);
+  schemaReady = probe.status === 200;
+  console.log(schemaReady ? "→ схема в базе есть" : `→ схемы в базе ещё нет (HTTP ${probe.status})`);
+}
+
+// 2. Пользователь сайта и замок owners.
 if (loginEmail && loginPassword) {
   console.log("→ пользователь сайта");
   let userId = null;
@@ -126,23 +133,21 @@ if (loginEmail && loginPassword) {
     userId = found.id;
     console.log("  уже был — оставлен как есть");
   }
-
-  console.log("→ owners");
-  const res = await call("POST", `${url}/rest/v1/owners?on_conflict=user_id`, { user_id: userId }, {
-    ...adminHeaders,
-    Prefer: "resolution=ignore-duplicates,return=minimal",
-  });
-  if (res.status < 200 || res.status >= 300) fail(`owners: HTTP ${res.status}: ${res.text.slice(0, 200)}`);
-  console.log("  вписан");
+  if (schemaReady) {
+    const res = await call("POST", `${url}/rest/v1/owners?on_conflict=user_id`, { user_id: userId }, {
+      ...adminHeaders,
+      Prefer: "resolution=ignore-duplicates,return=minimal",
+    });
+    if (res.status < 200 || res.status >= 300) fail(`owners: HTTP ${res.status}: ${res.text.slice(0, 200)}`);
+    console.log("  вписан в owners");
+  } else {
+    manual.push(`Замок: после миграций — SQL Editor: insert into public.owners (user_id) select id from auth.users where email = '${loginEmail}';`);
+  }
 } else {
-  console.log("→ пользователь сайта: пропущено (нет AMESTAT_LOGIN_EMAIL / AMESTAT_LOGIN_PASSWORD)");
-  manual.push(
-    "Пользователь: Authentication → Users → Add user (почта, пароль, Auto confirm).",
-    "Замок: SQL Editor → insert into public.owners (user_id) select id from auth.users where email = '<почта>';",
-  );
+  manual.push("Пользователь: Authentication → Users → Add user (Auto confirm); затем SQL: insert into public.owners (user_id) select id from auth.users where email = '…'; (или дай AMESTAT_LOGIN_EMAIL и AMESTAT_LOGIN_PASSWORD)");
 }
 
-// 4. Регистрация выключена, адреса сайта — нужен личный токен. Нет — тумблер в панели.
+// 3. Регистрация и адреса сайта — только с токеном.
 if (accessToken) {
   console.log("→ настройки Auth");
   const body = { disable_signup: true };
@@ -154,20 +159,15 @@ if (accessToken) {
     Authorization: `Bearer ${accessToken}`,
   });
   if (res.status < 200 || res.status >= 300) {
-    console.warn(`  ⚠️ не удалось (HTTP ${res.status}: ${res.text.slice(0, 200)})`);
-    manual.push("Регистрация: Authentication → Sign In / Providers → Email → выключить Allow new users to sign up.");
+    manual.push(`Регистрация: не выключилась (HTTP ${res.status}) — Authentication → Sign In / Providers → Email → выключить Allow new users to sign up`);
   } else {
     console.log("  регистрация выключена" + (siteUrl ? `, Site URL ${siteUrl}` : ""));
   }
 } else {
-  console.log("→ настройки Auth: пропущено (нет SUPABASE_ACCESS_TOKEN)");
-  manual.push(
-    "Регистрация: Authentication → Sign In / Providers → Email → выключить Allow new users to sign up.",
-    `Адрес сайта: Authentication → URL Configuration → Site URL и Redirect URLs = ${siteUrl || "адрес Pages"}`,
-  );
+  manual.push("Регистрация: Authentication → Sign In / Providers → Email → выключить Allow new users to sign up; URL Configuration → Site URL и Redirect URLs = " + (siteUrl || "адрес сайта"));
 }
 
-// 5. Ключи сборщику в Sashboard.
+// 4. Ключи сборщику в Sashboard.
 {
   const hub = resolve(root, "..");
   if (existsSync(resolve(hub, "settings.gradle.kts"))) {
@@ -177,7 +177,7 @@ if (accessToken) {
     writeFileSync(file, JSON.stringify({ url, serviceKey: service }, null, 2) + "\n");
     console.log(`→ ключи сборщика: ${file}`);
   } else {
-    console.log("→ Sashboard рядом не найден — адрес и service_role введи в ⚙ руками");
+    manual.push("Сборщик: адрес и service_role ввести в Sashboard → ⚙ → «amestat — сборщик»");
   }
 }
 
