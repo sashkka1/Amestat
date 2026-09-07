@@ -23,25 +23,23 @@ npm run dev                        # http://localhost:3000/
 npm run lint && npm run build      # статика в out/
 ```
 
-## База
+## База — одной командой
 
-Схема лежит в `supabase/migrations/`. Накатить на облачный проект:
+1. В Supabase создать проект (регион ближе к дому, пароль базы запомнить).
+2. Заполнить `.env.local` (шаблон — `.env.local.example`): адрес и оба ключа из Project Settings → API, пароль базы, личный токен аккаунта (Account → Access Tokens), почту и пароль для входа на сайт.
+3. `npm run setup:supabase`.
 
-```
-supabase login
-supabase link --project-ref <ref проекта>
-supabase db push
-```
+Скрипт `scripts/setup-supabase.mjs` накатывает миграции из `supabase/migrations/` (`supabase link` + `db push` с токеном из `.env.local`, без `supabase login`), заводит пользователя сайта, вписывает его в `owners`, выключает регистрацию, ставит Site URL и Redirect URLs, а если рядом лежит Sashboard — кладёт адрес и `service_role` в его `data/amestat.json` для сборщика. Повторный запуск безопасен.
 
-Пользователь один и заводится руками: панель Supabase → Authentication → Users → «Add user» (почта и пароль, «Auto confirm»). Затем там же в Sign In / Providers → Email выключить **Allow new users to sign up**, чтобы никто не завёл себе второй аккаунт.
-
-**Замок на пользователя.** Одной роли `authenticated` для доступа мало: политики RLS пускают только тех, кто записан в таблицу `owners` (миграция `20260907153535_owners.sql`). После создания пользователя вписать его в SQL Editor панели:
+**Замок на пользователя.** Одной роли `authenticated` для доступа мало: политики RLS пускают только тех, кто записан в таблицу `owners` (миграция `20260907153535_owners.sql`). Скрипт делает это сам; руками — в SQL Editor панели:
 
 ```sql
 insert into public.owners (user_id) select id from auth.users where email = 'почта@пользователя';
 ```
 
 Без этой строки вход пройдёт, а списки останутся пустыми: база отдаст ноль строк, не ошибку.
+
+Руками вместо скрипта: `supabase login`, `supabase link --project-ref <ref>`, `supabase db push`; пользователь — Authentication → Users → «Add user» («Auto confirm»); регистрация — Sign In / Providers → Email → выключить **Allow new users to sign up**.
 
 ## GitHub Pages
 
