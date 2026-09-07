@@ -63,11 +63,11 @@ console.log(`проект ${ref}`);
 // ---------------------------------------------------------------------------- CLI
 function cli(args) {
   const isWin = process.platform === "win32";
+  // Без shell: аргументы уходят как есть, пароль базы не проходит через командную строку оболочки.
   const res = spawnSync(isWin ? "supabase.exe" : "supabase", args, {
     cwd: root,
     stdio: "inherit",
     env: accessToken ? { ...process.env, SUPABASE_ACCESS_TOKEN: accessToken } : process.env,
-    shell: isWin,
   });
   if (res.status !== 0) fail(`supabase ${args[0]} ${args[1] ?? ""} завершился с кодом ${res.status}`);
 }
@@ -79,8 +79,15 @@ if (accessToken && dbPassword) {
   console.log("→ supabase db push");
   cli(["db", "push", "--password", dbPassword, "--yes"]);
 } else if (dbPassword) {
-  console.log("→ supabase db push (по паролю базы, без токена)");
-  const dbUrl = `postgresql://postgres:${encodeURIComponent(dbPassword)}@db.${ref}.supabase.co:5432/postgres`;
+  // ⚠️ Прямой адрес `db.<ref>.supabase.co` у Supabase только по IPv6 — с ноутбука без
+  // IPv6 он «не резолвится». Поэтому по умолчанию идём через пул соединений (IPv4):
+  // хост зависит от региона проекта и задаётся в SUPABASE_POOLER_HOST; пользователь
+  // у пула — `postgres.<ref>`.
+  const pooler = maybe("SUPABASE_POOLER_HOST");
+  const dbUrl = pooler
+    ? `postgresql://postgres.${ref}:${encodeURIComponent(dbPassword)}@${pooler}:5432/postgres`
+    : `postgresql://postgres:${encodeURIComponent(dbPassword)}@db.${ref}.supabase.co:5432/postgres`;
+  console.log(`→ supabase db push (по паролю базы, ${pooler ? "через пул " + pooler : "напрямую"})`);
   cli(["db", "push", "--db-url", dbUrl, "--yes"]);
 } else {
   manual.push("Миграции: SQL Editor → выполнить по очереди supabase/migrations/*.sql (или дай SUPABASE_DB_PASSWORD — накачу сам)");
