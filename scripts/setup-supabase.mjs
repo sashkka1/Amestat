@@ -44,18 +44,23 @@ const need = (name) => {
   return v;
 };
 
+// Обязательных три: без них не работает ни сайт, ни сборщик. Остальное — замена кликам
+// в панели: пусто — шаг пропускается, и в конце печатается, что сделать руками.
 const url = need("NEXT_PUBLIC_SUPABASE_URL").replace(/\/$/, "");
 const anon = need("NEXT_PUBLIC_SUPABASE_ANON_KEY");
 const service = need("SUPABASE_SERVICE_ROLE_KEY");
-const dbPassword = need("SUPABASE_DB_PASSWORD");
-const accessToken = need("SUPABASE_ACCESS_TOKEN");
-const loginEmail = need("AMESTAT_LOGIN_EMAIL");
-const loginPassword = need("AMESTAT_LOGIN_PASSWORD");
+const dbPassword = env.SUPABASE_DB_PASSWORD || "";
+const accessToken = env.SUPABASE_ACCESS_TOKEN || "";
+const loginEmail = env.AMESTAT_LOGIN_EMAIL || "";
+const loginPassword = env.AMESTAT_LOGIN_PASSWORD || "";
 const siteUrl = (env.AMESTAT_SITE_URL || "").replace(/\/?$/, "/");
 
 const ref = new URL(url).hostname.split(".")[0];
 if (!/^[a-z]{20}$/.test(ref)) fail(`не похоже на адрес проекта Supabase: ${url}`);
 console.log(`проект ${ref}`);
+
+/** Что осталось сделать руками — печатается в конце одним списком. */
+const manual = [];
 
 // ---------------------------------------------------------------------------- CLI
 function cli(args) {
@@ -69,10 +74,18 @@ function cli(args) {
   if (res.status !== 0) fail(`supabase ${args[0]} ${args[1] ?? ""} завершился с кодом ${res.status}`);
 }
 
-console.log("→ supabase link");
-cli(["link", "--project-ref", ref, "--password", dbPassword, "--yes"]);
-console.log("→ supabase db push");
-cli(["db", "push", "--password", dbPassword, "--yes"]);
+// 1. Миграции — нужны токен и пароль базы. Нет их — SQL вставляется в панели руками.
+if (dbPassword && accessToken) {
+  console.log("→ supabase link");
+  cli(["link", "--project-ref", ref, "--password", dbPassword, "--yes"]);
+  console.log("→ supabase db push");
+  cli(["db", "push", "--password", dbPassword, "--yes"]);
+} else {
+  console.log("→ миграции: пропущено (нет SUPABASE_ACCESS_TOKEN и/или SUPABASE_DB_PASSWORD)");
+  manual.push(
+    "Миграции: панель → SQL Editor → вставить и выполнить по очереди файлы supabase/migrations/*.sql (по порядку имён).",
+  );
+}
 
 // ---------------------------------------------------------------------------- HTTP
 async function call(method, target, body, headers) {
@@ -93,10 +106,10 @@ const adminHeaders = service.startsWith("eyJ")
   ? { apikey: service, Authorization: `Bearer ${service}` }
   : { apikey: service };
 
-// 2. Пользователь сайта.
-console.log("→ пользователь сайта");
-let userId = null;
-{
+// 2. Пользователь сайта и 3. замок owners — нужны почта и пароль. Нет их — в панели руками.
+if (loginEmail && loginPassword) {
+  console.log("→ пользователь сайта");
+  let userId = null;
   const created = await call("POST", `${url}/auth/v1/admin/users`, {
     email: loginEmail,
     password: loginPassword,
@@ -113,22 +126,25 @@ let userId = null;
     userId = found.id;
     console.log("  уже был — оставлен как есть");
   }
-}
 
-// 3. Замок owners.
-console.log("→ owners");
-{
+  console.log("→ owners");
   const res = await call("POST", `${url}/rest/v1/owners?on_conflict=user_id`, { user_id: userId }, {
     ...adminHeaders,
     Prefer: "resolution=ignore-duplicates,return=minimal",
   });
   if (res.status < 200 || res.status >= 300) fail(`owners: HTTP ${res.status}: ${res.text.slice(0, 200)}`);
   console.log("  вписан");
+} else {
+  console.log("→ пользователь сайта: пропущено (нет AMESTAT_LOGIN_EMAIL / AMESTAT_LOGIN_PASSWORD)");
+  manual.push(
+    "Пользователь: Authentication → Users → Add user (почта, пароль, Auto confirm).",
+    "Замок: SQL Editor → insert into public.owners (user_id) select id from auth.users where email = '<почта>';",
+  );
 }
 
-// 4. Регистрация выключена, адреса сайта.
-console.log("→ настройки Auth");
-{
+// 4. Регистрация выключена, адреса сайта — нужен личный токен. Нет — тумблер в панели.
+if (accessToken) {
+  console.log("→ настройки Auth");
   const body = { disable_signup: true };
   if (siteUrl) {
     body.site_url = siteUrl;
@@ -138,10 +154,17 @@ console.log("→ настройки Auth");
     Authorization: `Bearer ${accessToken}`,
   });
   if (res.status < 200 || res.status >= 300) {
-    console.warn(`  ⚠️ не удалось (HTTP ${res.status}: ${res.text.slice(0, 200)}) — выключи регистрацию в панели: Authentication → Sign In / Providers → Email`);
+    console.warn(`  ⚠️ не удалось (HTTP ${res.status}: ${res.text.slice(0, 200)})`);
+    manual.push("Регистрация: Authentication → Sign In / Providers → Email → выключить Allow new users to sign up.");
   } else {
     console.log("  регистрация выключена" + (siteUrl ? `, Site URL ${siteUrl}` : ""));
   }
+} else {
+  console.log("→ настройки Auth: пропущено (нет SUPABASE_ACCESS_TOKEN)");
+  manual.push(
+    "Регистрация: Authentication → Sign In / Providers → Email → выключить Allow new users to sign up.",
+    `Адрес сайта: Authentication → URL Configuration → Site URL и Redirect URLs = ${siteUrl || "адрес Pages"}`,
+  );
 }
 
 // 5. Ключи сборщику в Sashboard.
@@ -158,5 +181,9 @@ console.log("→ настройки Auth");
   }
 }
 
-console.log("✓ готово. Проверка: npm run dev → http://localhost:3000/login/ → вход " + loginEmail);
+if (manual.length > 0) {
+  console.log("\nОсталось руками в панели Supabase:");
+  for (const line of manual) console.log(`  • ${line}`);
+}
+console.log("\n✓ готово. Проверка: npm run dev → http://localhost:3000/login/" + (loginEmail ? ` → вход ${loginEmail}` : ""));
 void anon;
