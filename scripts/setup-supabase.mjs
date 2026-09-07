@@ -87,7 +87,11 @@ async function call(method, target, body, headers) {
   return { status: res.status, json, text };
 }
 
-const adminHeaders = { apikey: service, Authorization: `Bearer ${service}` };
+// `Bearer` — только для ключа-JWT (старый `service_role`, начинается с `eyJ`); новые
+// `sb_secret_…` идут одним заголовком `apikey`.
+const adminHeaders = service.startsWith("eyJ")
+  ? { apikey: service, Authorization: `Bearer ${service}` }
+  : { apikey: service };
 
 // 2. Пользователь сайта.
 console.log("→ пользователь сайта");
