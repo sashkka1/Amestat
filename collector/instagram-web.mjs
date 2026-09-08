@@ -28,8 +28,13 @@
 // комментариями: там уже живут проверка профиля, свой срок на запуск и вторая попытка (Opera
 // на хвосте предыдущего браузера встаёт через раз). Здесь окно скрытое: Instagram отдаёт всё
 // и headless, в отличие от TikTok.
-import { launchProfile, PROFILE_DIR, trimTraffic } from "./browser.mjs";
-import { notice } from "./notices.mjs";
+//
+// ⚠️ Обычно браузер сюда ПРИХОДИТ ГОТОВЫМ (`ctx` в настройках): полоса Instagram поднимает его
+// один раз на весь обход и отдаёт всем креаторам подряд — и ленте, и комментариям (владелец,
+// 2026-09-08: браузер на профиле поднимается один раз за обход, а не на каждого креатора).
+// Свой браузер модуль поднимает только когда его зовут в одиночку (разовая проверка, тест).
+import { launchProfile, PROFILE_OPERA, trimTraffic } from "./browser.mjs";
+import { notice, sessionHint } from "./notices.mjs";
 
 // Куда странице профиля вообще можно ходить. Всё остальное отсекается (`trimTraffic`), плюс
 // независимо от хоста — видео (`media`) и шрифты.
@@ -214,9 +219,10 @@ async function scrollRound(page) {
  * Сбор креатора Instagram через браузер.
  * `creator` — строка из `creators` (нужен `handle`).
  * `depth` — 'all' (весь список до потолка) или 'week' (только последние 7 дней).
+ * `ctx` — уже открытый браузер полосы; нет его — модуль поднимает свой и сам же закрывает.
  * Отдаёт ту же форму, что и TikTok: `{ profile, videos }`; при беде — Error с русским текстом.
  */
-export async function collectInstagramWeb(creator, { depth = "all", browserChoice = "", log } = {}) {
+export async function collectInstagramWeb(creator, { depth = "all", browserChoice = "", ctx: shared = null, log } = {}) {
   const handle = String(creator?.handle ?? "").replace(/^@/, "");
   if (!handle) throw new Error("у креатора пустой handle");
   const since = depth === "week" ? Date.now() - WEEK_MS : null;
@@ -224,29 +230,35 @@ export async function collectInstagramWeb(creator, { depth = "all", browserChoic
   // Нет профиля, не поднялся браузер — оба текста приходят из `launchProfile`; своих слов
   // добавляем ровно одно, чтобы в `sync_error` было видно площадку.
   let browser = null;
-  try {
-    browser = await launchProfile(browserChoice, { headless: true });
-  } catch (e) {
-    throw new Error(`Instagram: ${String(e?.message ?? e).split("\n")[0]}`);
+  if (!shared) {
+    try {
+      browser = await launchProfile(browserChoice, { headless: true, profile: PROFILE_OPERA });
+    } catch (e) {
+      throw new Error(`Instagram: ${String(e?.message ?? e).split("\n")[0]}`);
+    }
   }
-  const ctx = browser.ctx;
+  const ctx = shared ?? browser.ctx;
 
   let traffic = null;
+  let page = null;
   try {
-    log?.(`  браузер: ${browser.describe}, профиль ${PROFILE_DIR}`);
-    // Чужие хосты, видео и шрифты в этот браузер не пускаем: браузер живёт весь сбор креатора,
-    // а лента и Reels тянут за собой десятки чужих кадров. Не поставился перехват — шаг всё
-    // равно идёт, просто прожорливее.
-    try {
-      traffic = await trimTraffic(ctx, HOSTS_INSTAGRAM, { log });
-    } catch (e) {
-      log?.(`  лишнее отсечь не вышло: ${String(e?.message ?? e).split("\n")[0]}`);
+    if (browser) {
+      log?.(`  браузер: ${browser.describe}, профиль ${browser.profile}`);
+      // Чужие хосты, видео и шрифты в этот браузер не пускаем: лента и Reels тянут за собой
+      // десятки чужих кадров. Не поставился перехват — шаг всё равно идёт, просто прожорливее.
+      // ⚠️ У общего браузера полосы перехват ставится ОДИН РАЗ, снаружи (`sync.mjs`): второй
+      // `ctx.route` на том же контексте просто множил бы обработчики на каждого креатора.
+      try {
+        traffic = await trimTraffic(ctx, HOSTS_INSTAGRAM, { log });
+      } catch (e) {
+        log?.(`  лишнее отсечь не вышло: ${String(e?.message ?? e).split("\n")[0]}`);
+      }
     }
     // Отсутствие cookie `sessionid` — признак истёкшей сессии, но НЕ приговор сам по себе:
     // приговор выносится ниже, разом со всеми признаками и только на пустых руках.
     const noSession = !(await ctx.cookies("https://www.instagram.com")).some((c) => c.name === "sessionid");
 
-    const page = await ctx.newPage();
+    page = await ctx.newPage();
     const posts = new Map();   // pk → узел ленты
     const plays = new Map();   // code и pk → play_count из Reels
     const pinned = new Set();  // pk закреплённых: они не участвуют в проверке недели
@@ -322,9 +334,10 @@ export async function collectInstagramWeb(creator, { depth = "all", browserChoic
       throw new Error(ERR_SESSION);
     }
     // Признаки истёкшей сессии стоит знать и тогда, когда собрать всё-таки удалось: сегодня
-    // прошло, завтра встанет.
+    // прошло, завтра встанет. ⚠️ Но это НЕ письмо: копится и уходит одной строкой в лог на
+    // обход и площадку (владелец, 2026-09-08: не письмо на каждую публикацию).
     if (noSession || lostSession || head.loginWall) {
-      notice("session", `@${handle}: признаки истёкшей сессии, но данные собрались (cookie sessionid=${noSession ? "нет" : "есть"}, login_required=${lostSession}, стена входа=${head.loginWall})`);
+      sessionHint("instagram (profile-opera)", `@${handle}: cookie sessionid=${noSession ? "нет" : "есть"}, login_required=${lostSession}, стена входа=${head.loginWall}`);
     }
     // Ограничение объявляем, только когда оно и правда помешало: одинокая пометка в чужом
     // ответе при пришедшей первой пачке — не повод объявить обход неудачным.
@@ -423,13 +436,23 @@ export async function collectInstagramWeb(creator, { depth = "all", browserChoic
     const videos = picked.map(({ code, productType, ...v }) => v);
     return { profile, videos };
   } finally {
-    // Счёт перехвата пишем при любом исходе: на неудачном обходе он нужнее всего.
-    if (traffic) {
-      const { aborted, passed } = traffic();
-      log?.(`  лишних запросов отсечено ${aborted}, пропущено ${passed}`);
+    // Вкладку закрываем всегда и сами: браузер полосы живёт дальше, а незакрытая вкладка —
+    // это свой renderer, своя память и хвост, всплывающий при следующем запуске профиля.
+    if (page) {
+      try {
+        await page.close();
+      } catch {
+        // Вкладка могла закрыться сама вместе с браузером.
+      }
     }
-    // ⚠️ Профиль НЕ стирается: в нём вход фейкового аккаунта. Про это помнит сам `cleanup()`.
-    // Вкладку закрываем сами: профиль постоянный, и незакрытая всплывёт при следующем запуске.
-    await browser.cleanup();
+    if (browser) {
+      // Счёт перехвата пишем при любом исходе: на неудачном обходе он нужнее всего.
+      if (traffic) {
+        const { aborted, passed } = traffic();
+        log?.(`  лишних запросов отсечено ${aborted}, пропущено ${passed}`);
+      }
+      // ⚠️ Профиль НЕ стирается: в нём вход фейкового аккаунта. Про это помнит сам `cleanup()`.
+      await browser.cleanup();
+    }
   }
 }

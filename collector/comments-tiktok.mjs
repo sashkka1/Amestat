@@ -33,7 +33,7 @@
 // Ветки раскрываются только у корневых, попавших в сбор (в пределах `AMESTAT_COMMENTS_MAX`),
 // только если у корневого `replies > 0`, и не больше `AMESTAT_REPLIES_MAX` ответов на ветку.
 
-import { launchProfile, hideWindow } from "./browser.mjs";
+import { hideWindow } from "./browser.mjs";
 import { expandBranches, pickReplies, branchesOf } from "./replies.mjs";
 import { notice } from "./notices.mjs";
 
@@ -276,7 +276,7 @@ function readState(page, itemSelector, stopRe) {
  * сначала корневые, следом ответы (`parentId` — id корневого, `replies` у них `null`).
  * При капче или пустых ответах бросает Error с русским текстом.
  */
-export async function collectTikTokComments(ctx, video, { max = 100, repliesMax = 20, log } = {}) {
+export async function collectTikTokComments(ctx, video, { max = 100, repliesMax = 20, expandReplies = true, profile = "profile-tiktok", log } = {}) {
   const videoId = String(video?.id ?? "");
   const url = String(video?.url ?? "");
   if (!videoId || !url) throw new Error("у видео нет id или адреса");
@@ -384,9 +384,12 @@ export async function collectTikTokComments(ctx, video, { max = 100, repliesMax 
         throw new Error(`TikTok показал капчу на видео ${videoId}`);
       }
       // Пустые тела при отрисованных заглушках — та же капча, только ещё не показанная.
+      // ⚠️ Код здесь `session`, а не `stop`, и профиль назван нарочно: копий постоянного
+      // профиля две (`profile-opera` и `profile-tiktok`), сессия фейка в них живёт своей
+      // жизнью, и владелец должен видеть, в КАКОЙ из них кончился вход.
       if (bodies > 0 && empty === bodies) {
-        notice("stop", `${who}: ${bodies} пустых ответов на комментарии (окно скрыто?)`);
-        throw new Error(`TikTok отдал ${bodies} пустых ответов на комментарии видео ${videoId} (окно браузера скрыто?)`);
+        notice("session", `${profile}: ${who} — ${bodies} пустых ответов на комментарии (сессия фейка в этой копии профиля истекла? окно скрыто?)`);
+        throw new Error(`TikTok отдал ${bodies} пустых ответов на комментарии видео ${videoId} (профиль ${profile}: сессия истекла или окно скрыто)`);
       }
       if (bodies === 0) throw new Error(`TikTok не запросил комментарии видео ${videoId}: вкладка ${opened ?? "не открылась"}, на экране «${view.head}»`);
     }
@@ -395,7 +398,9 @@ export async function collectTikTokComments(ctx, video, { max = 100, repliesMax 
     const roots = [...seen.values()].slice(0, max);
     const branches = roots.filter((c) => (c.replies ?? 0) > 0).length;
     let branchesOpened = 0, moreClicks = 0, timedOut = false;
-    if (branches > 0 && repliesMax > 0) {
+    // `expandReplies: false` (просьба «без веток») отменяет только КЛИКИ: ответы, которые
+    // TikTok положил в корневой сам (`reply_comment`), уже собраны и ничего не стоили.
+    if (branches > 0 && repliesMax > 0 && expandReplies) {
       ({ opened: branchesOpened, more: moreClicks, timedOut } = await expandBranches(page, state, {
         open: BRANCH_OPEN, more: BRANCH_MORE, branches, repliesMax, pauseMs: BRANCH_PAUSE_MS, log,
       }));
@@ -403,8 +408,8 @@ export async function collectTikTokComments(ctx, video, { max = 100, repliesMax 
     }
     const replies = pickReplies(state.replies.values(), roots, repliesMax);
     if (branches > 0) {
-      log?.(`    ответов: собрано ${replies.length} у ${branchesOf(replies)} веток (раскрыто ${branchesOpened} из ${branches}, дожато ${moreClicks}, тел ${replyBodies})`);
-      if (replies.length === 0) notice("replies", `${who}: ответы не снялись ни у одной из ${branches} веток`);
+      log?.(`    ответов: собрано ${replies.length} у ${branchesOf(replies)} веток (${expandReplies ? `раскрыто ${branchesOpened} из ${branches}, дожато ${moreClicks}, тел ${replyBodies}` : "ветки не раскрывались — только даровые"})`);
+      if (replies.length === 0 && expandReplies) notice("replies", `${who}: ответы не снялись ни у одной из ${branches} веток`);
     }
     return [...roots, ...replies];
   } finally {

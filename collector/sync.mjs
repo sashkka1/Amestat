@@ -10,14 +10,31 @@
 //   • `videos.first_seen_at` и `videos.ours` сборщик не шлёт никогда: первое ставит база,
 //     второе — триггер и владелец на сайте. Имя и описание креатора — тоже владельца.
 //   • Одновременно идёт не больше одного обхода: TikTok и так на грани, а два браузера
-//     на одного креатора гарантированно дают пустые ответы.
+//     на одного креатора гарантированно дают пустые ответы. ⚠️ ВНУТРИ обхода полос две —
+//     см. следующий пункт; это не два обхода, а один в две руки.
+//   • Полосы: креаторы делятся по площадке, и полоса TikTok идёт ОДНОВРЕМЕННО с полосой
+//     Instagram (владелец, 2026-09-08: «два процесса, жрут больше ресурса, но эффективнее»).
+//     Строка в `sync_runs` одна на обход, счётчики и лог общие; строки лога помечены `[tt]` и
+//     `[ig]`, замечания — в одно письмо. Площадки друг другу не мешают: у каждой свои паузы,
+//     свой браузер и своя копия профиля с сессией фейка.
+//   • Браузер на постоянном профиле поднимается ОДИН РАЗ НА ПОЛОСУ и служит всем её креаторам:
+//     Instagram'у — на ленту и на комментарии, TikTok'у — на комментарии (список видео у него
+//     по-прежнему в чистом одноразовом профиле на креатора, и это правило не трогается).
+//     ⚠️ Профилей поэтому два: одна папка держит один процесс браузера, а полос две
+//     (`PROFILE_OPERA` и `PROFILE_TIKTOK`, копия заводится сама — см. `browser.mjs`).
 //   • Глубина (`depth`) обхода целиком передаётся сборщикам площадок: 'all' — весь список
 //     видео, 'week' — только за последние 7 дней. Снимок профиля делается всегда одинаково.
 //   • Повтор после неудачи (`failedOnly`) берёт только тех, у кого в `creators.sync_error`
 //     что-то есть: успевшие собраться второй раз за час не тревожатся.
 //   • Тексты комментариев — отдельный шаг ПОСЛЕ снимков видео и только по свежим роликам
-//     (`AMESTAT_COMMENTS_DAYS`, у которых комментарии вообще есть). Он ходит вторым браузером,
+//     (`AMESTAT_COMMENTS_DAYS`, у которых комментарии вообще есть). Он ходит браузером полосы,
 //     под сессией фейкового аккаунта, и ошибка на видео обход не валит: снимки уже записаны.
+//     Два выключателя приходят из просьбы: `comments = false` — шага нет вовсе, `replies = false`
+//     — корневые снимаются, а ветки не раскрываются (даровые ответы всё равно кладутся: они
+//     приезжают внутри корневого и не стоят ни клика, ни запроса).
+//   • Видео, у которого число комментариев не изменилось с прошлого съёма
+//     (`videos.comments_synced_count`), второй раз не обходится вовсе: минуты уходили на то же
+//     самое. Первый раз (там `null`) — снимаем всегда.
 //   • Картинки Instagram на чужих адресах не остаются: аватар и обложки перекладываются в
 //     свой бакет (`images.mjs`), в базу идёт наш публичный адрес. Причина — в `images.mjs`;
 //     у TikTok картинки показываются как есть, и его это не касается вовсе.
@@ -29,9 +46,10 @@ import { collectInstagramGraph } from "./instagram-graph.mjs";
 import { collectInstagramWeb } from "./instagram-web.mjs";
 import { collectTikTokComments } from "./comments-tiktok.mjs";
 import { collectInstagramComments } from "./comments-instagram.mjs";
-import { launchProfile, trimTraffic } from "./browser.mjs";
+import { launchProfile, trimTraffic, ensureProfileCopy, PROFILE_OPERA, PROFILE_TIKTOK } from "./browser.mjs";
 import { rehostImage, isOurs, avatarPath, coverPath } from "./images.mjs";
-import { notice, startRun, reportRun } from "./notices.mjs";
+import { notice, startRun, reportRun, takeSessionHints } from "./notices.mjs";
+import { basename } from "node:path";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const CREATOR_FIELDS = "id,platform,handle,display_name,avatar_custom,sort_order,added_at";
@@ -47,12 +65,48 @@ const SLOW_CREATOR_MS = 3 * 60_000;  // дольше — замечание вл
 const HOSTS_TIKTOK = ["tiktok", "tiktokcdn", "tiktokv", "ttwstatic", "byteoversea", "bytedance", "byteimg", "ibytedtos", "musical.ly"];
 const HOSTS_INSTAGRAM = ["instagram.com", "cdninstagram", "fbcdn.net", "facebook.com"];
 
+// Две полосы обхода. `tt` — TikTok (и всё, чью площадку мы не знаем: пусть падает со своей
+// ошибкой там, где падало и раньше), `ig` — Instagram.
+const LANES = {
+  tt: { tag: "[tt]", profile: PROFILE_TIKTOK, headless: false, hosts: HOSTS_TIKTOK, name: "TikTok" },
+  ig: { tag: "[ig]", profile: PROFILE_OPERA, headless: true, hosts: HOSTS_INSTAGRAM, name: "Instagram" },
+};
+
 // Очередь в процессе: следующий обход ждёт, пока закончится текущий.
 let chain = Promise.resolve();
 let pending = 0;
 
+const short = (e) => String(e?.message ?? e).split("\n")[0];
+
+/** В какую полосу идёт креатор. Чистая функция: её проверяют тесты. */
+export function laneOf(creator) {
+  return (creator?.platform ?? "tiktok") === "instagram" ? "ig" : "tt";
+}
+
+/**
+ * Креаторы по полосам, порядок внутри полосы сохраняется (сортировка приходит из базы).
+ * Чистая функция: её проверяют тесты.
+ */
+export function splitLanes(creators) {
+  const lanes = { tt: [], ig: [] };
+  for (const creator of creators ?? []) lanes[laneOf(creator)].push(creator);
+  return lanes;
+}
+
+/**
+ * Нужна ли пауза после этого креатора.
+ * Пауза только между креаторами TikTok — то есть между запусками ЧИСТЫХ профилей: она там и
+ * заводилась. После креатора Instagram (постоянный профиль, браузер общий) ждать нечего, а
+ * после «профиль не найден» тем более: страницы не было вовсе, очередь к TikTok не выстроена.
+ * Чистая функция: её проверяют тесты.
+ */
+export function pauseAfter(lane, error = null) {
+  if (lane !== "tt") return false;
+  return !(error && /профиль не найден/i.test(String(error)));
+}
+
 /** Кто собирает этого креатора. Instagram — по IG_SOURCE (graph | web). */
-function pickCollector(creator, env, depth) {
+function pickCollector(creator, env, depth, ctx) {
   const platform = creator.platform ?? "tiktok";
   if (platform === "tiktok") {
     return (log) => collectTikTok(creator, { browserChoice: env.browser, retryPauseMs: env.pauseMs, depth, log });
@@ -61,9 +115,67 @@ function pickCollector(creator, env, depth) {
     if (env.igSource === "graph") {
       return (log) => collectInstagramGraph(creator, { token: env.igToken, userId: env.igUserId, depth, log });
     }
-    return (log) => collectInstagramWeb(creator, { browserChoice: env.browser, depth, log });
+    // Браузер полосы уже поднят и уже с перехватом: свой модуль не заводит.
+    return (log) => collectInstagramWeb(creator, { browserChoice: env.browser, depth, ctx, log });
   }
   throw new Error(`неизвестная площадка: ${platform}`);
+}
+
+/**
+ * Браузер полосы: поднимается ЛЕНИВО (первым, кому он понадобился) и живёт до конца полосы.
+ * Не поднялся — второй раз не пробуем: беда запомнена, и остальные креаторы полосы её просто
+ * получают. Профиль не стирается никогда.
+ */
+function laneBrowser(kind, env) {
+  const cfg = LANES[kind];
+  let started = null, broken = null;
+  return {
+    tag: cfg.tag,
+    profile: basename(cfg.profile),
+    /** Открытый контекст. Бросает Error с русским текстом, если браузер не встал. */
+    async ctx(log) {
+      if (started) return started.ctx;
+      if (broken) throw new Error(broken);
+      try {
+        if (kind === "tt") {
+          // Вторая копия профиля под эту полосу: одна папка — один процесс браузера.
+          const { copied, from, to } = ensureProfileCopy(cfg.profile, PROFILE_OPERA);
+          if (copied) log(`  заведена вторая копия профиля: ${to} (из ${from}, без кэшей и сессий вкладок)`);
+        }
+        const browser = await launchProfile(env.browser, { headless: cfg.headless, profile: cfg.profile, log });
+        let traffic = null;
+        // Перехват ставится РАЗ на контекст полосы: он живёт на контексте, а не на вкладке,
+        // и второй `ctx.route` просто множил бы обработчики на каждого креатора.
+        try {
+          traffic = await trimTraffic(browser.ctx, cfg.hosts, { log });
+        } catch (e) {
+          log(`  лишнее отсечь не вышло: ${short(e)}`);
+        }
+        started = { ...browser, traffic };
+        log(`  браузер полосы: ${browser.describe}, профиль ${basename(cfg.profile)}${cfg.headless ? "" : ", окно настоящее — скрытому TikTok комментарии не отдаёт"}`);
+        return started.ctx;
+      } catch (e) {
+        broken = short(e);
+        throw new Error(broken);
+      }
+    },
+    /** Поднимался ли браузер вообще (пустой полосе он не нужен). */
+    up() {
+      return started !== null;
+    },
+    async close(log) {
+      if (!started) return;
+      const seen = started.traffic?.() ?? null;
+      if (seen) log(`лишних запросов отсечено ${seen.aborted}, пропущено ${seen.passed}`);
+      try {
+        await started.cleanup();
+      } catch (e) {
+        // Браузер мог упасть сам — на итог обхода это не влияет, но сказать стоит.
+        log(`браузер полосы не закрылся: ${short(e)}`);
+      }
+      started = null;
+    },
+  };
 }
 
 /**
@@ -135,23 +247,65 @@ async function rehostInstagram(creator, profile, videos, log) {
 }
 
 /**
- * Тексты комментариев к свежим видео креатора — второй заход браузером, уже под сессией
- * фейкового аккаунта (постоянный профиль `profile-opera`). Число комментариев к этому моменту
- * уже лежит в `video_snaps.comments`; здесь собираются сами тексты.
+ * При каком числе комментариев тексты этих видео снимались в прошлый раз.
+ * База не ответила — шаг из-за этого не встаёт: считаем, что не знаем ничего, и снимаем всё
+ * (лишняя работа лучше потерянных комментариев).
+ */
+async function syncedCounts(ids, log) {
+  const out = new Map();
+  try {
+    for (let i = 0; i < ids.length; i += 100) {
+      const list = ids.slice(i, i + 100).map((id) => `"${encodeURIComponent(id)}"`).join(",");
+      for (const row of await get(`videos?select=id,comments_synced_count&id=in.(${list})`)) {
+        out.set(String(row.id), row.comments_synced_count ?? null);
+      }
+    }
+  } catch (e) {
+    log?.(`  прежние числа комментариев не спросились: ${short(e)}`);
+    notice("db", `прежние числа комментариев не спросились: ${short(e)}`);
+  }
+  return out;
+}
+
+/**
+ * Кого из видео обходить за текстами комментариев.
+ *   • только свежие (`sinceMs`) и только те, у которых комментарии есть вовсе;
+ *   • видео, у которого число комментариев ровно то же, что при прошлом съёме
+ *     (`videos.comments_synced_count`), пропускается: обсуждение не двигалось, а страница
+ *     на видео стоит минуты. Первый раз (`null` или неизвестно) — снимаем всегда.
+ * Отдаёт `{ picked, unchanged }`. Чистая функция: её проверяют тесты.
+ */
+export function pickComments(videos, known, sinceMs) {
+  const picked = [], unchanged = [];
+  for (const v of videos ?? []) {
+    const count = v.comments ?? 0;
+    if (count <= 0) continue;
+    if (v.publishedAt === null || v.publishedAt === undefined) continue;
+    if (Date.parse(v.publishedAt) < sinceMs) continue;
+    const was = known?.get(String(v.id));
+    if (was !== null && was !== undefined && Number(was) === Number(count)) unchanged.push(v);
+    else picked.push(v);
+  }
+  return { picked, unchanged };
+}
+
+/**
+ * Тексты комментариев к свежим видео креатора — браузером полосы, под сессией фейкового
+ * аккаунта. Число комментариев к этому моменту уже лежит в `video_snaps.comments`; здесь
+ * собираются сами тексты.
  *
  * Правила шага:
- *   • берутся только видео за последние `AMESTAT_COMMENTS_DAYS` дней и только те, у которых
- *     комментарии есть вовсе: у старых обсуждение уже не растёт, у пустых брать нечего;
- *   • браузер открывается ОДИН на креатора и закрывается в `finally` — профиль постоянный,
- *     второй процесс на этой папке не встанет;
- *   • TikTok водится с настоящим окном: в скрытом он отдаёт пустые тела и капчу (см.
- *     `comments-tiktok.mjs`). Instagram обходится скрытым;
+ *   • кого берём — решает `pickComments` (свежесть, наличие комментариев, «число не менялось»);
+ *   • браузер ОДИН НА ПОЛОСУ и поднят снаружи: профиль постоянный, и второй процесс на этой
+ *     папке не встанет. TikTok водится с настоящим окном (в скрытом он отдаёт пустые тела и
+ *     капчу), Instagram обходится скрытым — это разница между полосами, а не между креаторами;
  *   • ошибка одного видео шаг не валит, обход не роняет и `creators.sync_error` не ставит:
  *     комментарии — добавка к снимкам, а не их условие;
  *   • вместе с корневыми снимаются и ответы под ними (`parent_id` = id корневого, не больше
  *     `AMESTAT_REPLIES_MAX` на ветку) — они ложатся в ту же таблицу тем же upsert'ом.
+ *     `replies: false` отменяет только клики по веткам; даровые ответы приезжают всё равно.
  */
-async function collectComments(creator, videos, env, log) {
+async function collectComments(creator, videos, env, lane, flags, log) {
   const platform = creator.platform ?? "tiktok";
   const collect = platform === "tiktok" ? collectTikTokComments
     : platform === "instagram" ? collectInstagramComments
@@ -159,85 +313,74 @@ async function collectComments(creator, videos, env, log) {
   if (!collect) return;
 
   const since = Date.now() - env.commentsDays * DAY_MS;
-  const picked = videos.filter((v) => (v.comments ?? 0) > 0 && v.publishedAt !== null && Date.parse(v.publishedAt) >= since);
+  const known = await syncedCounts(videos.map((v) => v.id), log);
+  const { picked, unchanged } = pickComments(videos, known, since);
+  const same = unchanged.length > 0 ? `, без изменений: ${unchanged.length} видео` : "";
   if (picked.length === 0) {
-    log?.(`  комментарии: видео 0, собрано 0, не вышло 0 (свежих с комментариями нет за ${env.commentsDays} дн.)`);
+    log?.(`  комментарии: видео 0, собрано 0, не вышло 0 (свежих с новыми комментариями нет за ${env.commentsDays} дн.${same})`);
     return;
   }
+  if (unchanged.length > 0) log?.(`  комментарии: без изменений: ${unchanged.length} видео — их не открываем`);
 
-  const headless = platform !== "tiktok";
-  let browser = null;
+  let ctx = null;
   try {
-    // Предыдущий браузер только что закрылся, и Opera на его хвосте поднимается через раз —
-    // даём процессу уйти совсем, а не спорим с ним за профиль.
-    await sleep(COMMENTS_PAUSE_MS);
-    browser = await launchProfile(env.browser, { headless, log });
+    ctx = await lane.ctx(log);
   } catch (e) {
     // Нет профиля или не поднялся браузер — снимки уже записаны, обход этим не портим.
-    const text = String(e?.message ?? e).split("\n")[0];
-    log?.(`  комментарии: ${text}`);
-    notice("comments", `@${creator.handle}: браузер для комментариев не поднялся — ${text}`);
+    log?.(`  комментарии: ${short(e)}`);
+    notice("comments", `@${creator.handle}: браузер для комментариев не поднялся — ${short(e)}`);
     return;
-  }
-  log?.(`  комментарии: браузер ${browser.describe}${headless ? "" : ", окно настоящее — скрытому TikTok их не отдаёт"}`);
-  // Чужие хосты, видео и шрифты в этот браузер не пускаем: он живёт всё время шага и
-  // на странице видео разрастался до полусотни процессов.
-  let traffic = null;
-  try {
-    traffic = await trimTraffic(browser.ctx, platform === "tiktok" ? HOSTS_TIKTOK : HOSTS_INSTAGRAM, { log });
-  } catch (e) {
-    // Не поставился перехват — шаг всё равно идёт, просто прожорливее.
-    log?.(`  лишнее отсечь не вышло: ${String(e?.message ?? e).split("\n")[0]}`);
   }
 
   let rows = 0, answers = 0, failed = 0;
-  try {
-    for (let i = 0; i < picked.length; i++) {
-      const video = picked[i];
-      try {
-        const list = await collect(
-          browser.ctx,
-          { id: video.id, url: video.url, creatorHandle: creator.handle },
-          { max: env.commentsMax, repliesMax: env.repliesMax, log },
-        );
-        const now = new Date().toISOString();
-        if (list.length > 0) {
-          // `first_seen_at` не шлём вовсе: его база ставит один раз, при первой встрече.
-          await upsert("video_comments", list.map((c) => ({
-            id: c.id,
-            video_id: video.id,
-            parent_id: c.parentId,
-            author_handle: c.authorHandle,
-            author_name: c.authorName,
-            text: c.text,
-            likes: c.likes,
-            replies: c.replies,
-            created_at: c.createdAt,
-            last_seen_at: now,
-          })), "video_id,id");
-        }
-        await patch(`videos?id=eq.${encodeURIComponent(video.id)}`, { comments_synced_at: now });
-        rows += list.length;
-        answers += list.filter((c) => c.parentId).length;
-      } catch (e) {
-        failed++;
-        const text = String(e?.message ?? e).split("\n")[0];
-        log?.(`    видео ${video.id}: ${text}`);
-        notice("comments", `@${creator.handle} видео ${video.id}: ${text}`);
+  for (let i = 0; i < picked.length; i++) {
+    const video = picked[i];
+    try {
+      const list = await collect(
+        ctx,
+        { id: video.id, url: video.url, creatorHandle: creator.handle },
+        { max: env.commentsMax, repliesMax: env.repliesMax, expandReplies: flags.replies, profile: lane.profile, log },
+      );
+      const now = new Date().toISOString();
+      if (list.length > 0) {
+        // `first_seen_at` не шлём вовсе: его база ставит один раз, при первой встрече.
+        await upsert("video_comments", list.map((c) => ({
+          id: c.id,
+          video_id: video.id,
+          parent_id: c.parentId,
+          author_handle: c.authorHandle,
+          author_name: c.authorName,
+          text: c.text,
+          likes: c.likes,
+          replies: c.replies,
+          created_at: c.createdAt,
+          last_seen_at: now,
+        })), "video_id,id");
       }
-      if (i < picked.length - 1) await sleep(COMMENTS_PAUSE_MS);
+      // Число из СНИМКА, а не из числа собранных строк: сравнивать в следующий раз мы будем
+      // именно со счётчиком площадки, и потолок `AMESTAT_COMMENTS_MAX` тут ни при чём.
+      await patch(`videos?id=eq.${encodeURIComponent(video.id)}`, {
+        comments_synced_at: now,
+        comments_synced_count: video.comments ?? null,
+      });
+      rows += list.length;
+      answers += list.filter((c) => c.parentId).length;
+    } catch (e) {
+      failed++;
+      log?.(`    видео ${video.id}: ${short(e)}`);
+      notice("comments", `@${creator.handle} видео ${video.id}: ${short(e)}`);
     }
-  } finally {
-    // Окно закрывается всегда и здесь же: профиль один на машину, и оставленный браузер
-    // не даст подняться следующему обходу.
-    await browser.cleanup();
+    if (i < picked.length - 1) await sleep(COMMENTS_PAUSE_MS);
   }
-  const seen = traffic?.() ?? null;
-  log?.(`  комментарии: видео ${picked.length}, собрано ${rows} (ответов ${answers}), не вышло ${failed}${seen ? `, лишних запросов отсечено ${seen.aborted}` : ""}`);
+  log?.(`  комментарии: видео ${picked.length}, собрано ${rows} (ответов ${answers}${flags.replies ? "" : ", ветки не раскрывались"}), не вышло ${failed}${same}`);
 }
 
-async function collectOne(creator, env, depth, log) {
-  const collect = pickCollector(creator, env, depth);
+async function collectOne(creator, env, depth, lane, flags, log) {
+  // Instagram собирается браузером полосы — тем же, который потом пойдёт за комментариями.
+  // TikTok свой список видео берёт чистым одноразовым профилем и браузера полосы не трогает.
+  const instagramWeb = (creator.platform ?? "tiktok") === "instagram" && env.igSource !== "graph";
+  const ctx = instagramWeb ? await lane.ctx(log) : null;
+  const collect = pickCollector(creator, env, depth, ctx);
   const { profile, videos } = await collect(log);
   const takenAt = new Date().toISOString();
   const instagram = (creator.platform ?? "tiktok") === "instagram";
@@ -278,7 +421,9 @@ async function collectOne(creator, env, depth, log) {
 
     // Тексты комментариев — после снимков и только по свежим видео: строки `video_comments`
     // ссылаются на `videos`, значит upsert выше должен пройти первым.
-    await collectComments(creator, videos, env, log);
+    // ⚠️ `comments: false` пропускает шаг целиком — вместе с запросом прежних чисел.
+    if (flags.comments) await collectComments(creator, videos, env, lane, flags, log);
+    else log?.("  комментарии: пропущены (просьба без комментариев)");
   }
 
   // Своя картинка владельца сильнее аватара площадки.
@@ -299,7 +444,7 @@ async function collectOne(creator, env, depth, log) {
   return { videos: videos.length, followers: profile.followers };
 }
 
-async function doSync({ trigger, creatorId, failedOnly, depth, requestedBy, requestIds, slotLabel, onLog }) {
+async function doSync({ trigger, creatorId, failedOnly, depth, comments, replies, requestedBy, requestIds, slotLabel, onLog }) {
   const env = loadEnv();
   const lines = [];
   const log = (text) => {
@@ -317,6 +462,8 @@ async function doSync({ trigger, creatorId, failedOnly, depth, requestedBy, requ
       trigger,
       scope: failedOnly ? "failed" : creatorId ?? "all",
       depth,
+      comments,
+      replies,
       requested_by: requestedBy ?? null,
     });
     runId = run?.id ?? null;
@@ -331,7 +478,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, requestedBy, requ
     return { runId: null, ok: false, done: 0, failed: 0, error: text, failures, depth, log: lines.join("\n") };
   }
   const who = failedOnly ? "только неудавшиеся" : creatorId ? `креатор ${creatorId}` : "все";
-  log(`обход #${runId} (${trigger}, ${who}, глубина ${depth === "week" ? "неделя" : "всё"})`);
+  log(`обход #${runId} (${trigger}, ${who}, глубина ${depth === "week" ? "неделя" : "всё"}, комментарии ${comments ? "да" : "нет"}, ветки ${replies ? "да" : "нет"})`);
 
   // Просьбы забраны этим обходом — сайт перестаёт показывать «в очереди».
   if (requestIds?.length && runId) {
@@ -346,6 +493,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, requestedBy, requ
   }
 
   let done = 0, failed = 0, firstError = null;
+  const flags = { comments, replies };
   try {
     const where = `${creatorId ? `&id=eq.${creatorId}` : ""}${failedOnly ? "&sync_error=not.is.null" : ""}`;
     const creators = await get(`creators?select=${CREATOR_FIELDS}${where}&order=sort_order.asc,added_at.asc`);
@@ -353,36 +501,69 @@ async function doSync({ trigger, creatorId, failedOnly, depth, requestedBy, requ
       log(failedOnly ? "ни у кого нет ошибки — повторять нечего" : creatorId ? "креатор не найден в базе" : "в базе нет ни одного креатора");
     }
 
-    for (let i = 0; i < creators.length; i++) {
-      const creator = creators[i];
-      log(`@${creator.handle} (${creator.platform})`);
-      const started = Date.now();
+    /**
+     * Одна полоса: её креаторы по очереди, свой браузер, свои паузы, свой префикс в логе.
+     * Полосы идут одновременно, поэтому счётчики и `lines` общие — но JS однопоточен, и
+     * между `await` их никто не перебивает.
+     */
+    async function runLane(kind, list) {
+      if (list.length === 0) return { kind, spent: 0, done: 0 };
+      const cfg = LANES[kind];
+      const lane = laneBrowser(kind, env);
+      const say = (text) => log(`${cfg.tag} ${text}`);
+      const startedLane = Date.now();
+      let laneDone = 0;
+      say(`полоса ${cfg.name}: креаторов ${list.length}`);
       try {
-        const res = await collectOne(creator, env, depth, log);
-        done++;
-        log(`  готово: видео ${res.videos}, подписчиков ${res.followers ?? "?"}`);
-      } catch (e) {
-        failed++;
-        const text = String(e?.message ?? e).split("\n")[0];
-        failures.push({ handle: creator.handle, error: text });
-        firstError = firstError ?? `@${creator.handle}: ${text}`;
-        log(`  ошибка: ${text}`);
-        notice("creator", `@${creator.handle}: ${text}`);
-        try {
-          await patch(`creators?id=eq.${creator.id}`, { sync_error: text });
-        } catch (e2) {
-          const text2 = String(e2?.message ?? e2).split("\n")[0];
-          log(`  не записалась и ошибка креатора: ${text2}`);
-          notice("db", `@${creator.handle}: не записалась и ошибка креатора — ${text2}`);
+        for (let i = 0; i < list.length; i++) {
+          const creator = list[i];
+          say(`@${creator.handle} (${creator.platform})`);
+          const started = Date.now();
+          let error = null;
+          try {
+            const res = await collectOne(creator, env, depth, lane, flags, say);
+            done++;
+            laneDone++;
+            say(`  готово: видео ${res.videos}, подписчиков ${res.followers ?? "?"}`);
+          } catch (e) {
+            failed++;
+            error = short(e);
+            failures.push({ handle: creator.handle, error });
+            firstError = firstError ?? `@${creator.handle}: ${error}`;
+            say(`  ошибка: ${error}`);
+            notice("creator", `@${creator.handle}: ${error}`);
+            try {
+              await patch(`creators?id=eq.${creator.id}`, { sync_error: error });
+            } catch (e2) {
+              say(`  не записалась и ошибка креатора: ${short(e2)}`);
+              notice("db", `@${creator.handle}: не записалась и ошибка креатора — ${short(e2)}`);
+            }
+          }
+          const spent = Date.now() - started;
+          if (spent > SLOW_CREATOR_MS) notice("slow", `@${creator.handle}: собирался ${Math.round(spent / 60_000)} мин`);
+          // Пауза только между чистыми профилями TikTok — см. `pauseAfter`.
+          if (i < list.length - 1 && env.pauseMs > 0 && pauseAfter(kind, error)) {
+            say(`  пауза ${Math.round(env.pauseMs / 1000)} с`);
+            await sleep(env.pauseMs);
+          }
         }
+      } finally {
+        // Браузер полосы закрывается здесь и всегда: профиль постоянный, и оставленное окно
+        // не даст подняться следующему обходу.
+        await lane.close(say);
       }
-      const spent = Date.now() - started;
-      if (spent > SLOW_CREATOR_MS) notice("slow", `@${creator.handle}: собирался ${Math.round(spent / 60_000)} мин`);
-      // Пауза только между креаторами: TikTok не любит запуски подряд.
-      if (i < creators.length - 1 && env.pauseMs > 0) {
-        log(`  пауза ${Math.round(env.pauseMs / 1000)} с`);
-        await sleep(env.pauseMs);
-      }
+      const spent = Date.now() - startedLane;
+      say(`полоса ${cfg.name} закончена: собрано ${laneDone} из ${list.length} за ${Math.round(spent / 1000)} с`);
+      return { kind, spent, done: laneDone };
+    }
+
+    const lanes = splitLanes(creators);
+    // Полосы идут разом: одна водит чистые профили TikTok, вторая — Instagram в своём
+    // постоянном профиле. Общего у них только база, счётчики и лог.
+    await Promise.all([runLane("tt", lanes.tt), runLane("ig", lanes.ig)]);
+    // Мягкие признаки истёкшей сессии — одной строкой на площадку и только в лог.
+    for (const hint of takeSessionHints()) {
+      log(`[session] ${hint.where}: признаки истёкшей сессии в ${hint.count} местах, но собралось всё — ${hint.text}`);
     }
     return { runId, ok: failed === 0, done, failed, error: firstError, failures, depth, log: lines.join("\n") };
   } catch (e) {
@@ -421,15 +602,25 @@ async function doSync({ trigger, creatorId, failedOnly, depth, requestedBy, requ
 /**
  * Один обход. Пока идёт предыдущий — ждёт его в очереди.
  * `{ trigger: 'schedule'|'catchup'|'manual'|'retry', creatorId?, failedOnly?, depth?,
- *    requestedBy?, requestIds?, slotLabel?, onLog? }`
+ *    comments?, replies?, requestedBy?, requestIds?, slotLabel?, onLog? }`
+ * `comments` — снимать ли тексты комментариев (`false` — шага нет вовсе);
+ * `replies` — раскрывать ли ветки ответов (`false` — корневые снимаются, ветки не раскрываются,
+ * но даровые ответы внутри корневых всё равно кладутся: они не стоят ни клика, ни запроса).
+ * Оба по умолчанию `true` — как расписание, догон и повтор.
  * `slotLabel` — час неудавшегося слота у повтора: если и повтор не удался, письмо обхода
  * получает строку «вторая неудача подряд после слота HH:MM» и второго письма не бывает.
  * Отдаёт `{ runId, ok, done, failed, error, failures, depth, log }` — исключений не бросает.
  * `failures` — `[{ handle, error }]` по каждому неудавшемуся креатору: из них резидент
  * собирает сообщение владельцу в Telegram.
  */
-export function runSync({ trigger = "manual", creatorId = null, failedOnly = false, depth = "all", requestedBy = null, requestIds = [], slotLabel = null, onLog } = {}) {
-  const args = { trigger, creatorId, failedOnly, depth: depth === "week" ? "week" : "all", requestedBy, requestIds, slotLabel, onLog };
+export function runSync({ trigger = "manual", creatorId = null, failedOnly = false, depth = "all", comments = true, replies = true, requestedBy = null, requestIds = [], slotLabel = null, onLog } = {}) {
+  const args = {
+    trigger, creatorId, failedOnly,
+    depth: depth === "week" ? "week" : "all",
+    comments: comments !== false,
+    replies: replies !== false,
+    requestedBy, requestIds, slotLabel, onLog,
+  };
   pending++;
   const next = chain.then(
     () => doSync(args),

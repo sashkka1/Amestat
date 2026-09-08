@@ -7,17 +7,38 @@
 //     профиле и любой повторный запуск получают ответы 200 с пустым телом и ноль видео.
 //     Поэтому профиль одноразовый: свой временный каталог на каждого креатора, после —
 //     удаляется. Вход в TikTok не нужен, страницы публичные.
+//  3. Постоянных профилей с входом фейка ДВА и это не дубль по недосмотру: на одной папке
+//     живёт ровно один процесс браузера, а обход идёт двумя полосами разом (`sync.mjs`), и
+//     профиль нужен обеим — Instagram'у и комментариям TikTok. `profile-tiktok` заводится
+//     копией `profile-opera` сам, при первом запуске (`ensureProfileCopy`).
 
 import { chromium } from "playwright-core";
 import { execFile } from "node:child_process";
 import { notice } from "./notices.mjs";
-import { existsSync, readdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve, join, dirname } from "node:path";
+import { existsSync, readdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync, cpSync, renameSync } from "node:fs";
+import { resolve, join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
+const HERE = dirname(fileURLToPath(import.meta.url));
+
 /** Постоянный профиль с сессиями фейковых аккаунтов. ⚠️ Не стирать: в нём живёт вход. */
-export const PROFILE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "profile-opera");
+export const PROFILE_OPERA = resolve(HERE, "profile-opera");
+/**
+ * Вторая копия того же профиля — под полосу TikTok (`sync.mjs` водит две полосы разом).
+ * ⚠️ Зачем копия: на одной папке профиля живёт РОВНО ОДИН процесс браузера, а профиль с
+ * сессией фейка нужен обеим полосам сразу — Instagram'у (лента и комментарии) и комментариям
+ * TikTok. Заводится сама из `profile-opera` при первом запуске (`ensureProfileCopy`).
+ * ⚠️ Cookies в копиях дальше живут своей жизнью: сессия может истечь в одной и остаться в
+ * другой, поэтому замечания про вход называют профиль.
+ */
+export const PROFILE_TIKTOK = resolve(HERE, "profile-tiktok");
+/** Прежнее имя постоянного профиля: осталось, чтобы не переписывать всех, кто его звал. */
+export const PROFILE_DIR = PROFILE_OPERA;
+
+// Чего в копию профиля не тащим: кэши и сохранённая сессия вкладок. Всё это либо весит
+// гигабайты, либо восстанавливает чужие вкладки — а вход живёт в Cookies и Local State.
+const COPY_SKIP = new Set(["Cache", "Code Cache", "GPUCache", "Service Worker", "Sessions"]);
 
 const LAUNCH_TIMEOUT_MS = 60_000;  // свой срок на запуск: у Playwright по умолчанию три минуты
 const LAUNCH_RETRY_MS = 10_000;    // столько ждём перед второй попыткой
@@ -83,6 +104,29 @@ export function resolveBrowser(choice = "") {
 }
 
 /**
+ * Вторая копия постоянного профиля, если её ещё нет. Отдаёт `{ copied, from, to }`.
+ *
+ * ⚠️ Копируется во ВРЕМЕННУЮ папку рядом и переименовывается в конце: оборванное копирование
+ * (браузер держит файл, кончилось место) иначе оставило бы полупустую папку, которую следующий
+ * запуск принял бы за готовый профиль и молча пошёл бы в неё без входа.
+ * Кэши и сохранённые сессии не копируются вовсе (`COPY_SKIP`).
+ */
+export function ensureProfileCopy(to = PROFILE_TIKTOK, from = PROFILE_OPERA) {
+  if (existsSync(to)) return { copied: false, from, to };
+  if (!existsSync(from)) throw new Error(`нет копии профиля Opera (${from}) — с неё нечего копировать`);
+  const tmp = `${to}.tmp`;
+  rmSync(tmp, { recursive: true, force: true });
+  try {
+    cpSync(from, tmp, { recursive: true, filter: (path) => !COPY_SKIP.has(basename(path)) });
+    renameSync(tmp, to);
+  } catch (e) {
+    rmSync(tmp, { recursive: true, force: true });
+    throw new Error(`вторая копия профиля не завелась (${to}): ${String(e?.message ?? e).split("\n")[0]}`);
+  }
+  return { copied: true, from, to };
+}
+
+/**
  * Заставить профиль забыть «развёрнуто на весь экран».
  *
  * ⚠️ Зачем: Opera помнит расположение окна в `profile-opera/Default/Preferences`
@@ -90,10 +134,12 @@ export function resolveBrowser(choice = "") {
  * `--window-position`: окно раскрывается поверх работы владельца. Файл Opera переписывает при
  * выходе, поэтому правится он ПЕРЕД КАЖДЫМ запуском, а не один раз.
  * `work_area_*` не трогаем — их Opera считает сама.
+ * ⚠️ Папка приходит параметром: копий постоянного профиля две (`profile-opera` и
+ * `profile-tiktok`), и править надо ту, которую сейчас запускают.
  * Отдаёт null, если всё хорошо, иначе текст беды (обход из-за этого не валится).
  */
-function forceOffscreenPlacement() {
-  const file = resolve(PROFILE_DIR, "Default", "Preferences");
+function forceOffscreenPlacement(dir) {
+  const file = resolve(dir, "Default", "Preferences");
   if (!existsSync(file)) return "в профиле нет Default/Preferences — расположение окна не поправить";
   let json = null;
   try {
@@ -129,8 +175,8 @@ function forceOffscreenPlacement() {
  * переписывает и то и другое при выходе, поэтому — перед КАЖДЫМ запуском, для любого режима.
  * Отдаёт null, если всё хорошо, иначе текст беды (обход из-за этого не валится).
  */
-function forgetSession() {
-  const prefs = resolve(PROFILE_DIR, "Default", "Preferences");
+function forgetSession(dir) {
+  const prefs = resolve(dir, "Default", "Preferences");
   if (existsSync(prefs)) {
     try {
       const json = JSON.parse(readFileSync(prefs, "utf8"));
@@ -141,7 +187,7 @@ function forgetSession() {
       return `Default/Preferences не поправился: ${String(e?.message ?? e).split("\n")[0]}`;
     }
   }
-  const sessions = resolve(PROFILE_DIR, "Default", "Sessions");
+  const sessions = resolve(dir, "Default", "Sessions");
   if (existsSync(sessions)) {
     try {
       for (const name of readdirSync(sessions)) rmSync(join(sessions, name), { force: true });
@@ -150,6 +196,33 @@ function forgetSession() {
     }
   }
   return null;
+}
+
+// Окна, уже уведённые за край, по контексту браузера (см. `hideWindow`).
+const HIDDEN = new WeakMap();
+
+/**
+ * Сторож окон: даёт владельцу вернуть уведённое окно на экран кликом по значку Opera в панели
+ * задач (владелец, 2026-09-08: «дай мне разрешение, чтобы я мог сам их открыть»). Сам скрипт —
+ * `show-window.ps1`; он один на систему и живёт, пока жив этот процесс. Поднимается лениво
+ * перед первым настоящим окном; не поднялся — обход не страдает, только замечание.
+ */
+let watchStarted = false;
+function ensureWindowWatch() {
+  if (watchStarted) return;
+  watchStarted = true;
+  const script = resolve(dirname(fileURLToPath(import.meta.url)), "show-window.ps1");
+  try {
+    const child = execFile(
+      "powershell.exe",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", script, "-Parent", String(process.pid)],
+      { windowsHide: true },
+    );
+    child.on("error", (e) => notice("browser", `сторож окон не поднялся: ${String(e?.message ?? e).split("\n")[0]}`));
+    child.unref();
+  } catch (e) {
+    notice("browser", `сторож окон не поднялся: ${String(e?.message ?? e).split("\n")[0]}`);
+  }
 }
 
 /**
@@ -163,6 +236,13 @@ export async function hideWindow(ctx, page, { log } = {}) {
   try {
     cdp = await ctx.newCDPSession(page);
     const { windowId } = await cdp.send("Browser.getWindowForTarget");
+    // Одно окно уводится один раз. Владелец может вернуть его на экран кликом по значку в
+    // панели задач (`show-window.ps1`) — и новая вкладка в том же окне не должна прятать его
+    // обратно. Номера окон у каждого браузера свои, поэтому память — по контексту.
+    let hidden = HIDDEN.get(ctx);
+    if (!hidden) HIDDEN.set(ctx, (hidden = new Set()));
+    if (hidden.has(windowId)) return null;
+    hidden.add(windowId);
     await cdp.send("Browser.setWindowBounds", { windowId, bounds: { windowState: "normal", ...OFFSCREEN } });
     const { bounds } = await cdp.send("Browser.getWindowBounds", { windowId });
     log?.(`    окно уведено: left=${bounds.left}, top=${bounds.top}, ${bounds.width}×${bounds.height}, state=${bounds.windowState}`);
@@ -268,9 +348,9 @@ export async function trimTraffic(ctx, allow, { log } = {}) {
 }
 
 /**
- * Остатки прошлых обходов: окна Opera на постоянном профиле `profile-opera` или на временных
- * профилях `amestat-…`. Свои окна владельца не трогаются вовсе — отбор идёт по нашему
- * `--user-data-dir` в командной строке процесса.
+ * Остатки прошлых обходов: окна Opera на постоянных профилях (`profile-opera`,
+ * `profile-tiktok`) или на временных профилях `amestat-…`. Свои окна владельца не трогаются
+ * вовсе — отбор идёт по нашему `--user-data-dir` в командной строке процесса.
  * Отдаёт `{ killed, pids }`; на не-Windows не делает ничего.
  */
 export async function killLeftoverBrowsers() {
@@ -292,7 +372,9 @@ export async function killLeftoverBrowsers() {
     const line = String(row?.CommandLine ?? "");
     const pid = Number(row?.ProcessId);
     if (!Number.isFinite(pid)) continue;
-    if (!line.includes("profile-opera") && !/[\\/]amestat-/.test(line)) continue;
+    // Обе копии постоянного профиля и любой временный: полос теперь две, и остаться после
+    // падения может браузер каждой из них.
+    if (!/profile-(opera|tiktok)/.test(line) && !/[\\/]amestat-/.test(line)) continue;
     pids.push(pid);
   }
   for (const pid of pids) await run("taskkill", ["/PID", String(pid), "/T", "/F"]);
@@ -349,17 +431,19 @@ export async function launchFresh(choice = "", { headless = true } = {}) {
  * а следом показывается капча-пазл (проба 2026-09-08); с настоящим окном всё отдаётся сразу.
  * Чтобы окно не лезло владельцу под руку, оно уводится далеко за край экрана.
  *
- * ⚠️ Профиль один на всю машину: пока браузер открыт, второй процесс на этой папке не встанет.
- * Отсюда очередь обходов в `sync.mjs`. Стирать папку нельзя — потеряется вход.
+ * ⚠️ ОДНА ПАПКА — ОДИН ПРОЦЕСС: пока браузер открыт, второй на этой папке не встанет. Отсюда
+ * очередь обходов в `sync.mjs` и вторая копия профиля (`PROFILE_TIKTOK`) под вторую полосу.
+ * Какую папку поднимать, говорит `profile`. Стирать папки нельзя — потеряется вход.
  *
  * ⚠️ Запуск делается ДВАЖДЫ. Сразу после того, как закрылся предыдущий браузер (у TikTok это
  * одноразовый профиль со списком видео), Opera поднимается через раз: процесс стартует, пишет
  * в профиль и виснет, не отдав канал управления, — 2026-09-08 это стоило целого шага
  * комментариев. Ждать по три минуты незачем: свой срок в минуту, пауза и вторая попытка.
- * Отдаёт `{ ctx, cleanup, describe }`; `cleanup()` закрывает браузер, профиль НЕ трогает.
+ * Отдаёт `{ ctx, cleanup, describe, profile }`; `cleanup()` закрывает браузер, профиль НЕ трогает.
  */
-export async function launchProfile(choice = "", { headless = true, log } = {}) {
+export async function launchProfile(choice = "", { headless = true, profile = PROFILE_OPERA, log } = {}) {
   const browser = resolveBrowser(choice);
+  const PROFILE_DIR = profile;
   if (!existsSync(PROFILE_DIR)) {
     throw new Error(`нет копии профиля Opera (${PROFILE_DIR}) — сними её с входом фейковых аккаунтов`);
   }
@@ -367,12 +451,13 @@ export async function launchProfile(choice = "", { headless = true, log } = {}) 
   // сначала отучаем профиль разворачиваться, потом задаём место и размер ключами, а после
   // запуска окно ещё и уводится через CDP (`hideWindow`).
   if (!headless) {
-    const bad = forceOffscreenPlacement();
-    if (bad) notice("browser", `окно может открыться поверх работы: ${bad}`);
+    const bad = forceOffscreenPlacement(PROFILE_DIR);
+    if (bad) notice("browser", `окно может открыться поверх работы (${basename(PROFILE_DIR)}): ${bad}`);
+    ensureWindowWatch();
   }
   // Хвост вкладок прошлых запусков не восстанавливать — ни в окне, ни в скрытом режиме.
-  const stale = forgetSession();
-  if (stale) notice("browser", `профиль может восстановить старые вкладки: ${stale}`);
+  const stale = forgetSession(PROFILE_DIR);
+  if (stale) notice("browser", `профиль ${basename(PROFILE_DIR)} может восстановить старые вкладки: ${stale}`);
   const options = {
     ...(browser.executablePath ? { executablePath: browser.executablePath } : { channel: "chrome" }),
     headless,
@@ -393,11 +478,11 @@ export async function launchProfile(choice = "", { headless = true, log } = {}) 
     } catch (e) {
       const text = String(e?.message ?? e).split("\n")[0];
       if (attempt === 2) {
-        notice("browser", `браузер не запустился дважды: ${first}; потом ${text}`);
-        throw new Error(`браузер не запустился дважды (${browser.describe}): ${first}; потом ${text}`);
+        notice("browser", `браузер не запустился дважды на ${basename(PROFILE_DIR)}: ${first}; потом ${text}`);
+        throw new Error(`браузер не запустился дважды (${browser.describe}, ${basename(PROFILE_DIR)}): ${first}; потом ${text}`);
       }
       first = text;
-      notice("browser", `браузер не встал с первого раза, пробую ещё: ${text}`);
+      notice("browser", `браузер не встал с первого раза на ${basename(PROFILE_DIR)}, пробую ещё: ${text}`);
       await new Promise((r) => setTimeout(r, LAUNCH_RETRY_MS));
     }
   }
@@ -413,7 +498,7 @@ export async function launchProfile(choice = "", { headless = true, log } = {}) 
       }
     }
     log?.(`  закрыто восстановленных вкладок: ${restored.length}`);
-    notice("browser", `профиль восстановил ${restored.length} старых вкладок — закрыты`);
+    notice("browser", `профиль ${basename(PROFILE_DIR)} восстановил ${restored.length} старых вкладок — закрыты`);
   }
   // Первая вкладка у постоянного профиля открывается сама — уводим окно сразу, не дожидаясь,
   // пока сборщик откроет свою.
@@ -438,7 +523,7 @@ export async function launchProfile(choice = "", { headless = true, log } = {}) 
     } catch {
       // Браузер мог упасть сам. ⚠️ Профиль НЕ стираем: в нём вход фейковых аккаунтов.
     }
-    if (await killIfAlive(ctx)) notice("browser", "браузер не закрылся сам — пришлось добить (profile-opera)");
+    if (await killIfAlive(ctx)) notice("browser", `браузер не закрылся сам — пришлось добить (${basename(PROFILE_DIR)})`);
   };
-  return { ctx, cleanup, describe: browser.describe };
+  return { ctx, cleanup, describe: browser.describe, profile: PROFILE_DIR };
 }

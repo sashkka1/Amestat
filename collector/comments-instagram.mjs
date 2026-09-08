@@ -27,7 +27,7 @@
 // только если у корневого `replies > 0`, и не больше `AMESTAT_REPLIES_MAX` ответов на ветку.
 
 import { expandBranches, pickReplies, branchesOf } from "./replies.mjs";
-import { notice } from "./notices.mjs";
+import { notice, sessionHint } from "./notices.mjs";
 
 const NAV_TIMEOUT_MS = 45_000;
 const SETTLE_MS = 6_000;        // столько страница успевает отрисовать первые комментарии
@@ -167,7 +167,7 @@ function scrollComments(page) {
  * сначала корневые, следом ответы (`parentId` — id корневого, `replies` у них `null`).
  * При стене входа или ограничении бросает Error с русским текстом.
  */
-export async function collectInstagramComments(ctx, video, { max = 100, repliesMax = 20, log } = {}) {
+export async function collectInstagramComments(ctx, video, { max = 100, repliesMax = 20, expandReplies = true, log } = {}) {
   const videoId = String(video?.id ?? "");
   const url = String(video?.url ?? "");
   if (!videoId || !url) throw new Error("у публикации нет id или адреса");
@@ -255,8 +255,9 @@ export async function collectInstagramComments(ctx, video, { max = 100, repliesM
       throw new Error(ERR_SESSION);
     }
     // Признаки истёкшей сессии стоит знать и тогда, когда собрать всё-таки удалось: сегодня
-    // прошло, завтра встанет.
-    if (lostSession || head.loginForm) notice("session", `${who}: признаки истёкшей сессии, но комментарии собрались`);
+    // прошло, завтра встанет. ⚠️ Письмом это не бывает: копится и уходит одной строкой в лог
+    // на обход и площадку — иначе выходило замечание на каждую публикацию.
+    if (lostSession || head.loginForm) sessionHint("instagram (profile-opera)", `${who}: форма входа=${head.loginForm}, login_required=${lostSession}`);
     // Ограничение объявляем, только когда оно и правда помешало: пришедшие комментарии
     // сильнее одинокой пометки в чужом ответе.
     if ((limited || RATE_TEXT.test(head.bodyText)) && seen.size === 0) {
@@ -286,7 +287,10 @@ export async function collectInstagramComments(ctx, video, { max = 100, repliesM
     const roots = [...seen.values()].slice(0, max);
     const branches = roots.filter((c) => (c.replies ?? 0) > 0).length;
     let opened = 0, moreClicks = 0, timedOut = false;
-    if (branches > 0 && repliesMax > 0) {
+    // `expandReplies: false` (просьба «без веток») отменяет только КЛИКИ: ответы, которые
+    // Instagram положил в корневой сам (`preview_child_comments`), уже собраны и бесплатны —
+    // выбрасывать их незачем.
+    if (branches > 0 && repliesMax > 0 && expandReplies) {
       ({ opened, more: moreClicks, timedOut } = await expandBranches(page, state, {
         open: BRANCH_OPEN, more: BRANCH_MORE, branches, repliesMax, pauseMs: BRANCH_PAUSE_MS, log,
       }));
@@ -294,8 +298,8 @@ export async function collectInstagramComments(ctx, video, { max = 100, repliesM
     }
     const replies = pickReplies(state.replies.values(), roots, repliesMax);
     if (branches > 0) {
-      log?.(`    ответов: собрано ${replies.length} у ${branchesOf(replies)} веток (раскрыто ${opened} из ${branches}, дожато ${moreClicks})`);
-      if (replies.length === 0) notice("replies", `${who}: ответы не снялись ни у одной из ${branches} веток`);
+      log?.(`    ответов: собрано ${replies.length} у ${branchesOf(replies)} веток (${expandReplies ? `раскрыто ${opened} из ${branches}, дожато ${moreClicks}` : "ветки не раскрывались — только даровые"})`);
+      if (replies.length === 0 && expandReplies) notice("replies", `${who}: ответы не снялись ни у одной из ${branches} веток`);
     }
     return [...roots, ...replies];
   } finally {

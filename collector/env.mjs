@@ -41,10 +41,15 @@ export function loadEnv() {
   const serviceKey = raw.SUPABASE_SERVICE_ROLE_KEY || "";
   if (!serviceKey) throw new Error(`в ${envPath} пусто SUPABASE_SERVICE_ROLE_KEY — сборщик пишет в базу только этим ключом`);
 
-  // Пауза между креаторами: TikTok не любит очередь запусков подряд. По умолчанию 20 с.
+  // Пауза между креаторами TikTok — между запусками чистых профилей: TikTok не любит очередь
+  // запусков подряд. По умолчанию 8 с (было 20; владелец, 2026-09-08 — обход и без того длинный,
+  // а пустых списков на восьми секундах не видно). После креатора Instagram и после неудачи
+  // «профиль не найден» паузы нет вовсе: там ждать нечего и некого.
+  // ⚠️ Если TikTok начнёт отвечать пустыми списками — это скажет замечание `[list]`, и вот тогда
+  // паузу стоит вернуть побольше.
   const pauseRaw = (raw.AMESTAT_PAUSE_S || "").trim();
   const pauseS = pauseRaw === "" ? NaN : Number(pauseRaw);
-  const pauseMs = Number.isFinite(pauseS) && pauseS >= 0 ? Math.round(pauseS * 1000) : 20_000;
+  const pauseMs = Number.isFinite(pauseS) && pauseS >= 0 ? Math.round(pauseS * 1000) : 8_000;
 
   // Через сколько повторять неудачный обход по расписанию. По умолчанию 60 минут.
   const retryRaw = (raw.AMESTAT_RETRY_MIN || "").trim();

@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { LocalTime } from "@/components/local-time";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { SyncOptionsFields, useSyncOptions } from "@/components/sync-options";
 import { createClient } from "@/lib/supabase/client";
 import { latestRun, openRequests, requestsByIds, requestSync, runsByIds } from "@/lib/api/sync";
 import {
@@ -58,6 +59,8 @@ export function SyncButton({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  // Что снимать: галочки попапа, общие с кнопкой в строке списка.
+  const { comments, replies } = useSyncOptions();
 
   // Родитель пересобирает массив на каждом рендере, поэтому эффекты держатся за строку.
   const pageKey = pageCreatorIds === null ? null : pageCreatorIds.join(",");
@@ -253,12 +256,18 @@ export function SyncButton({
     return () => clearTimeout(timer);
   }, [phase, notified, seenAny, askedAt]);
 
-  // Выбрали ячейку матрицы: кого обойти (target) и на какую глубину (depth).
+  // Выбрали ячейку матрицы: кого обойти (target), на какую глубину (depth) и что снимать
+  // (галочки попапа — они же уходят в просьбу).
   async function ask(target: Target, depth: SyncDepth) {
     setOpen(false);
     setSending(true);
     setError(null);
-    const res = await requestSync({ creatorIds: target === "all" ? null : pageIds, depth });
+    const res = await requestSync({
+      creatorIds: target === "all" ? null : pageIds,
+      depth,
+      comments,
+      replies,
+    });
     setSending(false);
     if (!res.ok) {
       setError(res.error);
@@ -306,6 +315,9 @@ export function SyncButton({
             Обновлено <LocalTime iso={run.finished_at ?? run.started_at} />
             {/* Повтор через час после неудачи по расписанию — его сборщик заводит сам. */}
             {run.trigger === "retry" && " (повтор)"}
+            {/* Обход шёл без текстов комментариев — счётчики свежие, а тексты остались
+                от прошлого раза, и знать об этом надо до того, как их станут читать. */}
+            {run.comments === false && " · без комментариев"}
             {run.ok === false && (
               <span className="text-destructive" title={run.error ?? undefined}>
                 {" "}
@@ -356,6 +368,7 @@ export function SyncButton({
               </Button>
             </div>
           )}
+          <SyncOptionsFields idPrefix={`sync-${scope ?? "all"}`} />
           <p className="text-xs leading-snug text-muted-foreground">
             Неделя — быстрее: только видео за 7 дней, старые не пересчитываются.
           </p>

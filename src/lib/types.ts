@@ -194,6 +194,9 @@ export type SyncRun = {
   // 'all' — обход всех видимых; иначе id одного креатора.
   scope: string;
   depth: SyncDepth;
+  // Чем шёл обход (миграция v12): снимались ли тексты комментариев и ветки ответов.
+  comments: boolean;
+  replies: boolean;
 };
 
 // Просьба «обновить» с сайта (миграция v6). Сайт вставляет, сборщик дома забирает:
@@ -209,12 +212,23 @@ export type SyncRequest = {
   taken_at: string | null;
   run_id: number | null;
   depth: SyncDepth;
+  // Что снимать (миграция v12): тексты комментариев и ветки ответов под ними.
+  // replies без comments смысла не имеет — галочка в матрице гаснет вместе с первой.
+  comments: boolean;
+  replies: boolean;
   // База сама (pg_cron) написала владельцу в Telegram: просьбу никто не принял за 3 минуты.
   notified_at: string | null;
 };
 
-// Остальное ставит база: requested_at и depth — по умолчанию, taken_at и run_id — сборщик.
-export type SyncRequestInsert = { requested_by: string; creator_id?: string | null; depth?: SyncDepth };
+// Остальное ставит база: requested_at, depth, comments и replies — по умолчанию,
+// taken_at и run_id — сборщик.
+export type SyncRequestInsert = {
+  requested_by: string;
+  creator_id?: string | null;
+  depth?: SyncDepth;
+  comments?: boolean;
+  replies?: boolean;
+};
 
 export type CreatorLatest = {
   creator_id: string;

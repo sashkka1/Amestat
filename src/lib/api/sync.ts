@@ -5,15 +5,21 @@ import { fail, type ActionResult } from "./result";
 // Мост «сайт → сборщик дома». Сервера нет: сайт кладёт просьбу в sync_requests, сборщик
 // слушает вставки через Realtime, ставит taken_at и пишет обход в sync_runs (миграция v6).
 // Глубина обхода — depth: all (весь список видео) или week (только за 7 дней), миграция v7.
+// Что снимать — comments и replies (миграция v12): тексты комментариев и ветки ответов.
 
 // Попросить обход: creatorIds — по строке на каждого креатора, null — одна строка на всех.
 // Строк может быть несколько, поэтому возвращаются все id: кнопка следит за ними разом.
+// comments/replies идут в каждую строку пачки: выбор в попапе один на всю просьбу.
 export async function requestSync({
   creatorIds,
   depth,
+  comments,
+  replies,
 }: {
   creatorIds: string[] | null;
   depth: SyncDepth;
+  comments: boolean;
+  replies: boolean;
 }): Promise<ActionResult<{ ids: number[] }>> {
   if (creatorIds !== null && creatorIds.length === 0) return fail("На этой странице нет креаторов");
   const supabase = createClient();
@@ -26,8 +32,14 @@ export async function requestSync({
   const requestedBy = auth.user.id;
   const rows: SyncRequestInsert[] =
     creatorIds === null
-      ? [{ requested_by: requestedBy, creator_id: null, depth }]
-      : creatorIds.map((creator_id) => ({ requested_by: requestedBy, creator_id, depth }));
+      ? [{ requested_by: requestedBy, creator_id: null, depth, comments, replies }]
+      : creatorIds.map((creator_id) => ({
+          requested_by: requestedBy,
+          creator_id,
+          depth,
+          comments,
+          replies,
+        }));
 
   const { data, error } = await supabase.from("sync_requests").insert(rows).select("id");
   if (error) return fail(`Не удалось попросить обход: ${error.message}`);

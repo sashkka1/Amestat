@@ -13,6 +13,10 @@
 // а обход, который делает больше, забирает просьбы того, кто делает меньше (обход всех
 // поглощает частные, глубина «всё» поглощает «неделю» того же охвата). Смысл один: не гонять
 // браузер к одному креатору дважды подряд — TikTok от этого отвечает пустотой.
+// ⚠️ Галочки «снимать комментарии» и «снимать ветки» ключом группы НЕ являются: они
+// складываются по «или» — `true` поглощает `false` того же охвата и глубины. Иначе просьба
+// «всё, с комментариями» и просьба «всё, без комментариев» дали бы два обхода подряд, а
+// человек, попросивший комментарии, всё равно должен их получить.
 //
 // Цепочка при неудаче: неудачный `schedule`/`catchup` → через час `retry` только по
 // неудавшимся → если и он неудачен, одно сообщение владельцу в Telegram. Повтор ровно один:
@@ -46,6 +50,7 @@ import { loadEnv, collectorDir } from "./env.mjs";
 import { get, patch } from "./db.mjs";
 import { runSync, busy } from "./sync.mjs";
 import { missedSlot, nextSlot, retryDue } from "./schedule.mjs";
+import { groupRequests } from "./requests.mjs";
 import { resolveBrowser, killLeftoverBrowsers } from "./browser.mjs";
 import { sendTelegram } from "./telegram.mjs";
 import {
@@ -115,8 +120,12 @@ function remember(row, source) {
   const id = Number(row.id);
   if (!Number.isFinite(id) || handled.has(id) || pending.has(id)) return null;
   const depth = row.depth === "week" ? "week" : "all";
-  pending.set(id, { id, creator_id: row.creator_id ?? null, requested_by: row.requested_by ?? null, depth });
-  log(`просьба #${id} (${row.creator_id ? `креатор ${row.creator_id}` : "все"}, глубина ${depthWord(depth)}) — ${source}`);
+  // Колонки в базе `not null default true`, но старую просьбу (или обрезанный select) читаем
+  // мягко: нет поля — считаем, что снимать надо, как раньше и было.
+  const comments = row.comments !== false;
+  const replies = row.replies !== false;
+  pending.set(id, { id, creator_id: row.creator_id ?? null, requested_by: row.requested_by ?? null, depth, comments, replies });
+  log(`просьба #${id} (${row.creator_id ? `креатор ${row.creator_id}` : "все"}, глубина ${depthWord(depth)}, комментарии ${comments ? "да" : "нет"}, ветки ${replies ? "да" : "нет"}) — ${source}`);
   return id;
 }
 
@@ -136,41 +145,6 @@ async function markSeen(ids) {
     log(`просьбы не помечены принятыми: ${text}`);
     dbResult("отметка просьб принятыми", false, text);
   }
-}
-
-/** Покрывает ли обход группы `big` просьбы группы `small`: охват шире или тот же, глубина не мельче. */
-function covers(big, small) {
-  const scopeOk = big.creatorId === null || big.creatorId === small.creatorId;
-  const depthOk = big.depth === "all" || small.depth === "week";
-  return scopeOk && depthOk;
-}
-
-/**
- * Просьбы одной пачки → обходы. Ключ — пара «охват × глубина»; дальше группы, которые
- * целиком покрыты другой группой, отдают ей свои id и своего обхода не получают.
- * ⚠️ «Все креаторы, неделя» НЕ покрывает «этот креатор, всё»: глубина мельче, и просьба
- * человека про полный список осталась бы невыполненной.
- */
-function groupRequests(rows) {
-  const groups = new Map();
-  for (const r of rows) {
-    const creatorId = r.creator_id ?? null;
-    const depth = r.depth === "week" ? "week" : "all";
-    const key = `${creatorId ?? "все"}|${depth}`;
-    const g = groups.get(key) ?? { creatorId, depth, requestedBy: r.requested_by ?? null, ids: [] };
-    g.ids.push(r.id);
-    groups.set(key, g);
-  }
-  // От самого широкого обхода к самому узкому: тогда покрывающий уже отобран, когда до
-  // покрытого доходит очередь.
-  const power = (g) => (g.creatorId === null ? 2 : 0) + (g.depth === "all" ? 1 : 0);
-  const kept = [];
-  for (const g of [...groups.values()].sort((a, b) => power(b) - power(a))) {
-    const big = kept.find((k) => covers(k, g));
-    if (big) big.ids.push(...g.ids);
-    else kept.push(g);
-  }
-  return kept;
 }
 
 async function launch(opts) {
@@ -254,13 +228,15 @@ async function runRetry(slotLabel) {
   log(`повтор по неудавшимся (${failedCreators.map((c) => `@${c.handle}`).join(", ")})`);
   // `slotLabel` уходит в обход: неудача повтора скажется строкой в его собственном письме,
   // а второго письма (прежний `callOwner`) больше нет.
-  const res = await launch({ trigger: "retry", failedOnly: true, depth: "all", slotLabel });
+  // Расписание, догон и повтор всегда снимают всё: комментарии и ветки. Галочки бывают только
+  // у просьбы с сайта — там их ставит человек.
+  const res = await launch({ trigger: "retry", failedOnly: true, depth: "all", comments: true, replies: true, slotLabel });
   if (!res.ok) log(`вторая неудача подряд после слота ${slotLabel} — сказано письмом обхода #${res.runId ?? "?"}`);
 }
 
 /** Обход по расписанию или догон: неудача заводит повтор через час. */
 async function runScheduled(trigger, slot) {
-  const res = await launch({ trigger, depth: "all" });
+  const res = await launch({ trigger, depth: "all", comments: true, replies: true });
   if (!res.ok && !stopping) planRetry(new Date(Date.now() + env.retryMs), hhmm(slot ?? new Date()), { fresh: true });
   return res;
 }
@@ -278,6 +254,8 @@ async function drain() {
           trigger: "manual",
           creatorId: group.creatorId,
           depth: group.depth,
+          comments: group.comments,
+          replies: group.replies,
           requestedBy: group.requestedBy,
           requestIds: group.ids,
         });
@@ -300,7 +278,7 @@ const browser = (() => {
 // Прогрев: первые полторы минуты сеть только поднимается (особенно если компьютер спал), и
 // её отказы владельцу не нужны — они уходят в лог и никуда больше.
 startWarmup("старта");
-log(`резидент запущен. Браузер: ${browser}. Пауза между креаторами ${Math.round(env.pauseMs / 1000)} с. Повтор после неудачи через ${Math.round(env.retryMs / 60_000)} мин. Instagram: ${env.igSource}. Логи: ${logsDir}`);
+log(`резидент запущен. Браузер: ${browser}. Пауза между креаторами TikTok ${Math.round(env.pauseMs / 1000)} с. Повтор после неудачи через ${Math.round(env.retryMs / 60_000)} мин. Instagram: ${env.igSource}. Логи: ${logsDir}`);
 
 // 0. Остатки прошлых обходов: упавший обход оставляет окно Opera на нашем профиле, а оно и
 //    память держит, и не даёт подняться следующему браузеру. Свои окна владельца не трогаем —
@@ -410,7 +388,7 @@ const channel = supabase
 let firstPoll = true;
 async function poll() {
   try {
-    const rows = await get("sync_requests?select=id,creator_id,requested_by,depth,seen_at,taken_at&taken_at=is.null&order=id.asc");
+    const rows = await get("sync_requests?select=id,creator_id,requested_by,depth,comments,replies,seen_at,taken_at&taken_at=is.null&order=id.asc");
     const fresh = [];
     for (const row of rows) {
       const id = remember(row, "опрос");

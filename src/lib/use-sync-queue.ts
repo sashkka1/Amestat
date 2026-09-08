@@ -19,8 +19,8 @@ export type RowSync = { phase: Exclude<Phase, "idle">; unavailable: boolean };
 export type SyncQueue = {
   // Только креаторы с открытой просьбой; у остальных строк кнопка в покое.
   rows: Map<string, RowSync>;
-  // Попросить обход одного креатора: охват задан строкой, выбирается только глубина.
-  ask: (creatorId: string, depth: SyncDepth) => Promise<void>;
+  // Попросить обход одного креатора: охват задан строкой, выбираются глубина и что снимать.
+  ask: (creatorId: string, depth: SyncDepth, comments: boolean, replies: boolean) => Promise<void>;
   error: string | null;
 };
 
@@ -153,9 +153,9 @@ export function useSyncQueue(creatorIds: string[], onDone: () => void): SyncQueu
   }, [waiting, check]);
 
   const ask = useCallback(
-    async (creatorId: string, depth: SyncDepth) => {
+    async (creatorId: string, depth: SyncDepth, comments: boolean, replies: boolean) => {
       setSending((prev) => (prev.includes(creatorId) ? prev : [...prev, creatorId]));
-      const res = await requestSync({ creatorIds: [creatorId], depth });
+      const res = await requestSync({ creatorIds: [creatorId], depth, comments, replies });
       setSending((prev) => prev.filter((c) => c !== creatorId));
       if (!res.ok) {
         setError(res.error);
@@ -176,6 +176,8 @@ export function useSyncQueue(creatorIds: string[], onDone: () => void): SyncQueu
         taken_at: null,
         run_id: null,
         depth,
+        comments,
+        replies,
         notified_at: null,
       }));
       setReqs((prev) => [...prev, ...fresh]);
