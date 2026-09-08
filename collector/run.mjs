@@ -19,7 +19,7 @@ const opt = (name, fallback = null) => {
 const has = (name) => argv.includes(name);
 
 if (has("--help") || has("-h")) {
-  console.log("node run.mjs [--creator <uuid>] [--depth all|week] [--failed-only] [--no-comments] [--no-replies] [--trigger manual|schedule|catchup|retry]");
+  console.log("node run.mjs [--creator <uuid>] [--depth all|week] [--failed-only] [--no-comments] [--no-replies] [--all-videos] [--trigger manual|schedule|catchup|retry]");
   process.exit(0);
 }
 
@@ -29,6 +29,8 @@ const failedOnly = has("--failed-only");
 // `--no-replies` отменяет только клики по веткам: даровые ответы приезжают внутри корневых.
 const comments = !has("--no-comments");
 const replies = !has("--no-replies");
+// `--all-videos` — галочка «Комментарии и у не наших видео»: обычно тексты снимаются только у наших.
+const allVideos = has("--all-videos");
 const trigger = opt("--trigger", "manual");
 if (!["manual", "schedule", "catchup", "retry"].includes(trigger)) {
   console.error(`✗ --trigger бывает только manual, schedule, catchup или retry, а не «${trigger}»`);
@@ -43,7 +45,7 @@ if (!["all", "week"].includes(depth)) {
 const started = Date.now();
 let result;
 try {
-  result = await runSync({ trigger, creatorId, failedOnly, depth, comments, replies, onLog: (line) => console.log(line) });
+  result = await runSync({ trigger, creatorId, failedOnly, depth, comments, replies, allVideos, onLog: (line) => console.log(line) });
 } catch (e) {
   // Сюда попадает только то, что случилось до первой строки в базе (например, нет .env.local).
   console.error(`✗ ${String(e?.message ?? e).split("\n")[0]}`);

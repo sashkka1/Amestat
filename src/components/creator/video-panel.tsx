@@ -139,6 +139,7 @@ export function VideoPanel({
         videoId={row.video_id}
         platform={platform}
         total={row.comments_now}
+        ours={row.ours}
         refreshKey={refreshKey}
       />
     </Panel>

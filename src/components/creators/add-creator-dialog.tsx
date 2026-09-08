@@ -21,6 +21,7 @@ import { PlatformIcon } from "@/components/platform";
 import { createCreator, setCreatorAvatar } from "@/lib/api/creators";
 import { uploadAvatar } from "@/lib/avatar-upload";
 import { parseHandle } from "@/lib/handle";
+import { usePlatformFilter } from "@/lib/platform-filter";
 import type { Platform } from "@/lib/types";
 
 const PLATFORMS: { key: Platform; label: string; placeholder: string }[] = [
@@ -32,8 +33,13 @@ const PARSE_ERROR =
   "Не понял ссылку или имя. Нужно: https://www.tiktok.com/@name, https://www.instagram.com/name/, @name или name";
 
 export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
+  // Площадка при открытии — та, что выбрана переключателем над страницей: стоя на Instagram,
+  // владелец нажимал «Добавить» и по привычке заводил тиктокеров, потому что TikTok стоит
+  // первым (владелец, 2026-09-08). При «Все» остаётся TikTok.
+  const pageFilter = usePlatformFilter().filter;
+  const startPlatform: Platform = pageFilter === "all" ? "tiktok" : pageFilter;
   const [open, setOpen] = useState(false);
-  const [platform, setPlatform] = useState<Platform>("tiktok");
+  const [platform, setPlatform] = useState<Platform>(startPlatform);
   const [raw, setRaw] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -52,7 +58,7 @@ export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
   }
 
   function reset() {
-    setPlatform("tiktok");
+    setPlatform(startPlatform);
     setRaw("");
     setName("");
     setDescription("");
@@ -108,7 +114,9 @@ export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
       open={open}
       onOpenChange={(v) => {
         setOpen(v);
-        if (!v) reset();
+        // Переключатель могли передвинуть, пока диалог был закрыт, — берём его при каждом открытии.
+        if (v) setPlatform(startPlatform);
+        else reset();
       }}
     >
       <DialogTrigger asChild>

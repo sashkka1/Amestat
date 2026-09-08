@@ -1,25 +1,24 @@
 import { createClient } from "@/lib/supabase/client";
-import type { SyncDepth, SyncRequest, SyncRequestInsert, SyncRun } from "@/lib/types";
+import type { SyncDepth, SyncPick, SyncRequest, SyncRequestInsert, SyncRun } from "@/lib/types";
 import { fail, type ActionResult } from "./result";
 
 // Мост «сайт → сборщик дома». Сервера нет: сайт кладёт просьбу в sync_requests, сборщик
 // слушает вставки через Realtime, ставит taken_at и пишет обход в sync_runs (миграция v6).
 // Глубина обхода — depth: all (весь список видео) или week (только за 7 дней), миграция v7.
-// Что снимать — comments и replies (миграция v12): тексты комментариев и ветки ответов.
+// Что снимать — pick (миграции v12 и v13): тексты комментариев, ветки ответов и надо ли
+// брать тексты у не наших видео.
 
 // Попросить обход: creatorIds — по строке на каждого креатора, null — одна строка на всех.
 // Строк может быть несколько, поэтому возвращаются все id: кнопка следит за ними разом.
-// comments/replies идут в каждую строку пачки: выбор в попапе один на всю просьбу.
+// pick идёт в каждую строку пачки: выбор в попапе один на всю просьбу.
 export async function requestSync({
   creatorIds,
   depth,
-  comments,
-  replies,
+  pick,
 }: {
   creatorIds: string[] | null;
   depth: SyncDepth;
-  comments: boolean;
-  replies: boolean;
+  pick: SyncPick;
 }): Promise<ActionResult<{ ids: number[] }>> {
   if (creatorIds !== null && creatorIds.length === 0) return fail("На этой странице нет креаторов");
   const supabase = createClient();
@@ -30,15 +29,16 @@ export async function requestSync({
   if (!auth.user) return fail("Сессия кончилась — войдите заново");
 
   const requestedBy = auth.user.id;
+  // Имена колонок базы, а не полей попапа: all_videos — тот же флаг, что pick.allVideos.
+  const flags = { comments: pick.comments, replies: pick.replies, all_videos: pick.allVideos };
   const rows: SyncRequestInsert[] =
     creatorIds === null
-      ? [{ requested_by: requestedBy, creator_id: null, depth, comments, replies }]
+      ? [{ requested_by: requestedBy, creator_id: null, depth, ...flags }]
       : creatorIds.map((creator_id) => ({
           requested_by: requestedBy,
           creator_id,
           depth,
-          comments,
-          replies,
+          ...flags,
         }));
 
   const { data, error } = await supabase.from("sync_requests").insert(rows).select("id");

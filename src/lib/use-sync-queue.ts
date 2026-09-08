@@ -4,8 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { openRequests, requestSync, requestsByIds, runsByIds } from "@/lib/api/sync";
 import { createClient } from "@/lib/supabase/client";
-import { POLL_MS, runsResult, stage, type Phase } from "@/lib/sync-phase";
-import type { SyncDepth, SyncRequest, SyncRun } from "@/lib/types";
+import { POLL_MS, allVideosTail, runsResult, stage, type Phase } from "@/lib/sync-phase";
+import type { SyncDepth, SyncPick, SyncRequest, SyncRun } from "@/lib/types";
 
 // Очередь обновления для целого списка креаторов: одно состояние на всю таблицу, а не по
 // кнопке на строку. Иначе каждая строка держала бы свою подписку Realtime и свой опрос —
@@ -20,7 +20,7 @@ export type SyncQueue = {
   // Только креаторы с открытой просьбой; у остальных строк кнопка в покое.
   rows: Map<string, RowSync>;
   // Попросить обход одного креатора: охват задан строкой, выбираются глубина и что снимать.
-  ask: (creatorId: string, depth: SyncDepth, comments: boolean, replies: boolean) => Promise<void>;
+  ask: (creatorId: string, depth: SyncDepth, pick: SyncPick) => Promise<void>;
   error: string | null;
 };
 
@@ -114,8 +114,10 @@ export function useSyncQueue(creatorIds: string[], onDone: () => void): SyncQueu
     });
     if (done.length > 0) {
       const res = runsResult(done);
-      if (res.ok) toast.success(res.text);
-      else toast.error(res.text);
+      // Тот же хвост, что у кнопки «Обновить»: обход брал тексты и у не наших видео.
+      const tail = allVideosTail(done);
+      if (res.ok) toast.success(res.text + tail);
+      else toast.error(res.text + tail);
     }
     onDoneRef.current();
   }, [ids]);
@@ -153,9 +155,9 @@ export function useSyncQueue(creatorIds: string[], onDone: () => void): SyncQueu
   }, [waiting, check]);
 
   const ask = useCallback(
-    async (creatorId: string, depth: SyncDepth, comments: boolean, replies: boolean) => {
+    async (creatorId: string, depth: SyncDepth, pick: SyncPick) => {
       setSending((prev) => (prev.includes(creatorId) ? prev : [...prev, creatorId]));
-      const res = await requestSync({ creatorIds: [creatorId], depth, comments, replies });
+      const res = await requestSync({ creatorIds: [creatorId], depth, pick });
       setSending((prev) => prev.filter((c) => c !== creatorId));
       if (!res.ok) {
         setError(res.error);
@@ -176,8 +178,9 @@ export function useSyncQueue(creatorIds: string[], onDone: () => void): SyncQueu
         taken_at: null,
         run_id: null,
         depth,
-        comments,
-        replies,
+        comments: pick.comments,
+        replies: pick.replies,
+        all_videos: pick.allVideos,
         notified_at: null,
       }));
       setReqs((prev) => [...prev, ...fresh]);

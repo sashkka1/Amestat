@@ -140,3 +140,44 @@ test("счётчик базы приезжает строкой — сравне
   assert.equal(picked.length, 0);
   assert.equal(unchanged.length, 1);
 });
+
+// --- Только наши видео (владелец, 2026-09-08: счётчики по всем, тексты — по нашим) ---
+
+test("не наше видео в тексты не берётся — уходит в foreign", () => {
+  const videos = [video("ours", 10, 1), video("alien", 10, 1)];
+  const known = new Map([["ours", { count: null, ours: true }], ["alien", { count: null, ours: false }]]);
+  const { picked, unchanged, foreign } = pickComments(videos, known, SINCE);
+  assert.deepEqual(picked.map((v) => v.id), ["ours"]);
+  assert.deepEqual(foreign.map((v) => v.id), ["alien"]);
+  assert.equal(unchanged.length, 0);
+});
+
+test("просьба «и не наши видео» снимает у всех, но «без изменений» действует и на них", () => {
+  const videos = [video("ours", 10, 1), video("alien", 10, 1), video("same", 5, 1)];
+  const known = new Map([
+    ["ours", { count: null, ours: true }],
+    ["alien", { count: null, ours: false }],
+    ["same", { count: 5, ours: false }],
+  ]);
+  const { picked, unchanged, foreign } = pickComments(videos, known, SINCE, { allVideos: true });
+  assert.deepEqual(picked.map((v) => v.id), ["ours", "alien"]);
+  assert.deepEqual(unchanged.map((v) => v.id), ["same"]);
+  assert.equal(foreign.length, 0);
+});
+
+test("о видео база не сказала (строки нет) — считается нашим и снимается", () => {
+  const { picked, foreign } = pickComments([video("new", 3, 1)], new Map(), SINCE);
+  assert.deepEqual(picked.map((v) => v.id), ["new"]);
+  assert.equal(foreign.length, 0);
+});
+
+test("all_videos склеивается по «или», а без поля — false", () => {
+  const groups = groupRequests([
+    req(1, { comments: true, replies: true }),
+    req(2, { comments: true, replies: true, all_videos: true }),
+  ]);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].allVideos, true, "одна просьба «и не наши» — обход снимает у всех");
+  const [plain] = groupRequests([req(3, { comments: true, replies: true })]);
+  assert.equal(plain.allVideos, false, "поля нет — только наши, как всегда");
+});

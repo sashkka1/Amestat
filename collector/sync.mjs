@@ -256,8 +256,8 @@ async function syncedCounts(ids, log) {
   try {
     for (let i = 0; i < ids.length; i += 100) {
       const list = ids.slice(i, i + 100).map((id) => `"${encodeURIComponent(id)}"`).join(",");
-      for (const row of await get(`videos?select=id,comments_synced_count&id=in.(${list})`)) {
-        out.set(String(row.id), row.comments_synced_count ?? null);
+      for (const row of await get(`videos?select=id,comments_synced_count,ours&id=in.(${list})`)) {
+        out.set(String(row.id), { count: row.comments_synced_count ?? null, ours: row.ours !== false });
       }
     }
   } catch (e) {
@@ -270,23 +270,34 @@ async function syncedCounts(ids, log) {
 /**
  * Кого из видео обходить за текстами комментариев.
  *   • только свежие (`sinceMs`) и только те, у которых комментарии есть вовсе;
+ *   • только НАШИ (`videos.ours`; владелец, 2026-09-08: счётчики из списка — по всем видео,
+ *     «всю остальную информацию» — по нашим). Флаг `allVideos` (просьба «и не наши видео» из
+ *     матрицы) снимает это условие. Видео, о котором база не сказала (нет строки), — считается
+ *     нашим: лишняя работа лучше потерянных комментариев;
  *   • видео, у которого число комментариев ровно то же, что при прошлом съёме
  *     (`videos.comments_synced_count`), пропускается: обсуждение не двигалось, а страница
  *     на видео стоит минуты. Первый раз (`null` или неизвестно) — снимаем всегда.
- * Отдаёт `{ picked, unchanged }`. Чистая функция: её проверяют тесты.
+ * `known` — Map id → `{ count, ours }` (старый вид «id → число» тоже понимается).
+ * Отдаёт `{ picked, unchanged, foreign }`. Чистая функция: её проверяют тесты.
  */
-export function pickComments(videos, known, sinceMs) {
-  const picked = [], unchanged = [];
+export function pickComments(videos, known, sinceMs, { allVideos = false } = {}) {
+  const picked = [], unchanged = [], foreign = [];
   for (const v of videos ?? []) {
     const count = v.comments ?? 0;
     if (count <= 0) continue;
     if (v.publishedAt === null || v.publishedAt === undefined) continue;
     if (Date.parse(v.publishedAt) < sinceMs) continue;
-    const was = known?.get(String(v.id));
+    const row = known?.get(String(v.id));
+    const was = row !== null && typeof row === "object" ? row.count : row;
+    const ours = row !== null && typeof row === "object" ? row.ours !== false : true;
+    if (!ours && !allVideos) {
+      foreign.push(v);
+      continue;
+    }
     if (was !== null && was !== undefined && Number(was) === Number(count)) unchanged.push(v);
     else picked.push(v);
   }
-  return { picked, unchanged };
+  return { picked, unchanged, foreign };
 }
 
 /**
@@ -314,13 +325,16 @@ async function collectComments(creator, videos, env, lane, flags, log) {
 
   const since = Date.now() - env.commentsDays * DAY_MS;
   const known = await syncedCounts(videos.map((v) => v.id), log);
-  const { picked, unchanged } = pickComments(videos, known, since);
+  const { picked, unchanged, foreign } = pickComments(videos, known, since, { allVideos: flags.allVideos });
   const same = unchanged.length > 0 ? `, без изменений: ${unchanged.length} видео` : "";
+  const alien = foreign.length > 0 ? `, не наших: ${foreign.length} видео` : "";
   if (picked.length === 0) {
-    log?.(`  комментарии: видео 0, собрано 0, не вышло 0 (свежих с новыми комментариями нет за ${env.commentsDays} дн.${same})`);
+    log?.(`  комментарии: видео 0, собрано 0, не вышло 0 (свежих с новыми комментариями нет за ${env.commentsDays} дн.${same}${alien})`);
     return;
   }
   if (unchanged.length > 0) log?.(`  комментарии: без изменений: ${unchanged.length} видео — их не открываем`);
+  if (foreign.length > 0) log?.(`  комментарии: не наших: ${foreign.length} видео — тексты у них не снимаем (нужны — просьба «и не наши видео»)`);
+  if (flags.allVideos) log?.(`  комментарии: просьба «и не наши видео» — снимаем у всех свежих`);
 
   let ctx = null;
   try {
@@ -444,7 +458,7 @@ async function collectOne(creator, env, depth, lane, flags, log) {
   return { videos: videos.length, followers: profile.followers };
 }
 
-async function doSync({ trigger, creatorId, failedOnly, depth, comments, replies, requestedBy, requestIds, slotLabel, onLog }) {
+async function doSync({ trigger, creatorId, failedOnly, depth, comments, replies, allVideos, requestedBy, requestIds, slotLabel, onLog }) {
   const env = loadEnv();
   const lines = [];
   const log = (text) => {
@@ -464,6 +478,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, comments, replies
       depth,
       comments,
       replies,
+      all_videos: allVideos,
       requested_by: requestedBy ?? null,
     });
     runId = run?.id ?? null;
@@ -478,7 +493,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, comments, replies
     return { runId: null, ok: false, done: 0, failed: 0, error: text, failures, depth, log: lines.join("\n") };
   }
   const who = failedOnly ? "только неудавшиеся" : creatorId ? `креатор ${creatorId}` : "все";
-  log(`обход #${runId} (${trigger}, ${who}, глубина ${depth === "week" ? "неделя" : "всё"}, комментарии ${comments ? "да" : "нет"}, ветки ${replies ? "да" : "нет"})`);
+  log(`обход #${runId} (${trigger}, ${who}, глубина ${depth === "week" ? "неделя" : "всё"}, комментарии ${comments ? "да" : "нет"}, ветки ${replies ? "да" : "нет"}${allVideos ? ", и не наши видео" : ""})`);
 
   // Просьбы забраны этим обходом — сайт перестаёт показывать «в очереди».
   if (requestIds?.length && runId) {
@@ -493,7 +508,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, comments, replies
   }
 
   let done = 0, failed = 0, firstError = null;
-  const flags = { comments, replies };
+  const flags = { comments, replies, allVideos };
   try {
     const where = `${creatorId ? `&id=eq.${creatorId}` : ""}${failedOnly ? "&sync_error=not.is.null" : ""}`;
     const creators = await get(`creators?select=${CREATOR_FIELDS}${where}&order=sort_order.asc,added_at.asc`);
@@ -602,8 +617,10 @@ async function doSync({ trigger, creatorId, failedOnly, depth, comments, replies
 /**
  * Один обход. Пока идёт предыдущий — ждёт его в очереди.
  * `{ trigger: 'schedule'|'catchup'|'manual'|'retry', creatorId?, failedOnly?, depth?,
- *    comments?, replies?, requestedBy?, requestIds?, slotLabel?, onLog? }`
+ *    comments?, replies?, allVideos?, requestedBy?, requestIds?, slotLabel?, onLog? }`
  * `comments` — снимать ли тексты комментариев (`false` — шага нет вовсе);
+ * `allVideos` — снимать ли тексты и у НЕ наших видео (по умолчанию `false`: только наши,
+ * `videos.ours`; расписание, догон и повтор его не ставят никогда);
  * `replies` — раскрывать ли ветки ответов (`false` — корневые снимаются, ветки не раскрываются,
  * но даровые ответы внутри корневых всё равно кладутся: они не стоят ни клика, ни запроса).
  * Оба по умолчанию `true` — как расписание, догон и повтор.
@@ -613,12 +630,13 @@ async function doSync({ trigger, creatorId, failedOnly, depth, comments, replies
  * `failures` — `[{ handle, error }]` по каждому неудавшемуся креатору: из них резидент
  * собирает сообщение владельцу в Telegram.
  */
-export function runSync({ trigger = "manual", creatorId = null, failedOnly = false, depth = "all", comments = true, replies = true, requestedBy = null, requestIds = [], slotLabel = null, onLog } = {}) {
+export function runSync({ trigger = "manual", creatorId = null, failedOnly = false, depth = "all", comments = true, replies = true, allVideos = false, requestedBy = null, requestIds = [], slotLabel = null, onLog } = {}) {
   const args = {
     trigger, creatorId, failedOnly,
     depth: depth === "week" ? "week" : "all",
     comments: comments !== false,
     replies: replies !== false,
+    allVideos: allVideos === true,
     requestedBy, requestIds, slotLabel, onLog,
   };
   pending++;

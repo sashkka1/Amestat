@@ -42,6 +42,15 @@ export function stage(reqs: SyncRequest[]): { phase: Phase; seenAny: boolean; no
   };
 }
 
+// Хвост «· все видео» к тосту и к строке состояния: обход шёл с флагом all_videos, значит
+// тексты комментариев снимались и у не наших видео (миграция v13). Хвост общий у кнопки
+// «Обновить» и у очереди строк списка — как и сам тост.
+export const ALL_VIDEOS_TEXT = " · все видео";
+
+export function allVideosTail(runs: SyncRun[]): string {
+  return runs.some((r) => r.all_videos) ? ALL_VIDEOS_TEXT : "";
+}
+
 // Чем кончилась пачка обходов — одной строкой для тоста. Не удался хоть один — показываем
 // первую же ошибку: разбираться, какой именно креатор упал, идут в карточку.
 export function runsResult(runs: SyncRun[]): { ok: boolean; text: string } {

@@ -58,12 +58,16 @@ export function VideoComments({
   videoId,
   platform,
   total,
+  ours,
   refreshKey,
 }: {
   videoId: string;
   platform: Platform;
   // Число комментариев из снимка: сколько их на площадке, а не сколько текстов снято.
   total: number | null;
+  // «Наше» ли видео: у не наших сборщик тексты обычно не снимает — пустота здесь не
+  // потеря, а правило, и сказать об этом надо прямо (миграция v13).
+  ours: boolean;
   // Меняется после обхода — список перечитывается.
   refreshKey: number;
 }) {
@@ -162,8 +166,22 @@ export function VideoComments({
         <Skeleton className="h-24 w-full" />
       ) : current.rows.length === 0 ? (
         <div className="rounded-lg border border-dashed px-4 py-8 text-center">
-          <p className="text-sm text-muted-foreground">Комментариев в базе нет</p>
-          <p className="text-xs text-muted-foreground">тексты снимаются для видео за последние 7 дней</p>
+          {/* Не наше видео, к которому сборщик за текстами и не ходил: обычная пустота
+              выглядела бы поломкой, а это правило. Сняли по особой просьбе — строки есть,
+              и сюда мы уже не попадаем. */}
+          {!ours && current.count === 0 && !current.syncedAt ? (
+            <p className="text-sm text-muted-foreground">
+              У не наших видео тексты комментариев не снимаются. Нужны — в матрице обновления
+              поставь «Комментарии и у не наших видео».
+            </p>
+          ) : (
+            <>
+              <p className="text-sm text-muted-foreground">Комментариев в базе нет</p>
+              <p className="text-xs text-muted-foreground">
+                тексты снимаются для видео за последние 7 дней
+              </p>
+            </>
+          )}
         </div>
       ) : (
         // key — ключ списка: сменилась сортировка или прошёл обход, React пересоздаёт

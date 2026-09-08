@@ -1,13 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { RefreshCwIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { SyncOptionsFields, useSyncOptions } from "@/components/sync-options";
 import { PHASE_TEXT, UNAVAILABLE_TITLE } from "@/lib/sync-phase";
 import type { RowSync } from "@/lib/use-sync-queue";
-import type { SyncDepth } from "@/lib/types";
+import type { SyncDepth, SyncPick } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 // Кнопка обновления в строке списка креаторов. Матрица кнопки над страницей здесь не нужна:
@@ -22,11 +22,19 @@ export function RowSyncButton({
 }: {
   creatorId: string;
   state: RowSync | undefined;
-  onAsk: (depth: SyncDepth, comments: boolean, replies: boolean) => void;
+  onAsk: (depth: SyncDepth, pick: SyncPick) => void;
 }) {
   const [open, setOpen] = useState(false);
   // Галочки те же, что в попапе кнопки над страницей: выбор общий.
   const { comments, replies } = useSyncOptions();
+  // Кроме третьей: «комментарии и у не наших видео» не запоминается и гаснет при каждом
+  // открытии попапа — как и у кнопки над страницей.
+  const [allVideos, setAllVideos] = useState(false);
+
+  const openChange = useCallback((next: boolean) => {
+    setOpen(next);
+    if (next) setAllVideos(false);
+  }, []);
 
   if (state) {
     // Пока просьба открыта, кнопка выключена: иначе на одну и ту же работу копится очередь.
@@ -44,11 +52,12 @@ export function RowSyncButton({
 
   function ask(depth: SyncDepth) {
     setOpen(false);
-    onAsk(depth, comments, replies);
+    // Без comments «все видео» не значит ничего — гасим и здесь, как у кнопки над страницей.
+    onAsk(depth, { comments, replies, allVideos: comments && allVideos });
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={openChange}>
       <PopoverTrigger asChild>
         <Button variant="ghost" size="icon-sm" title="Обновить креатора" aria-label="Обновить креатора">
           <RefreshCwIcon />
@@ -63,7 +72,11 @@ export function RowSyncButton({
             Последняя неделя
           </Button>
         </div>
-        <SyncOptionsFields idPrefix={`row-sync-${creatorId}`} />
+        <SyncOptionsFields
+          idPrefix={`row-sync-${creatorId}`}
+          allVideos={allVideos}
+          onAllVideos={setAllVideos}
+        />
         <p className="text-xs leading-snug text-muted-foreground">
           Неделя — быстрее: только видео за 7 дней.
         </p>

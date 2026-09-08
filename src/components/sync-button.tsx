@@ -18,9 +18,11 @@ import {
 } from "@/lib/platform-filter";
 import { listCreators } from "@/lib/queries";
 import {
+  ALL_VIDEOS_TEXT,
   PHASE_TEXT,
   POLL_MS,
   UNAVAILABLE_TEXT,
+  allVideosTail,
   runsResult,
   stage,
   type Phase,
@@ -75,6 +77,10 @@ export function SyncButton({
   const [open, setOpen] = useState(false);
   // Что снимать: галочки попапа, общие с кнопкой в строке списка.
   const { comments, replies } = useSyncOptions();
+  // Третья галочка — «комментарии и у не наших видео». В отличие от двух первых, она не
+  // запоминается: тяжёлый обход должен быть осознанным каждый раз, поэтому её состояние
+  // живёт здесь и гаснет при каждом открытии попапа.
+  const [allVideos, setAllVideos] = useState(false);
 
   // Третья ось матрицы — площадка (владелец, 2026-09-08). Попап открывается в том же
   // положении, что общий переключатель страниц, но своего выбора не запоминает и общий
@@ -89,6 +95,9 @@ export function SyncButton({
   // площадки нет, а знать, чей обход ждём, надо.
   const [askedPlatform, setAskedPlatform] = useState<PlatformFilter>("all");
   const askedPlatformRef = useRef<PlatformFilter>("all");
+  // «Все видео» ушедшей просьбы: в отличие от площадки, база его помнит, поэтому после
+  // перезагрузки страницы флаг восстанавливается из самой просьбы.
+  const [askedAllVideos, setAskedAllVideos] = useState(false);
 
   // Список креаторов нужен, чтобы отобрать id по площадке: просьба уходит явным списком.
   // Читается один раз при открытии попапа — RLS уже отдаёт только видимых.
@@ -134,12 +143,15 @@ export function SyncButton({
     const tail = platformTail(askedPlatformRef.current);
     askedPlatformRef.current = "all";
     setAskedPlatform("all");
+    setAskedAllVideos(false);
     const last = finished ? newest(finished) : null;
     if (last) {
       setRun(last);
       const res = runsResult(finished ?? []);
-      if (res.ok) toast.success(res.text + tail);
-      else toast.error(res.text + tail);
+      // «Все видео» берём у самих обходов: там оно записано, а не угадано попапом.
+      const full = tail + allVideosTail(finished ?? []);
+      if (res.ok) toast.success(res.text + full);
+      else toast.error(res.text + full);
     }
     onDoneRef.current();
   }, []);
@@ -166,6 +178,7 @@ export function SyncButton({
       const now = stage(reqs);
       setSeenAny(now.seenAny);
       setNotified(now.notified);
+      setAskedAllVideos(reqs.some((r) => r.all_videos));
       // Забрали не всех — обхода ещё нет: либо очередь, либо резидент уже принял просьбу.
       if (now.phase !== "running") {
         setPhase(now.phase);
@@ -235,6 +248,7 @@ export function SyncButton({
         const now = stage(waitingReqs);
         setSeenAny(now.seenAny);
         setNotified(now.notified);
+        setAskedAllVideos(waitingReqs.some((r) => r.all_videos));
         setPhase(now.phase);
       }
     })();
@@ -301,6 +315,8 @@ export function SyncButton({
       setOpen(next);
       if (!next) return;
       setPlatform(pageFilter);
+      // Каждое открытие — с чистого листа: «все видео» не наследуется от прошлой просьбы.
+      setAllVideos(false);
       if (creators !== null || loadingCreators) return;
       setLoadingCreators(true);
       setCreatorsError(null);
@@ -353,17 +369,19 @@ export function SyncButton({
     setError(null);
     askedPlatformRef.current = platform;
     setAskedPlatform(platform);
+    setAskedAllVideos(comments && allVideos);
     const res = await requestSync({
       creatorIds,
       depth,
-      comments,
-      replies,
+      // Без comments «все видео» не значит ничего — гасим на всякий случай и здесь.
+      pick: { comments, replies, allVideos: comments && allVideos },
     });
     setSending(false);
     if (!res.ok) {
       // Просьба не завелась — ждать нечего, и площадка ушедшей просьбы больше не наша.
       askedPlatformRef.current = "all";
       setAskedPlatform("all");
+      setAskedAllVideos(false);
       setError(res.error);
       toast.error(res.error);
       return;
@@ -422,7 +440,7 @@ export function SyncButton({
             Не удалось прочитать состояние
           </span>
         ) : waitText !== null ? (
-          waitText + platformTail(askedPlatform)
+          waitText + platformTail(askedPlatform) + (askedAllVideos ? ALL_VIDEOS_TEXT : "")
         ) : run ? (
           <>
             Обновлено <LocalTime iso={run.finished_at ?? run.started_at} />
@@ -431,6 +449,8 @@ export function SyncButton({
             {/* Обход шёл без текстов комментариев — счётчики свежие, а тексты остались
                 от прошлого раза, и знать об этом надо до того, как их станут читать. */}
             {run.comments === false && " · без комментариев"}
+            {/* Наоборот: обход шёл и по не нашим видео — тексты у них свежие, а это редкость. */}
+            {run.all_videos && ALL_VIDEOS_TEXT}
             {run.ok === false && (
               <span className="text-destructive" title={run.error ?? undefined}>
                 {" "}
@@ -510,7 +530,11 @@ export function SyncButton({
           ) : emptyNote ? (
             <p className="text-xs leading-snug text-muted-foreground">{emptyNote}</p>
           ) : null}
-          <SyncOptionsFields idPrefix={`sync-${scope ?? "all"}`} />
+          <SyncOptionsFields
+            idPrefix={`sync-${scope ?? "all"}`}
+            allVideos={allVideos}
+            onAllVideos={setAllVideos}
+          />
           <p className="text-xs leading-snug text-muted-foreground">
             Неделя — быстрее: только видео за 7 дней, старые не пересчитываются.
           </p>

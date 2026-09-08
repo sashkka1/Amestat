@@ -124,8 +124,10 @@ function remember(row, source) {
   // мягко: нет поля — считаем, что снимать надо, как раньше и было.
   const comments = row.comments !== false;
   const replies = row.replies !== false;
-  pending.set(id, { id, creator_id: row.creator_id ?? null, requested_by: row.requested_by ?? null, depth, comments, replies });
-  log(`просьба #${id} (${row.creator_id ? `креатор ${row.creator_id}` : "все"}, глубина ${depthWord(depth)}, комментарии ${comments ? "да" : "нет"}, ветки ${replies ? "да" : "нет"}) — ${source}`);
+  // А этот — `default false`: нет поля — значит, только наши видео, как всегда.
+  const allVideos = row.all_videos === true;
+  pending.set(id, { id, creator_id: row.creator_id ?? null, requested_by: row.requested_by ?? null, depth, comments, replies, allVideos });
+  log(`просьба #${id} (${row.creator_id ? `креатор ${row.creator_id}` : "все"}, глубина ${depthWord(depth)}, комментарии ${comments ? "да" : "нет"}, ветки ${replies ? "да" : "нет"}${allVideos ? ", и не наши видео" : ""}) — ${source}`);
   return id;
 }
 
@@ -256,6 +258,7 @@ async function drain() {
           depth: group.depth,
           comments: group.comments,
           replies: group.replies,
+          allVideos: group.allVideos,
           requestedBy: group.requestedBy,
           requestIds: group.ids,
         });
@@ -388,7 +391,7 @@ const channel = supabase
 let firstPoll = true;
 async function poll() {
   try {
-    const rows = await get("sync_requests?select=id,creator_id,requested_by,depth,comments,replies,seen_at,taken_at&taken_at=is.null&order=id.asc");
+    const rows = await get("sync_requests?select=id,creator_id,requested_by,depth,comments,replies,all_videos,seen_at,taken_at&taken_at=is.null&order=id.asc");
     const fresh = [];
     for (const row of rows) {
       const id = remember(row, "опрос");
