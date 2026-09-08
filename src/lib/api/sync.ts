@@ -64,14 +64,18 @@ export async function latestRun(scope?: string): Promise<ActionResult<SyncRun | 
 
 // Незакрытые просьбы, которые могла завести эта кнопка: сборщик их ещё не забрал. Нужны,
 // чтобы после перезагрузки страницы кнопка снова показала «в очереди». Критерии те же, что
-// у requestSync: creatorIds === null — только просьба «за всех», иначе «за всех» плюс
-// креаторы этой страницы (обе кнопки матрицы доступны с одной страницы).
+// у requestSync: creatorIds === null — на странице все креаторы, значит любая незакрытая
+// просьба (и «за всех», и с явными id — так уходит «Все креаторы» с выбранной площадкой)
+// относится к ней; пустая страница — только «за всех»; иначе «за всех» плюс креаторы этой
+// страницы (обе кнопки матрицы доступны с одной страницы).
 export async function openRequests(creatorIds: string[] | null): Promise<ActionResult<SyncRequest[]>> {
   const base = createClient().from("sync_requests").select("*").is("taken_at", null);
   const filtered =
-    creatorIds === null || creatorIds.length === 0
-      ? base.is("creator_id", null)
-      : base.or(`creator_id.is.null,creator_id.in.(${creatorIds.join(",")})`);
+    creatorIds === null
+      ? base
+      : creatorIds.length === 0
+        ? base.is("creator_id", null)
+        : base.or(`creator_id.is.null,creator_id.in.(${creatorIds.join(",")})`);
   const { data, error } = await filtered.order("requested_at", { ascending: false }).limit(200);
   if (error) return fail(`Не удалось прочитать очередь: ${error.message}`);
   return { ok: true, data: data ?? [] };

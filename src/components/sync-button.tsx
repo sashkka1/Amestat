@@ -4,11 +4,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCwIcon } from "lucide-react";
 import { toast } from "sonner";
 import { LocalTime } from "@/components/local-time";
+import { PlatformSwitch } from "@/components/platform-switch";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { SyncOptionsFields, useSyncOptions } from "@/components/sync-options";
 import { createClient } from "@/lib/supabase/client";
 import { latestRun, openRequests, requestsByIds, requestSync, runsByIds } from "@/lib/api/sync";
+import {
+  PLATFORM_FILTER_LABELS,
+  matchesPlatform,
+  usePlatformFilter,
+  type PlatformFilter,
+} from "@/lib/platform-filter";
+import { listCreators } from "@/lib/queries";
 import {
   PHASE_TEXT,
   POLL_MS,
@@ -17,7 +25,7 @@ import {
   stage,
   type Phase,
 } from "@/lib/sync-phase";
-import type { SyncDepth, SyncRun } from "@/lib/types";
+import type { Creator, SyncDepth, SyncRun } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 // Столько ждём хоть какого-то ответа. Обычно за это время база сама пишет владельцу в
@@ -26,6 +34,11 @@ const NO_ANSWER_MS = 3 * 60_000;
 
 // Какую строку матрицы выбрали: всех креаторов или только тех, что на этой странице.
 type Target = "all" | "page";
+
+// Хвост «· TikTok» к строке состояния и к тосту: у «Все» площадки нет — хвоста тоже.
+function platformTail(filter: PlatformFilter): string {
+  return filter === "all" ? "" : ` · ${PLATFORM_FILTER_LABELS[filter]}`;
+}
 
 // Последний по времени обход из пачки — его время идёт в строку «Обновлено …».
 function newest(runs: SyncRun[]): SyncRun | null {
@@ -39,6 +52,7 @@ function newest(runs: SyncRun[]): SyncRun | null {
 // scope — чей обход показывать в покое: null — любой последний, иначе id креатора.
 // pageCreatorIds — креаторы этой страницы для строки «Только эта страница»; null значит
 // «на странице все креаторы», и тогда этой строки в матрице нет.
+// Матрица трёхосная: кого обойти × на какую глубину × какую площадку.
 export function SyncButton({
   scope,
   pageCreatorIds,
@@ -61,6 +75,26 @@ export function SyncButton({
   const [open, setOpen] = useState(false);
   // Что снимать: галочки попапа, общие с кнопкой в строке списка.
   const { comments, replies } = useSyncOptions();
+
+  // Третья ось матрицы — площадка (владелец, 2026-09-08). Попап открывается в том же
+  // положении, что общий переключатель страниц, но своего выбора не запоминает и общий
+  // не двигает: это выбор на одну просьбу, а не настройка.
+  const { filter: pageFilter } = usePlatformFilter();
+  const [platform, setPlatform] = useState<PlatformFilter>(pageFilter);
+  const platformState = useMemo(
+    () => ({ filter: platform, setFilter: setPlatform }),
+    [platform],
+  );
+  // Площадка ушедшей просьбы: строке состояния и тосту нечего взять из базы — в sync_runs
+  // площадки нет, а знать, чей обход ждём, надо.
+  const [askedPlatform, setAskedPlatform] = useState<PlatformFilter>("all");
+  const askedPlatformRef = useRef<PlatformFilter>("all");
+
+  // Список креаторов нужен, чтобы отобрать id по площадке: просьба уходит явным списком.
+  // Читается один раз при открытии попапа — RLS уже отдаёт только видимых.
+  const [creators, setCreators] = useState<Creator[] | null>(null);
+  const [creatorsError, setCreatorsError] = useState<string | null>(null);
+  const [loadingCreators, setLoadingCreators] = useState(false);
 
   // Родитель пересобирает массив на каждом рендере, поэтому эффекты держатся за строку.
   const pageKey = pageCreatorIds === null ? null : pageCreatorIds.join(",");
@@ -96,12 +130,16 @@ export function SyncButton({
     setSeenAny(false);
     setNotified(false);
     setPhase("idle");
+    // Площадку просьбы забираем до сброса: тост про неё ещё расскажет.
+    const tail = platformTail(askedPlatformRef.current);
+    askedPlatformRef.current = "all";
+    setAskedPlatform("all");
     const last = finished ? newest(finished) : null;
     if (last) {
       setRun(last);
       const res = runsResult(finished ?? []);
-      if (res.ok) toast.success(res.text);
-      else toast.error(res.text);
+      if (res.ok) toast.success(res.text + tail);
+      else toast.error(res.text + tail);
     }
     onDoneRef.current();
   }, []);
@@ -256,20 +294,76 @@ export function SyncButton({
     return () => clearTimeout(timer);
   }, [phase, notified, seenAny, askedAt]);
 
+  // Открыли попап: чипы встают в положение общего переключателя, список креаторов читается
+  // один раз. Не прочитался — при следующем открытии пробуем снова.
+  const openChange = useCallback(
+    (next: boolean) => {
+      setOpen(next);
+      if (!next) return;
+      setPlatform(pageFilter);
+      if (creators !== null || loadingCreators) return;
+      setLoadingCreators(true);
+      setCreatorsError(null);
+      listCreators().then(
+        (list) => {
+          setCreators(list);
+          setLoadingCreators(false);
+        },
+        (e: unknown) => {
+          setCreatorsError(e instanceof Error ? e.message : String(e));
+          setLoadingCreators(false);
+        },
+      );
+    },
+    [pageFilter, creators, loadingCreators],
+  );
+
+  // Площадка креатора — из списка; строка страницы отбирается по ней же.
+  const platformById = useMemo(
+    () => new Map((creators ?? []).map((c) => [c.id, c.platform] as const)),
+    [creators],
+  );
+  // Пока площадка «Все», список не нужен вовсе: просьба уходит как раньше.
+  const ready = platform === "all" || creators !== null;
+  // Набор id для строки «Все креаторы»: null — без ограничения, как было до площадок.
+  const allIds = useMemo<string[] | null>(
+    () =>
+      platform === "all"
+        ? null
+        : (creators ?? []).filter((c) => matchesPlatform(platform, c.platform)).map((c) => c.id),
+    [platform, creators],
+  );
+  // Набор id для строки «Только эта страница»: id страницы, просеянные площадкой.
+  const pageTargetIds = useMemo<string[] | null>(() => {
+    if (pageIds === null) return null;
+    if (platform === "all") return pageIds;
+    return pageIds.filter((id) => {
+      const p = platformById.get(id);
+      return p !== undefined && matchesPlatform(platform, p);
+    });
+  }, [pageIds, platform, platformById]);
+
   // Выбрали ячейку матрицы: кого обойти (target), на какую глубину (depth) и что снимать
-  // (галочки попапа — они же уходят в просьбу).
+  // (галочки попапа — они же уходят в просьбу). Площадка решает, чем окажется охват:
+  // «Все» шлёт null (все видимые), TikTok или Instagram — явным списком id.
   async function ask(target: Target, depth: SyncDepth) {
+    const creatorIds = target === "all" ? allIds : pageTargetIds;
     setOpen(false);
     setSending(true);
     setError(null);
+    askedPlatformRef.current = platform;
+    setAskedPlatform(platform);
     const res = await requestSync({
-      creatorIds: target === "all" ? null : pageIds,
+      creatorIds,
       depth,
       comments,
       replies,
     });
     setSending(false);
     if (!res.ok) {
+      // Просьба не завелась — ждать нечего, и площадка ушедшей просьбы больше не наша.
+      askedPlatformRef.current = "all";
+      setAskedPlatform("all");
       setError(res.error);
       toast.error(res.error);
       return;
@@ -290,6 +384,36 @@ export function SyncButton({
   // Строка «Только эта страница» нужна, лишь когда страница уже сузила список креаторов.
   const hasPageRow = pageIds !== null && pageIds.length > 0;
 
+  // Площадка выбрана, а креаторов у неё нет — просить нечего: ячейки гаснут, под матрицей
+  // строка почему. «Нет креаторов TikTok» перекрывает страничную: пустая площадка целиком
+  // пуста и на странице.
+  const allEmpty = ready && allIds !== null && allIds.length === 0;
+  const pageEmpty = ready && hasPageRow && pageTargetIds !== null && pageTargetIds.length === 0;
+  const platformName = platform === "all" ? "" : PLATFORM_FILTER_LABELS[platform];
+  const emptyNote = allEmpty
+    ? `Нет креаторов ${platformName}`
+    : pageEmpty
+      ? `На этой странице нет креаторов ${platformName}`
+      : null;
+  // Пока список креаторов не прочитан, площадку применить не к чему.
+  const allBlocked = !ready || allEmpty;
+  const pageBlocked = !ready || pageEmpty;
+
+  // Слова ожидания: фаза плюс площадка просьбы, если она уже.
+  const waitText =
+    phase === "running"
+      ? PHASE_TEXT.running
+      : phase === "seen"
+        ? PHASE_TEXT.seen
+        : phase === "queued"
+          ? // Молчание сборщика — не ошибка пользователя: цвет обычный, просьба сохранена.
+            notified
+            ? UNAVAILABLE_TEXT
+            : late
+              ? "Сборщик не отвечает, просьба сохранена: обновим, как только он проснётся"
+              : PHASE_TEXT.queued
+          : null;
+
   return (
     <div className="flex items-center gap-2">
       <span className="text-xs text-muted-foreground">
@@ -297,19 +421,8 @@ export function SyncButton({
           <span className="text-destructive" title={error}>
             Не удалось прочитать состояние
           </span>
-        ) : phase === "running" ? (
-          PHASE_TEXT.running
-        ) : phase === "seen" ? (
-          PHASE_TEXT.seen
-        ) : phase === "queued" ? (
-          // Молчание сборщика — не ошибка пользователя: цвет обычный, просьба сохранена.
-          notified ? (
-            UNAVAILABLE_TEXT
-          ) : late ? (
-            "Сборщик не отвечает, просьба сохранена: обновим, как только он проснётся"
-          ) : (
-            PHASE_TEXT.queued
-          )
+        ) : waitText !== null ? (
+          waitText + platformTail(askedPlatform)
         ) : run ? (
           <>
             Обновлено <LocalTime iso={run.finished_at ?? run.started_at} />
@@ -329,7 +442,7 @@ export function SyncButton({
           "ещё не обновлялось"
         )}
       </span>
-      <Popover open={open} onOpenChange={setOpen}>
+      <Popover open={open} onOpenChange={openChange}>
         <PopoverTrigger asChild>
           <Button variant="outline" size="sm" disabled={sending || waiting}>
             <RefreshCwIcon data-icon="inline-start" className={cn(phase === "running" && "animate-spin")} />
@@ -337,6 +450,8 @@ export function SyncButton({
           </Button>
         </PopoverTrigger>
         <PopoverContent align="end" className="w-[21rem]">
+          {/* Третья ось: какую площадку обходить. Общий переключатель страниц не двигает. */}
+          <PlatformSwitch state={platformState} className="justify-between" />
           {hasPageRow ? (
             // Матрица: строки — кого обойти, столбцы — на какую глубину.
             <div className="grid grid-cols-[minmax(0,auto)_1fr_1fr] items-center gap-1.5">
@@ -347,27 +462,54 @@ export function SyncButton({
               </span>
 
               <span className="pr-1 text-xs leading-tight text-muted-foreground">Все креаторы</span>
-              <MatrixCell title="Все креаторы, всё" onClick={() => void ask("all", "all")} />
-              <MatrixCell title="Все креаторы, последняя неделя" onClick={() => void ask("all", "week")} />
+              <MatrixCell
+                title="Все креаторы, всё"
+                disabled={allBlocked}
+                onClick={() => void ask("all", "all")}
+              />
+              <MatrixCell
+                title="Все креаторы, последняя неделя"
+                disabled={allBlocked}
+                onClick={() => void ask("all", "week")}
+              />
 
               <span className="pr-1 text-xs leading-tight text-muted-foreground">Только эта страница</span>
-              <MatrixCell title="Только эта страница, всё" onClick={() => void ask("page", "all")} />
+              <MatrixCell
+                title="Только эта страница, всё"
+                disabled={pageBlocked}
+                onClick={() => void ask("page", "all")}
+              />
               <MatrixCell
                 title="Только эта страница, последняя неделя"
+                disabled={pageBlocked}
                 onClick={() => void ask("page", "week")}
               />
             </div>
           ) : (
             // На странице и так все креаторы — выбирать некого, остаётся глубина.
             <div className="grid grid-cols-2 gap-1.5">
-              <Button variant="outline" size="sm" onClick={() => void ask("all", "all")}>
+              <Button variant="outline" size="sm" disabled={allBlocked} onClick={() => void ask("all", "all")}>
                 Всё
               </Button>
-              <Button variant="outline" size="sm" onClick={() => void ask("all", "week")}>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={allBlocked}
+                onClick={() => void ask("all", "week")}
+              >
                 Последняя неделя
               </Button>
             </div>
           )}
+          {creatorsError ? (
+            <p className="text-xs leading-snug text-destructive" title={creatorsError}>
+              Не удалось прочитать список креаторов — площадку выбрать не из чего
+            </p>
+          ) : loadingCreators && !ready ? (
+            <p className="text-xs leading-snug text-muted-foreground">Читаем список креаторов…</p>
+          ) : emptyNote ? (
+            <p className="text-xs leading-snug text-muted-foreground">{emptyNote}</p>
+          ) : null}
           <SyncOptionsFields idPrefix={`sync-${scope ?? "all"}`} />
           <p className="text-xs leading-snug text-muted-foreground">
             Неделя — быстрее: только видео за 7 дней, старые не пересчитываются.
@@ -378,10 +520,26 @@ export function SyncButton({
   );
 }
 
-// Ячейка матрицы: что она значит, говорят подписи строки и столбца.
-function MatrixCell({ title, onClick }: { title: string; onClick: () => void }) {
+// Ячейка матрицы: что она значит, говорят подписи строки, столбца и чипов площадки.
+function MatrixCell({
+  title,
+  disabled,
+  onClick,
+}: {
+  title: string;
+  disabled: boolean;
+  onClick: () => void;
+}) {
   return (
-    <Button variant="outline" size="sm" className="w-full" title={title} aria-label={title} onClick={onClick}>
+    <Button
+      variant="outline"
+      size="sm"
+      className="w-full"
+      title={title}
+      aria-label={title}
+      disabled={disabled}
+      onClick={onClick}
+    >
       Обновить
     </Button>
   );
