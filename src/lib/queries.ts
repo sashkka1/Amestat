@@ -168,6 +168,9 @@ export async function videoHistory(videoId: string): Promise<{ t: string; views:
 // count — сколько всего в базе, по нему панель решает, показывать ли «Показать ещё».
 export type CommentSort = "likes" | "newest";
 
+// Только корневые: ответы лежат в той же таблице с parent_id родителя и приходят
+// отдельным запросом, когда ветку разворачивают. Иначе страница по 30 строк
+// набивалась бы ответами, а корневые уезжали бы вниз.
 export async function listVideoComments(
   videoId: string,
   { sort, limit, offset = 0 }: { sort: CommentSort; limit: number; offset?: number },
@@ -175,7 +178,8 @@ export async function listVideoComments(
   let query = createClient()
     .from("video_comments")
     .select("*", { count: "exact" })
-    .eq("video_id", videoId);
+    .eq("video_id", videoId)
+    .is("parent_id", null);
   query =
     sort === "likes"
       ? query.order("likes", { ascending: false, nullsFirst: false })
@@ -187,6 +191,21 @@ export async function listVideoComments(
     .range(offset, offset + limit - 1);
   fail(error);
   return { rows: data ?? [], count: count ?? 0 };
+}
+
+// Ответы на один корневой комментарий, старые сверху — как их показывает площадка.
+// Без страниц: сборщик снимает не больше 20 ответов на корневой.
+export async function listCommentReplies(videoId: string, parentId: string): Promise<VideoComment[]> {
+  const { data, error } = await createClient()
+    .from("video_comments")
+    .select("*")
+    .eq("video_id", videoId)
+    .eq("parent_id", parentId)
+    .order("created_at", { ascending: true, nullsFirst: false })
+    // Второй ключ — на случай ответов без даты: иначе их порядок от запроса к запросу свой.
+    .order("id", { ascending: true });
+  fail(error);
+  return data ?? [];
 }
 
 // Когда у этого видео последний раз снимали тексты комментариев. Отдельным запросом:

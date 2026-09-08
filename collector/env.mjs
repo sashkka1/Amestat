@@ -62,6 +62,18 @@ export function loadEnv() {
   const commentsMaxNum = commentsMaxRaw === "" ? NaN : Number(commentsMaxRaw);
   const commentsMax = Number.isFinite(commentsMaxNum) && commentsMaxNum > 0 ? Math.round(commentsMaxNum) : 100;
 
+  // Потолок ответов под ОДНИМ корневым комментарием. По умолчанию 20.
+  // Ветка раскрывается кликом и своим запросом, поэтому потолок здесь свой, а не общий с корневыми.
+  const repliesMaxRaw = (raw.AMESTAT_REPLIES_MAX || "").trim();
+  const repliesMaxNum = repliesMaxRaw === "" ? NaN : Number(repliesMaxRaw);
+  const repliesMax = Number.isFinite(repliesMaxNum) && repliesMaxNum > 0 ? Math.round(repliesMaxNum) : 20;
+
+  // Какие коды замечаний НЕ слать в Telegram: список через запятую. Пусто — не глушить ничего.
+  const notifyMute = (raw.AMESTAT_NOTIFY_MUTE || "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+
   // Instagram: пусто — Graph API, если есть токен; иначе браузер (пока заглушка).
   const igToken = raw.IG_ACCESS_TOKEN || "";
   const igUserId = raw.IG_USER_ID || "";
@@ -77,6 +89,8 @@ export function loadEnv() {
     retryMs,
     commentsDays,
     commentsMax,
+    repliesMax,
+    notifyMute,
     igToken,
     igUserId,
     igSource,

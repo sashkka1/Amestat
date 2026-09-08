@@ -7,7 +7,12 @@ import { LocalTime } from "@/components/local-time";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { listVideoComments, videoCommentsSyncedAt, type CommentSort } from "@/lib/queries";
+import {
+  listCommentReplies,
+  listVideoComments,
+  videoCommentsSyncedAt,
+  type CommentSort,
+} from "@/lib/queries";
 import { fmtNum } from "@/lib/format";
 import { profileUrl } from "@/lib/handle";
 import type { Platform, VideoComment } from "@/lib/types";
@@ -18,10 +23,16 @@ const PAGE = 30;
 type Loaded = {
   key: string;
   rows: VideoComment[];
-  // Сколько строк у видео всего в базе — по нему решается, нужна ли кнопка «Показать ещё».
+  // Сколько корневых строк у видео всего в базе — по нему решается, нужна ли кнопка «Показать ещё».
   count: number;
   syncedAt: string | null;
 };
+
+// Развёрнутая ветка ответов одного корневого комментария.
+type Branch =
+  | { status: "loading" }
+  | { status: "ready"; rows: VideoComment[] }
+  | { status: "error"; error: string };
 
 // Первая буква ника — вместо аватара: площадки картинок авторов не отдают.
 function firstLetter(c: VideoComment): string {
@@ -30,8 +41,19 @@ function firstLetter(c: VideoComment): string {
   return s ? (Array.from(s)[0] ?? "?").toUpperCase() : "?";
 }
 
-// Тексты комментариев одного видео (миграция v11). Их бывают сотни, поэтому база отдаёт
-// страницами по 30, а поиск фильтрует уже загруженное — искать по всей базе не просили.
+// Совпадение с поиском: текст и оба имени автора.
+function matches(c: VideoComment, q: string): boolean {
+  return (
+    c.text.toLowerCase().includes(q) ||
+    c.author_handle.toLowerCase().includes(q) ||
+    c.author_name.toLowerCase().includes(q)
+  );
+}
+
+// Тексты комментариев одного видео (миграция v11). Список — только корневые: их бывают
+// сотни, поэтому база отдаёт страницами по 30, а поиск фильтрует уже загруженное —
+// искать по всей базе не просили. Ответы лежат в той же таблице и приходят отдельным
+// запросом, когда ветку разворачивают.
 export function VideoComments({
   videoId,
   platform,
@@ -75,18 +97,6 @@ export function VideoComments({
 
   const current = loaded?.key === key ? loaded : null;
   const error = failed !== null && failed.key === key ? failed.error : null;
-
-  const shown = useMemo(() => {
-    const rows = current?.rows ?? [];
-    const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter(
-      (c) =>
-        c.text.toLowerCase().includes(q) ||
-        c.author_handle.toLowerCase().includes(q) ||
-        c.author_name.toLowerCase().includes(q),
-    );
-  }, [current, search]);
 
   async function loadMore() {
     if (!current || busy) return;
@@ -155,60 +165,229 @@ export function VideoComments({
           <p className="text-sm text-muted-foreground">Комментариев в базе нет</p>
           <p className="text-xs text-muted-foreground">тексты снимаются для видео за последние 7 дней</p>
         </div>
-      ) : shown.length === 0 ? (
-        <p className="px-4 py-6 text-center text-sm text-muted-foreground">Ничего не нашлось.</p>
+      ) : (
+        // key — ключ списка: сменилась сортировка или прошёл обход, React пересоздаёт
+        // список, и развёрнутые ветки сворачиваются сами, без сброса руками.
+        <CommentList
+          key={key}
+          videoId={videoId}
+          platform={platform}
+          rows={current.rows}
+          search={search}
+          more={current.count - current.rows.length}
+          busy={busy}
+          onMore={() => void loadMore()}
+        />
+      )}
+    </div>
+  );
+}
+
+// Список корневых комментариев с ветками ответов. Отдельным компонентом ради ключа:
+// развёрнутые ветки принадлежат конкретному списку, и пересоздание — самый честный
+// способ их свернуть при смене сортировки или после обхода.
+function CommentList({
+  videoId,
+  platform,
+  rows,
+  search,
+  more,
+  busy,
+  onMore,
+}: {
+  videoId: string;
+  platform: Platform;
+  rows: VideoComment[];
+  search: string;
+  // Сколько корневых в базе ещё не прочитано: больше нуля — есть «Показать ещё».
+  more: number;
+  busy: boolean;
+  onMore: () => void;
+}) {
+  // Какие ветки развёрнуты и что в них загружено. Свёрнутая ветка помнит ответы —
+  // второй раз в базу не ходим.
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const [branches, setBranches] = useState<Record<string, Branch>>({});
+
+  const shown = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter((c) => {
+      if (matches(c, q)) return true;
+      // Развёрнутая ветка ищется вместе с корневым: совпадение в ответе оставляет
+      // ветку в списке. Свёрнутые не ищутся — их ответов в браузере ещё нет.
+      if (!open[c.id]) return false;
+      const branch = branches[c.id];
+      return branch?.status === "ready" && branch.rows.some((r) => matches(r, q));
+    });
+  }, [rows, search, open, branches]);
+
+  // Развернуть или свернуть ветку. Ответов не больше 20, поэтому страниц нет:
+  // один запрос на ветку, дальше показываем загруженное.
+  function toggleReplies(id: string) {
+    const wasOpen = open[id] === true;
+    setOpen((prev) => ({ ...prev, [id]: !wasOpen }));
+    if (wasOpen) return;
+    const branch = branches[id];
+    // Уже прочитанное не перечитываем; после ошибки следующее раскрытие пробует снова.
+    if (branch?.status === "ready" || branch?.status === "loading") return;
+    setBranches((prev) => ({ ...prev, [id]: { status: "loading" } }));
+    const done = (next: Branch) =>
+      // Ветку успели свернуть и открыть заново — за неё уже отвечает другой запрос.
+      setBranches((prev) => (prev[id]?.status === "loading" ? { ...prev, [id]: next } : prev));
+    listCommentReplies(videoId, id).then(
+      (rows) => done({ status: "ready", rows }),
+      (e: unknown) => done({ status: "error", error: e instanceof Error ? e.message : String(e) }),
+    );
+  }
+
+  if (shown.length === 0) {
+    return <p className="px-4 py-6 text-center text-sm text-muted-foreground">Ничего не нашлось.</p>;
+  }
+
+  return (
+    <>
+      <ul className="divide-y">
+        {shown.map((c) => {
+          const expanded = open[c.id] === true;
+          const hasReplies = c.replies !== null && c.replies > 0;
+          return (
+            <li key={c.id} className="py-2.5">
+              <CommentRow
+                c={c}
+                platform={platform}
+                tail={
+                  hasReplies && (
+                    <>
+                      {" · "}
+                      <button
+                        type="button"
+                        onClick={() => toggleReplies(c.id)}
+                        aria-expanded={expanded}
+                        className="font-medium underline-offset-4 hover:text-foreground hover:underline"
+                      >
+                        Ответы · {fmtNum(c.replies)}
+                      </button>
+                    </>
+                  )
+                }
+              >
+                {expanded && <Replies branch={branches[c.id]} platform={platform} total={c.replies ?? 0} />}
+              </CommentRow>
+            </li>
+          );
+        })}
+      </ul>
+
+      {more > 0 && (
+        <div className="pt-2">
+          <Button size="sm" variant="outline" disabled={busy} onClick={onMore}>
+            {busy ? "Читаю…" : `Показать ещё · осталось ${fmtNum(more)}`}
+          </Button>
+        </div>
+      )}
+    </>
+  );
+}
+
+// Строка комментария — одна и та же у корневого и у ответа: @ник, имя, текст, лайки, дата.
+// small — вид внутри ветки: кружок и текст мельче. tail дописывается к дате (кнопка веток),
+// children встают под строкой с отступом её колонки — там и живёт сама ветка.
+function CommentRow({
+  c,
+  platform,
+  small = false,
+  tail,
+  children,
+}: {
+  c: VideoComment;
+  platform: Platform;
+  small?: boolean;
+  tail?: React.ReactNode;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="flex gap-2.5">
+      <div
+        className={cn(
+          "flex shrink-0 select-none items-center justify-center rounded-full bg-muted font-medium uppercase text-muted-foreground",
+          small ? "size-5 text-[10px]" : "size-7 text-xs",
+        )}
+      >
+        {firstLetter(c)}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start justify-between gap-2">
+          <p className="min-w-0 text-xs text-muted-foreground">
+            {c.author_handle ? (
+              <a
+                href={profileUrl(platform, c.author_handle)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-semibold text-foreground hover:underline"
+              >
+                @{c.author_handle}
+              </a>
+            ) : (
+              <span className="font-semibold text-foreground">{c.author_name || "без имени"}</span>
+            )}
+            {c.author_handle && c.author_name && <span className="ml-1.5">{c.author_name}</span>}
+          </p>
+          {c.likes !== null && (
+            <span
+              className="flex shrink-0 items-center gap-1 text-xs tabular-nums text-muted-foreground"
+              title={`лайков: ${fmtNum(c.likes)}`}
+            >
+              <HeartIcon className="size-3" />
+              {fmtNum(c.likes)}
+            </span>
+          )}
+        </div>
+        {/* Перенос строк как у автора, длинный текст не режем — только переносим. */}
+        <p className={cn("whitespace-pre-wrap break-words", small ? "text-xs" : "text-[13px]")}>{c.text}</p>
+        <p className="text-[11px] text-muted-foreground">
+          <LocalTime iso={c.created_at} mode="date" />
+          {tail}
+        </p>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// Ветка ответов под корневым: полоса слева и отступ, внутри — те же строки помельче.
+// total — сколько ответов у комментария на площадке: снято бывает меньше (сборщик
+// берёт до 20), и тогда об этом говорится прямо, чтобы разницу не приняли за потерю.
+function Replies({
+  branch,
+  platform,
+  total,
+}: {
+  branch: Branch | undefined;
+  platform: Platform;
+  total: number;
+}) {
+  return (
+    <div className="mt-2 border-l pl-3">
+      {branch === undefined || branch.status === "loading" ? (
+        <Skeleton className="h-10 w-full" />
+      ) : branch.status === "error" ? (
+        <p className="text-xs text-destructive">Не удалось прочитать ответы: {branch.error}</p>
+      ) : branch.rows.length === 0 ? (
+        <p className="text-[11px] text-muted-foreground">ответы ещё не сняты</p>
       ) : (
         <>
-          <ul className="divide-y">
-            {shown.map((c) => (
-              <li key={c.id} className="flex gap-2.5 py-2.5">
-                <div className="flex size-7 shrink-0 select-none items-center justify-center rounded-full bg-muted text-xs font-medium uppercase text-muted-foreground">
-                  {firstLetter(c)}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="min-w-0 text-xs text-muted-foreground">
-                      {c.author_handle ? (
-                        <a
-                          href={profileUrl(platform, c.author_handle)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="font-semibold text-foreground hover:underline"
-                        >
-                          @{c.author_handle}
-                        </a>
-                      ) : (
-                        <span className="font-semibold text-foreground">{c.author_name || "без имени"}</span>
-                      )}
-                      {c.author_handle && c.author_name && <span className="ml-1.5">{c.author_name}</span>}
-                    </p>
-                    {c.likes !== null && (
-                      <span
-                        className="flex shrink-0 items-center gap-1 text-xs tabular-nums text-muted-foreground"
-                        title={`лайков: ${fmtNum(c.likes)}`}
-                      >
-                        <HeartIcon className="size-3" />
-                        {fmtNum(c.likes)}
-                      </span>
-                    )}
-                  </div>
-                  {/* Перенос строк как у автора, длинный текст не режем — только переносим. */}
-                  <p className="whitespace-pre-wrap break-words text-[13px]">{c.text}</p>
-                  <p className="text-[11px] text-muted-foreground">
-                    <LocalTime iso={c.created_at} mode="date" />
-                    {c.replies !== null && c.replies > 0 && ` · ответов: ${fmtNum(c.replies)}`}
-                  </p>
-                </div>
+          <ul className="space-y-2.5">
+            {branch.rows.map((r) => (
+              <li key={r.id}>
+                <CommentRow c={r} platform={platform} small />
               </li>
             ))}
           </ul>
-
-          {current.count > current.rows.length && (
-            <div className="pt-2">
-              <Button size="sm" variant="outline" disabled={busy} onClick={() => void loadMore()}>
-                {busy ? "Читаю…" : `Показать ещё · осталось ${fmtNum(current.count - current.rows.length)}`}
-              </Button>
-            </div>
+          {branch.rows.length < total && (
+            <p className="pt-2 text-[11px] text-muted-foreground">
+              показано {fmtNum(branch.rows.length)} из {fmtNum(total)}: остальное не снято
+            </p>
           )}
         </>
       )}

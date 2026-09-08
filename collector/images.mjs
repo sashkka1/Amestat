@@ -17,6 +17,7 @@
 // 🔴 Ничто здесь обход не валит: не скачалось или не залилось — `null` и строка в лог.
 
 import { loadEnv } from "./env.mjs";
+import { notice } from "./notices.mjs";
 
 const BUCKET = "avatars";
 const TIMEOUT_MS = 15_000;
@@ -121,11 +122,13 @@ export async function rehostImage(sourceUrl, path, { log } = {}) {
   if (got.error) {
     // В лог идёт путь в бакете, а не исходный адрес: подписанный адрес Instagram длиной в экран.
     log?.(`  картинка ${path}: не скачалась — ${got.error}`);
+    notice("images", `${path}: не скачалась — ${got.error}`);
     return null;
   }
   const bad = await upload(path, got.bytes, got.type, env).catch((e) => String(e?.message ?? e).split("\n")[0]);
   if (bad) {
     log?.(`  картинка ${path}: не залилась — ${bad}`);
+    notice("images", `${path}: не залилась — ${bad}`);
     return null;
   }
   return publicUrl(path, env.supabaseUrl);

@@ -21,11 +21,21 @@
 //     дальше всё как обычно. Комментарии фотопостов идут в ту же таблицу.
 //
 // Из DOM комментарии не читаются вовсе: в разметке нет `cid`, а без него строку не записать —
-// ключ таблицы `(video_id, id)`. Разметка нужна только как признак «список отрисовался».
+// ключ таблицы `(video_id, id)`. Разметка нужна только как признак «список отрисовался» и как
+// кнопки веток.
 //
-// Ответы на комментарии (второй уровень) не собираются: у корневого остаётся только их число.
+// Ответы на комментарии (второй уровень) собираются тоже — в ту же таблицу, `parent_id` = id
+// корневого (владелец, 2026-09-08). Берутся двумя путями:
+//   • даром: TikTok кладёт первые ответы прямо в корневой комментарий, в `reply_comment`;
+//   • кликом: кнопка «Посмотреть N ответов» под корневым заставляет страницу спросить
+//     `GET /api/comment/list/reply/?comment_id=<cid>&item_id=<видео>&…` — тот же формат
+//     `comments[]`, а родителя называет `reply_id`. Слушаем тем же слушателем, что и корневые.
+// Ветки раскрываются только у корневых, попавших в сбор (в пределах `AMESTAT_COMMENTS_MAX`),
+// только если у корневого `replies > 0`, и не больше `AMESTAT_REPLIES_MAX` ответов на ветку.
 
-import { launchProfile } from "./browser.mjs";
+import { launchProfile, hideWindow } from "./browser.mjs";
+import { expandBranches, pickReplies, branchesOf } from "./replies.mjs";
+import { notice } from "./notices.mjs";
 
 const NAV_TIMEOUT_MS = 45_000;
 const SETTLE_MS = 6_000;        // столько страница успевает встать на ноги после загрузки
@@ -37,6 +47,11 @@ const ROUND_WAIT_MS = 8_000;    // столько ждём ответ на кр�
 const POST_WAIT_MS = 5_000;     // столько ждём сам пост на странице, прежде чем звать его пропавшим
 const TAB_LABELS = ["Комментарии", "Comments"];
 const COOKIE_LABELS = ["Разрешить все", "Allow all"];
+const BRANCH_PAUSE_MS = 700;    // пауза между ветками: клики подряд TikTok не любит
+
+// Кнопки ветки. `data-e2e` — первый выбор, подпись — запасной: разметку меняют чаще слов.
+const BRANCH_OPEN = { selector: '[data-e2e="view-more-1"]', text: "^(посмотреть|показать|view)\\s+(все\\s+)?\\d+\\s*(ответ|repl)" };
+const BRANCH_MORE = { selector: '[data-e2e="view-more-2"]', text: "(посмотреть|показать)\\s+ещё|^view\\s+more" };
 
 const STOP_SCREEN = /Передвиньте ползунок|совместить пазл|Drag the slider|puzzle|captcha|Verify to continue|Something went wrong/i;
 const ITEM_SELECTOR = '[class*="DivCommentItemWrapper"], [data-e2e="comment-level-1"]';
@@ -46,32 +61,51 @@ const POST_SELECTOR = 'video, [data-e2e="video-detail"], [data-e2e="detail-photo
 const num = (x) => (x === null || x === undefined || x === "" ? null : Number(x));
 
 /**
- * Разбор одного ответа `/api/comment/list/`.
- * Отдаёт `{ comments, hasMore, cursor, total }`; `comments` — уже в общей форме сборщика.
+ * Один комментарий в общей форме сборщика или null, если писать его некуда (нет `cid`:
+ * ключ таблицы — `(video_id, id)`).
+ * `parentFallback` — чей это ответ, когда сам комментарий родителя не называет.
+ */
+function oneComment(c, parentFallback = null) {
+  const id = c?.cid ?? null;
+  if (!id) return null;
+  const parent = c.reply_id && String(c.reply_id) !== "0" ? String(c.reply_id) : parentFallback;
+  return {
+    id: String(id),
+    parentId: parent,
+    authorHandle: String(c.user?.unique_id ?? ""),
+    authorName: String(c.user?.nickname ?? ""),
+    text: String(c.text ?? ""),
+    likes: num(c.digg_count),
+    // Третьего уровня у TikTok нет: у ответа своих ответов не бывает, и в базе там `null`.
+    replies: parent ? null : num(c.reply_comment_total),
+    createdAt: c.create_time ? new Date(Number(c.create_time) * 1000).toISOString() : null,
+  };
+}
+
+/**
+ * Разбор одного ответа `/api/comment/list/` или `/api/comment/list/reply/` — формат у них общий.
+ * Отдаёт `{ comments, replies, hasMore, cursor, total }`:
+ *   • `comments` — всё, что лежало в `comments[]`, как пришло. У корневого списка там корневые
+ *     (`parentId` = null), у списка ветки — ответы (`parentId` = id корневого). Кто есть кто,
+ *     разбирает вызывающий: разложить по спискам он умеет, а формат у обоих один;
+ *   • `replies` — ответы, которые TikTok кладёт ДАРОМ внутрь корневого, в `reply_comment`.
  * ⚠️ `has_more` у TikTok — число 0/1, а не булево.
  */
 export function parseTikTokComments(json) {
   const list = Array.isArray(json?.comments) ? json.comments : [];
-  const comments = [];
+  const comments = [], replies = [];
   for (const c of list) {
-    const id = c?.cid ?? null;
-    if (!id) continue;
-    // В `comments[]` приезжают только корневые: у них `reply_id` = "0". Ответы лежат внутри
-    // `reply_comment`, и мы их не разбираем — у корневого остаётся `replies` числом.
-    const parent = c.reply_id && String(c.reply_id) !== "0" ? String(c.reply_id) : null;
-    comments.push({
-      id: String(id),
-      parentId: parent,
-      authorHandle: String(c.user?.unique_id ?? ""),
-      authorName: String(c.user?.nickname ?? ""),
-      text: String(c.text ?? ""),
-      likes: num(c.digg_count),
-      replies: num(c.reply_comment_total),
-      createdAt: c.create_time ? new Date(Number(c.create_time) * 1000).toISOString() : null,
-    });
+    const one = oneComment(c);
+    if (!one) continue;
+    comments.push(one);
+    for (const r of Array.isArray(c.reply_comment) ? c.reply_comment : []) {
+      const reply = oneComment(r, one.parentId ?? one.id);
+      if (reply?.parentId) replies.push(reply);
+    }
   }
   return {
     comments,
+    replies,
     hasMore: json?.has_more === 1 || json?.has_more === true,
     cursor: num(json?.cursor),
     total: num(json?.total),
@@ -145,6 +179,7 @@ export async function openPost(page, url, video, log) {
     return "/video/";   // адреса `/photo/` не из чего собрать — работаем с тем, что открылось
   }
   log?.(`    /video/ не открылся, пробую /photo/ (${why})`);
+  notice("photo", `${video?.id ?? "видео"}: /video/ не открылся (${why}) — иду по /photo/`);
   const second = await openOnce(page, alt);
   if (!second.error) return "/photo/";
   if (first.error) throw new Error(`страница видео не открылась: ${why}; /photo/ тоже: ${second.error}`);
@@ -219,40 +254,66 @@ function readState(page, itemSelector, stopRe) {
 }
 
 /**
- * Комментарии к одному видео TikTok.
+ * Комментарии к одному видео TikTok — корневые и ответы под ними.
  * `ctx` — уже открытый браузер на постоянном профиле (сессия фейка), С ОКНОМ: см. шапку файла.
  * `video` — `{ id, url, creatorHandle }`.
- * Отдаёт массив `{ id, parentId, authorHandle, authorName, text, likes, replies, createdAt }`;
- * при капче или пустых ответах бросает Error с русским текстом.
+ * Отдаёт массив `{ id, parentId, authorHandle, authorName, text, likes, replies, createdAt }`:
+ * сначала корневые, следом ответы (`parentId` — id корневого, `replies` у них `null`).
+ * При капче или пустых ответах бросает Error с русским текстом.
  */
-export async function collectTikTokComments(ctx, video, { max = 100, log } = {}) {
+export async function collectTikTokComments(ctx, video, { max = 100, repliesMax = 20, log } = {}) {
   const videoId = String(video?.id ?? "");
   const url = String(video?.url ?? "");
   if (!videoId || !url) throw new Error("у видео нет id или адреса");
+  const who = `${String(video?.creatorHandle ?? "").replace(/^@/, "") || "?"} видео ${videoId}`;
 
   const page = await ctx.newPage();
+  // Новая вкладка открывает окно заново — уводим его за край экрана сразу, до навигации:
+  // окно тут настоящее (иначе TikTok не отдаёт комментарии), но видеть его владелец не должен.
+  await hideWindow(ctx, page, { log });
   const seen = new Map();
-  let hasMore = true, bodies = 0, empty = 0;
+  // Ответы копятся отдельно: их приносит и корневой список (`reply_comment`), и раскрытая ветка,
+  // а `state.lastParent` — единственный способ узнать, какую ветку мы только что раскрыли.
+  const state = { replies: new Map(), lastParent: null };
+  let hasMore = true, bodies = 0, empty = 0, replyBodies = 0;
 
   page.on("response", async (r) => {
     const link = r.url();
-    if (!link.includes("/api/comment/list/")) return;
+    // ⚠️ Адрес ветки СОДЕРЖИТ адрес корневого списка (`/comment/list/reply/`), поэтому сначала он.
+    const isReply = link.includes("/api/comment/list/reply/");
+    if (!isReply && !link.includes("/api/comment/list/")) return;
     // На странице видео TikTok заранее просит комментарии и к соседнему ролику — чужие нам не нужны.
-    if (!link.includes(`aweme_id=${videoId}`)) return;
-    bodies++;
+    // У ветки id видео лежит в `item_id`; нет его в адресе вовсе — ответ всё равно наш:
+    // ветку просили мы, со своей страницы, и заранее их никто не подгружает.
+    if (isReply) {
+      if (link.includes("item_id=") && !link.includes(`item_id=${videoId}`)) return;
+    } else if (!link.includes(`aweme_id=${videoId}`)) return;
+    if (isReply) replyBodies++; else bodies++;
     let text = "";
     try {
       text = await r.text();
     } catch {
       // Ответ мог не дойти (страница ушла) — круг просто не даст прироста.
     }
-    if (!text) { empty++; return; }
+    if (!text) { if (!isReply) empty++; return; }
     try {
       const batch = parseTikTokComments(JSON.parse(text));
-      for (const c of batch.comments) if (!seen.has(c.id)) seen.set(c.id, c);
-      if (!batch.hasMore) hasMore = false;
+      for (const c of batch.comments) {
+        // Кто пришёл, видно по `parentId`, а не по адресу: в ветке приезжают ответы,
+        // в корневом списке — корневые.
+        if (c.parentId) {
+          if (!state.replies.has(c.id)) state.replies.set(c.id, c);
+        } else if (!isReply && !seen.has(c.id)) {
+          seen.set(c.id, c);
+        }
+      }
+      for (const c of batch.replies) if (!state.replies.has(c.id)) state.replies.set(c.id, c);
+      if (!isReply && !batch.hasMore) hasMore = false;   // конец списка объявляют только корневые
+      // Чья это была ветка, знает только сам ответ: в разметке id комментария нет.
+      const last = isReply ? batch.comments.filter((c) => c.parentId).at(-1) : null;
+      if (last) state.lastParent = last.parentId;
     } catch {
-      empty++;
+      if (!isReply) empty++;
     }
   });
 
@@ -276,10 +337,11 @@ export async function collectTikTokComments(ctx, video, { max = 100, log } = {})
 
     // Первая пачка: ждём либо ответ, либо отрисованный список — что случится раньше.
     const until = Date.now() + FIRST_WAIT_MS;
-    let state = await readState(page, ITEM_SELECTOR, STOP_SCREEN.source);
-    while (Date.now() < until && seen.size === 0 && !state.stopScreen) {
+    // `view` — что видно на экране; `state` выше — что уже собрано. Путать их нельзя.
+    let view = await readState(page, ITEM_SELECTOR, STOP_SCREEN.source);
+    while (Date.now() < until && seen.size === 0 && !view.stopScreen) {
       await page.waitForTimeout(1_500);
-      state = await readState(page, ITEM_SELECTOR, STOP_SCREEN.source);
+      view = await readState(page, ITEM_SELECTOR, STOP_SCREEN.source);
     }
 
     // Дальше — прокрутка самого списка, пока TikTok говорит «есть ещё» и есть прирост.
@@ -289,7 +351,8 @@ export async function collectTikTokComments(ctx, video, { max = 100, log } = {})
       const moved = await scrollList(page, ITEM_SELECTOR);
       if (!moved) break;
       try {
-        await page.waitForResponse((r) => r.url().includes("/api/comment/list/"), { timeout: ROUND_WAIT_MS });
+        // Ответы веток здесь не в счёт: круг прокрутки ждёт следующую пачку корневых.
+        await page.waitForResponse((r) => r.url().includes("/api/comment/list/") && !r.url().includes("/comment/list/reply/"), { timeout: ROUND_WAIT_MS });
       } catch {
         // Ответа не дождались — обычный конец списка, круг просто считается пустым.
       }
@@ -297,18 +360,38 @@ export async function collectTikTokComments(ctx, video, { max = 100, log } = {})
       stale = seen.size === before ? stale + 1 : 0;
     }
 
-    state = await readState(page, ITEM_SELECTOR, STOP_SCREEN.source);
-    log?.(`    видео ${videoId}: комментариев ${seen.size}, ответов ${bodies} (пустых ${empty}), кругов ${rounds}, строк в списке ${state.real}/${state.items}, вкладка ${opened ?? "не открылась"}, адрес ${where}${state.stopScreen ? ", СТОП-ЭКРАН" : ""}`);
+    view = await readState(page, ITEM_SELECTOR, STOP_SCREEN.source);
+    log?.(`    видео ${videoId}: комментариев ${seen.size}, тел ${bodies} (пустых ${empty}), кругов ${rounds}, строк в списке ${view.real}/${view.items}, вкладка ${opened ?? "не открылась"}, адрес ${where}${view.stopScreen ? ", СТОП-ЭКРАН" : ""}`);
 
     if (seen.size === 0) {
-      if (state.stopScreen) throw new Error(`TikTok показал капчу на видео ${videoId}`);
+      if (view.stopScreen) {
+        notice("stop", `${who}: TikTok показал капчу`);
+        throw new Error(`TikTok показал капчу на видео ${videoId}`);
+      }
       // Пустые тела при отрисованных заглушках — та же капча, только ещё не показанная.
       if (bodies > 0 && empty === bodies) {
+        notice("stop", `${who}: ${bodies} пустых ответов на комментарии (окно скрыто?)`);
         throw new Error(`TikTok отдал ${bodies} пустых ответов на комментарии видео ${videoId} (окно браузера скрыто?)`);
       }
-      if (bodies === 0) throw new Error(`TikTok не запросил комментарии видео ${videoId}: вкладка ${opened ?? "не открылась"}, на экране «${state.head}»`);
+      if (bodies === 0) throw new Error(`TikTok не запросил комментарии видео ${videoId}: вкладка ${opened ?? "не открылась"}, на экране «${view.head}»`);
     }
-    return [...seen.values()].slice(0, max);
+
+    // Ответы: только под корневыми, попавшими в сбор, и только там, где они есть.
+    const roots = [...seen.values()].slice(0, max);
+    const branches = roots.filter((c) => (c.replies ?? 0) > 0).length;
+    let branchesOpened = 0, moreClicks = 0, timedOut = false;
+    if (branches > 0 && repliesMax > 0) {
+      ({ opened: branchesOpened, more: moreClicks, timedOut } = await expandBranches(page, state, {
+        open: BRANCH_OPEN, more: BRANCH_MORE, branches, repliesMax, pauseMs: BRANCH_PAUSE_MS, log,
+      }));
+      if (timedOut) notice("replies", `${who}: на ветки не хватило времени, раскрыто ${branchesOpened} из ${branches}`);
+    }
+    const replies = pickReplies(state.replies.values(), roots, repliesMax);
+    if (branches > 0) {
+      log?.(`    ответов: собрано ${replies.length} у ${branchesOf(replies)} веток (раскрыто ${branchesOpened} из ${branches}, дожато ${moreClicks}, тел ${replyBodies})`);
+      if (replies.length === 0) notice("replies", `${who}: ответы не снялись ни у одной из ${branches} веток`);
+    }
+    return [...roots, ...replies];
   } finally {
     try {
       await page.close();

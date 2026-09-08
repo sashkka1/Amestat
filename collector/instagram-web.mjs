@@ -29,6 +29,7 @@
 // на хвосте предыдущего браузера встаёт через раз). Здесь окно скрытое: Instagram отдаёт всё
 // и headless, в отличие от TikTok.
 import { launchProfile, PROFILE_DIR } from "./browser.mjs";
+import { notice } from "./notices.mjs";
 
 const NAV_TIMEOUT_MS = 45_000;
 const SETTLE_MS = 5_000;       // столько страница успевает попросить первую пачку
@@ -300,11 +301,20 @@ export async function collectInstagramWeb(creator, { depth = "all", browserChoic
     // только когда собрать не удалось ничего — ни профиля, ни публикаций.
     if ((noSession || lostSession || head.loginWall) && !gotSomething()) {
       log?.(`  вход не подтвердился: адрес ${head.url}, стена входа=${head.loginWall}, login_required=${lostSession}, cookie sessionid=${noSession ? "нет" : "есть"}, публикаций ${posts.size}`);
+      notice("session", `@${handle}: вход не подтвердился (стена входа=${head.loginWall}, login_required=${lostSession}, cookie sessionid=${noSession ? "нет" : "есть"})`);
       throw new Error(ERR_SESSION);
+    }
+    // Признаки истёкшей сессии стоит знать и тогда, когда собрать всё-таки удалось: сегодня
+    // прошло, завтра встанет.
+    if (noSession || lostSession || head.loginWall) {
+      notice("session", `@${handle}: признаки истёкшей сессии, но данные собрались (cookie sessionid=${noSession ? "нет" : "есть"}, login_required=${lostSession}, стена входа=${head.loginWall})`);
     }
     // Ограничение объявляем, только когда оно и правда помешало: одинокая пометка в чужом
     // ответе при пришедшей первой пачке — не повод объявить обход неудачным.
-    if ((limited || RATE_TEXT.test(head.bodyText)) && posts.size === 0) throw new Error(ERR_LIMIT);
+    if ((limited || RATE_TEXT.test(head.bodyText)) && posts.size === 0) {
+      notice("limit", `@${handle}: Instagram ограничил запросы`);
+      throw new Error(ERR_LIMIT);
+    }
     // Те же слова могут стоять и в биографии живого профиля, поэтому текст экрана считается
     // приговором только когда лента пуста: у закрытого и несуществующего публикаций не бывает.
     if (status === 404 || (MISSING_TEXT.test(head.bodyText) && posts.size === 0)) throw new Error(`Instagram: профиль не найден: @${handle}`);
@@ -321,8 +331,14 @@ export async function collectInstagramWeb(creator, { depth = "all", browserChoic
       stale = posts.size === before ? stale + 1 : 0;
     }
     // Тот же порядок, что и до прокрутки: пометка в ответе — приговор только на пустых руках.
-    if ((noSession || lostSession) && !gotSomething()) throw new Error(ERR_SESSION);
-    if (limited && posts.size === 0) throw new Error(ERR_LIMIT);
+    if ((noSession || lostSession) && !gotSomething()) {
+      notice("session", `@${handle}: после прокрутки не собралось ничего, вход не подтверждён`);
+      throw new Error(ERR_SESSION);
+    }
+    if (limited && posts.size === 0) {
+      notice("limit", `@${handle}: Instagram ограничил запросы (лента пуста)`);
+      throw new Error(ERR_LIMIT);
+    }
 
     const owner = [...posts.values()].find((n) => n.user?.username?.toLowerCase() === handle.toLowerCase())?.user ?? null;
     const profile = {
@@ -374,7 +390,9 @@ export async function collectInstagramWeb(creator, { depth = "all", browserChoic
         for (; rounds < REELS_ROUNDS && need().length > 0; rounds++) await scrollRound(page);
       } catch (e) {
         // Вкладка не открылась — публикации и счётчики уже собраны, теряем только просмотры.
-        log?.(`  вкладка Reels не открылась: ${String(e?.message ?? e).split("\n")[0]}`);
+        const text = String(e?.message ?? e).split("\n")[0];
+        log?.(`  вкладка Reels не открылась: ${text}`);
+        notice("list", `@${handle}: вкладка Reels не открылась — просмотров не будет (${text})`);
       }
     }
     for (const v of picked) v.views = plays.get(v.code) ?? plays.get(v.id) ?? null;
@@ -389,6 +407,7 @@ export async function collectInstagramWeb(creator, { depth = "all", browserChoic
     return { profile, videos };
   } finally {
     // ⚠️ Профиль НЕ стирается: в нём вход фейкового аккаунта. Про это помнит сам `cleanup()`.
+    // Вкладку закрываем сами: профиль постоянный, и незакрытая всплывёт при следующем запуске.
     await browser.cleanup();
   }
 }

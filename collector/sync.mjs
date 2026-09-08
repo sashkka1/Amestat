@@ -29,8 +29,9 @@ import { collectInstagramGraph } from "./instagram-graph.mjs";
 import { collectInstagramWeb } from "./instagram-web.mjs";
 import { collectTikTokComments } from "./comments-tiktok.mjs";
 import { collectInstagramComments } from "./comments-instagram.mjs";
-import { launchProfile } from "./browser.mjs";
+import { launchProfile, trimTraffic } from "./browser.mjs";
 import { rehostImage, isOurs, avatarPath, coverPath } from "./images.mjs";
+import { notice, startRun, reportRun } from "./notices.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const CREATOR_FIELDS = "id,platform,handle,display_name,avatar_custom,sort_order,added_at";
@@ -38,6 +39,13 @@ const COVERS_PARALLEL = 4;      // столько обложек качаем р
 const COVERS_PAUSE_MS = 100;    // и пауза между пачками: чужой CDN не любит очередь запросов подряд
 const COMMENTS_PAUSE_MS = 3000; // пауза между видео на шаге комментариев
 const DAY_MS = 24 * 60 * 60 * 1000;
+const SLOW_CREATOR_MS = 3 * 60_000;  // дольше — замечание владельцу: обход тормозит
+
+// Куда странице комментариев вообще можно ходить. Всё остальное отсекается (`trimTraffic`):
+// страница видео TikTok сама тянет десятки чужих фреймов, и это они дают полсотни renderer'ов.
+// ⚠️ Список — куски имён хостов, а не точные имена: у TikTok их с десяток семейств.
+const HOSTS_TIKTOK = ["tiktok", "tiktokcdn", "tiktokv", "ttwstatic", "byteoversea", "bytedance", "byteimg", "ibytedtos", "musical.ly"];
+const HOSTS_INSTAGRAM = ["instagram.com", "cdninstagram", "fbcdn.net", "facebook.com"];
 
 // Очередь в процессе: следующий обход ждёт, пока закончится текущий.
 let chain = Promise.resolve();
@@ -74,7 +82,9 @@ async function coversInDb(ids, log) {
       }
     }
   } catch (e) {
-    log?.(`  прежние обложки не спросились: ${String(e?.message ?? e).split("\n")[0]}`);
+    const text = String(e?.message ?? e).split("\n")[0];
+    log?.(`  прежние обложки не спросились: ${text}`);
+    notice("db", `прежние обложки не спросились: ${text}`);
   }
   return out;
 }
@@ -137,7 +147,9 @@ async function rehostInstagram(creator, profile, videos, log) {
  *   • TikTok водится с настоящим окном: в скрытом он отдаёт пустые тела и капчу (см.
  *     `comments-tiktok.mjs`). Instagram обходится скрытым;
  *   • ошибка одного видео шаг не валит, обход не роняет и `creators.sync_error` не ставит:
- *     комментарии — добавка к снимкам, а не их условие.
+ *     комментарии — добавка к снимкам, а не их условие;
+ *   • вместе с корневыми снимаются и ответы под ними (`parent_id` = id корневого, не больше
+ *     `AMESTAT_REPLIES_MAX` на ветку) — они ложатся в ту же таблицу тем же upsert'ом.
  */
 async function collectComments(creator, videos, env, log) {
   const platform = creator.platform ?? "tiktok";
@@ -159,20 +171,35 @@ async function collectComments(creator, videos, env, log) {
     // Предыдущий браузер только что закрылся, и Opera на его хвосте поднимается через раз —
     // даём процессу уйти совсем, а не спорим с ним за профиль.
     await sleep(COMMENTS_PAUSE_MS);
-    browser = await launchProfile(env.browser, { headless });
+    browser = await launchProfile(env.browser, { headless, log });
   } catch (e) {
     // Нет профиля или не поднялся браузер — снимки уже записаны, обход этим не портим.
-    log?.(`  комментарии: ${String(e?.message ?? e).split("\n")[0]}`);
+    const text = String(e?.message ?? e).split("\n")[0];
+    log?.(`  комментарии: ${text}`);
+    notice("comments", `@${creator.handle}: браузер для комментариев не поднялся — ${text}`);
     return;
   }
   log?.(`  комментарии: браузер ${browser.describe}${headless ? "" : ", окно настоящее — скрытому TikTok их не отдаёт"}`);
+  // Чужие хосты, видео и шрифты в этот браузер не пускаем: он живёт всё время шага и
+  // на странице видео разрастался до полусотни процессов.
+  let traffic = null;
+  try {
+    traffic = await trimTraffic(browser.ctx, platform === "tiktok" ? HOSTS_TIKTOK : HOSTS_INSTAGRAM, { log });
+  } catch (e) {
+    // Не поставился перехват — шаг всё равно идёт, просто прожорливее.
+    log?.(`  лишнее отсечь не вышло: ${String(e?.message ?? e).split("\n")[0]}`);
+  }
 
-  let rows = 0, failed = 0;
+  let rows = 0, answers = 0, failed = 0;
   try {
     for (let i = 0; i < picked.length; i++) {
       const video = picked[i];
       try {
-        const list = await collect(browser.ctx, { id: video.id, url: video.url, creatorHandle: creator.handle }, { max: env.commentsMax, log });
+        const list = await collect(
+          browser.ctx,
+          { id: video.id, url: video.url, creatorHandle: creator.handle },
+          { max: env.commentsMax, repliesMax: env.repliesMax, log },
+        );
         const now = new Date().toISOString();
         if (list.length > 0) {
           // `first_seen_at` не шлём вовсе: его база ставит один раз, при первой встрече.
@@ -191,16 +218,22 @@ async function collectComments(creator, videos, env, log) {
         }
         await patch(`videos?id=eq.${encodeURIComponent(video.id)}`, { comments_synced_at: now });
         rows += list.length;
+        answers += list.filter((c) => c.parentId).length;
       } catch (e) {
         failed++;
-        log?.(`    видео ${video.id}: ${String(e?.message ?? e).split("\n")[0]}`);
+        const text = String(e?.message ?? e).split("\n")[0];
+        log?.(`    видео ${video.id}: ${text}`);
+        notice("comments", `@${creator.handle} видео ${video.id}: ${text}`);
       }
       if (i < picked.length - 1) await sleep(COMMENTS_PAUSE_MS);
     }
   } finally {
+    // Окно закрывается всегда и здесь же: профиль один на машину, и оставленный браузер
+    // не даст подняться следующему обходу.
     await browser.cleanup();
   }
-  log?.(`  комментарии: видео ${picked.length}, собрано ${rows}, не вышло ${failed}`);
+  const seen = traffic?.() ?? null;
+  log?.(`  комментарии: видео ${picked.length}, собрано ${rows} (ответов ${answers}), не вышло ${failed}${seen ? `, лишних запросов отсечено ${seen.aborted}` : ""}`);
 }
 
 async function collectOne(creator, env, depth, log) {
@@ -274,6 +307,9 @@ async function doSync({ trigger, creatorId, failedOnly, depth, requestedBy, requ
     onLog?.(text);
   };
   const failures = [];
+  // Замечания копятся с этой минуты и уезжают владельцу одним сообщением в самом конце —
+  // хоть по расписанию, хоть по кнопке с сайта (владелец, 2026-09-08).
+  startRun();
 
   let runId = null;
   try {
@@ -289,6 +325,9 @@ async function doSync({ trigger, creatorId, failedOnly, depth, requestedBy, requ
     // и CLI, и резидент должны увидеть внятную строку, а не стек.
     const text = String(e?.message ?? e).split("\n")[0];
     log(`обход не начался: ${text}`);
+    notice("run", `обход не начался: ${text}`);
+    // Строки в базе нет, но сказать владельцу надо тем более: сайт тоже читает из базы.
+    await reportRun({ runId: null, trigger, depth, done: 0, failed: 0, log });
     return { runId: null, ok: false, done: 0, failed: 0, error: text, failures, depth, log: lines.join("\n") };
   }
   const who = failedOnly ? "только неудавшиеся" : creatorId ? `креатор ${creatorId}` : "все";
@@ -300,7 +339,9 @@ async function doSync({ trigger, creatorId, failedOnly, depth, requestedBy, requ
       await patch(`sync_requests?id=in.(${requestIds.join(",")})`, { taken_at: new Date().toISOString(), run_id: runId });
     } catch (e) {
       // Не пометилась просьба — обход всё равно идёт; кнопка на сайте просто задержится.
-      log(`просьбы не помечены: ${String(e?.message ?? e).split("\n")[0]}`);
+      const text = String(e?.message ?? e).split("\n")[0];
+      log(`просьбы не помечены: ${text}`);
+      notice("db", `просьбы не помечены взятыми: ${text}`);
     }
   }
 
@@ -315,6 +356,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, requestedBy, requ
     for (let i = 0; i < creators.length; i++) {
       const creator = creators[i];
       log(`@${creator.handle} (${creator.platform})`);
+      const started = Date.now();
       try {
         const res = await collectOne(creator, env, depth, log);
         done++;
@@ -325,12 +367,17 @@ async function doSync({ trigger, creatorId, failedOnly, depth, requestedBy, requ
         failures.push({ handle: creator.handle, error: text });
         firstError = firstError ?? `@${creator.handle}: ${text}`;
         log(`  ошибка: ${text}`);
+        notice("creator", `@${creator.handle}: ${text}`);
         try {
           await patch(`creators?id=eq.${creator.id}`, { sync_error: text });
         } catch (e2) {
-          log(`  не записалась и ошибка креатора: ${String(e2?.message ?? e2).split("\n")[0]}`);
+          const text2 = String(e2?.message ?? e2).split("\n")[0];
+          log(`  не записалась и ошибка креатора: ${text2}`);
+          notice("db", `@${creator.handle}: не записалась и ошибка креатора — ${text2}`);
         }
       }
+      const spent = Date.now() - started;
+      if (spent > SLOW_CREATOR_MS) notice("slow", `@${creator.handle}: собирался ${Math.round(spent / 60_000)} мин`);
       // Пауза только между креаторами: TikTok не любит запуски подряд.
       if (i < creators.length - 1 && env.pauseMs > 0) {
         log(`  пауза ${Math.round(env.pauseMs / 1000)} с`);
@@ -342,9 +389,13 @@ async function doSync({ trigger, creatorId, failedOnly, depth, requestedBy, requ
     // Сюда попадает только беда всего обхода (например, база недоступна).
     const text = String(e?.message ?? e).split("\n")[0];
     log(`обход прерван: ${text}`);
+    notice("run", `обход прерван: ${text}`);
     firstError = firstError ?? text;
     return { runId, ok: false, done, failed, error: firstError, failures, depth, log: lines.join("\n") };
   } finally {
+    // Сначала сообщение владельцу, потом запись итога: текст замечаний уходит в `lines` и должен
+    // попасть в `sync_runs.log` — иначе на сайте не видно, о чём владельцу сказали.
+    await reportRun({ runId, trigger, depth, done, failed, log });
     if (runId) {
       try {
         await patch(`sync_runs?id=eq.${runId}`, {
@@ -356,7 +407,10 @@ async function doSync({ trigger, creatorId, failedOnly, depth, requestedBy, requ
           log: lines.join("\n"),
         });
       } catch (e) {
-        onLog?.(`итог обхода не записался: ${String(e?.message ?? e).split("\n")[0]}`);
+        const text = String(e?.message ?? e).split("\n")[0];
+        onLog?.(`итог обхода не записался: ${text}`);
+        // Сообщение обхода уже ушло — это замечание уедет резидентским, своим чередом.
+        notice("db", `итог обхода #${runId} не записался: ${text}`);
       }
     }
   }

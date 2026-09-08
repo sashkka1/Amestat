@@ -19,6 +19,11 @@
 // после него следующий шанс — следующий слот. Просьбы с сайта в эту цепочку не входят —
 // их итог человек видит на сайте сам.
 //
+// Про свои беды резидент сообщает сам: отвалившийся Realtime, просьба, пойманная опросом
+// вместо подписки, назначенный повтор и молчащая база уходят замечаниями (`notices.mjs`), но не
+// чаще одного сообщения в 5 минут на код. Замечания самого обхода к ним не примешиваются — их
+// в конце обхода отправляет `sync.mjs` одним сообщением.
+//
 // ⚠️ `seen_at` у просьбы ставится СРАЗУ, как только резидент её услышал, — до обхода и до
 // очереди. Это ответ сторожу в базе (pg_cron, миграция v8): просьба, не принятая за 3 минуты,
 // считается брошенной, и владельцу уходит Telegram «домашний сборщик не отвечает». Пока
@@ -32,8 +37,9 @@ import { loadEnv, collectorDir } from "./env.mjs";
 import { get, patch } from "./db.mjs";
 import { runSync, busy } from "./sync.mjs";
 import { missedSlot, nextSlot, retryDue } from "./schedule.mjs";
-import { resolveBrowser } from "./browser.mjs";
+import { resolveBrowser, killLeftoverBrowsers } from "./browser.mjs";
 import { sendTelegram } from "./telegram.mjs";
+import { residentNotice, setNoticeLog } from "./notices.mjs";
 
 const TICK_MS = 60_000;   // как часто смотрим на часы
 // Страховка на случай отвалившегося Realtime — раз в минуту, а не реже: сторож в базе ждёт
@@ -67,6 +73,9 @@ function log(text) {
     // Не смогли записать в файл — консоль всё равно осталась, ронять резидент незачем.
   }
 }
+// Замечания резидента (`realtime`, `poll`, `retry`, беды базы) уходят своим сообщением и мимо
+// обхода — значит и писать о них надо в тот же лог, с отметкой времени.
+setNoticeLog(log);
 
 // ------------------------------------------------------------------ очередь просьб с сайта
 const pending = new Map();   // id просьбы → строка
@@ -97,7 +106,9 @@ async function markSeen(ids) {
     log(`просьбы приняты: ${ids.map((i) => `#${i}`).join(", ")}`);
   } catch (e) {
     // Не пометилось — обход всё равно пойдёт, но сторож может успеть позвать владельца зря.
-    log(`просьбы не помечены принятыми: ${String(e?.message ?? e).split("\n")[0]}`);
+    const text = String(e?.message ?? e).split("\n")[0];
+    log(`просьбы не помечены принятыми: ${text}`);
+    residentNotice("db", `просьбы не помечены принятыми: ${text}`);
   }
 }
 
@@ -161,9 +172,14 @@ function planRetry(due, slotLabel) {
   retryTimer = setTimeout(() => {
     retryTimer = null;
     retryAt = null;
-    runRetry(slotLabel).catch((e) => log(`повтор сорвался: ${String(e?.message ?? e).split("\n")[0]}`));
+    runRetry(slotLabel).catch((e) => {
+      const text = String(e?.message ?? e).split("\n")[0];
+      log(`повтор сорвался: ${text}`);
+      residentNotice("run", `повтор сорвался: ${text}`);
+    });
   }, delay);
   log(`повтор назначен на ${due.toLocaleString()} (через ${Math.round(delay / 60_000)} мин), слот ${slotLabel}`);
+  residentNotice("retry", `обход слота ${slotLabel} не удался — повтор назначен на ${due.toLocaleTimeString()}`);
 }
 
 /** Одно сообщение владельцу: обход не удался дважды. */
@@ -250,6 +266,19 @@ const browser = (() => {
 })();
 log(`резидент запущен. Браузер: ${browser}. Пауза между креаторами ${Math.round(env.pauseMs / 1000)} с. Повтор после неудачи через ${Math.round(env.retryMs / 60_000)} мин. Instagram: ${env.igSource}. Логи: ${logsDir}`);
 
+// 0. Остатки прошлых обходов: упавший обход оставляет окно Opera на нашем профиле, а оно и
+//    память держит, и не даёт подняться следующему браузеру. Свои окна владельца не трогаем —
+//    отбор идёт по нашему профилю в командной строке процесса.
+try {
+  const { killed, pids } = await killLeftoverBrowsers();
+  if (killed > 0) {
+    log(`добито окон Opera: ${killed} (${pids.join(", ")})`);
+    residentNotice("browser", `при старте добито окон Opera на наших профилях: ${killed}`);
+  }
+} catch (e) {
+  log(`остатки Opera не проверились: ${String(e?.message ?? e).split("\n")[0]}`);
+}
+
 // 1. Часы: каждую минуту смотрим, не наступил ли слот.
 let nextAt = nextSlot(new Date());
 log(`следующий слот: ${nextAt.toLocaleString()}`);
@@ -259,11 +288,16 @@ const tick = setInterval(() => {
     const slot = nextAt;
     nextAt = nextSlot(now);
     log(`слот ${slot.toLocaleTimeString()} — обход по расписанию. Следующий: ${nextAt.toLocaleString()}`);
-    runScheduled("schedule", slot).catch((e) => log(`обход по расписанию сорвался: ${String(e?.message ?? e).split("\n")[0]}`));
+    runScheduled("schedule", slot).catch((e) => {
+      const text = String(e?.message ?? e).split("\n")[0];
+      log(`обход по расписанию сорвался: ${text}`);
+      residentNotice("run", `обход по расписанию сорвался: ${text}`);
+    });
   }
 }, TICK_MS);
 
 // 2. Realtime: вставки в sync_requests.
+let realtimeBroke = false;   // была ли подписка сломана: чтобы сказать и о возвращении
 const supabase = createClient(env.supabaseUrl, env.serviceKey, {
   auth: { persistSession: false, autoRefreshToken: false },
   realtime: { params: { eventsPerSecond: 5 } },
@@ -277,27 +311,48 @@ const channel = supabase
       // в базе на ответ отпущено три минуты.
       if (fresh !== null) await markSeen([fresh]);
       await drain();
-    })().catch((e) => log(`очередь просьб сорвалась: ${String(e?.message ?? e).split("\n")[0]}`));
+    })().catch((e) => {
+      const text = String(e?.message ?? e).split("\n")[0];
+      log(`очередь просьб сорвалась: ${text}`);
+      residentNotice("run", `очередь просьб сорвалась: ${text}`);
+    });
   })
-  .subscribe((status) => log(`Realtime: ${status}`));
+  .subscribe((status) => {
+    log(`Realtime: ${status}`);
+    // Отвалился и вернулся — оба события стоят замечания: пока подписки нет, просьба с сайта
+    // ждёт опроса, а это до минуты лага. Чаще одного сообщения в 5 минут они не уйдут.
+    if (status !== "SUBSCRIBED") residentNotice("realtime", `подписка на просьбы: ${status}`);
+    else if (realtimeBroke) residentNotice("realtime", "подписка на просьбы вернулась (SUBSCRIBED)");
+    realtimeBroke = status !== "SUBSCRIBED";
+  });
 
 // 3. Страховка: раз в минуту спрашиваем невзятые просьбы сами. Берём все, у кого пусто
 //    `taken_at`, а не только непринятые: резидент, убитый между «принял» и «взял», после
 //    перезапуска иначе никогда бы не вернулся к просьбе с `seen_at` (сторож в базе её тоже
 //    не тронет — он ждёт только непринятых). Те, что уже в памяти, `remember()` отсекает.
 //    При старте этот же опрос забирает всё, что накопилось, пока компьютер спал.
+let firstPoll = true;
 async function poll() {
   try {
     const rows = await get("sync_requests?select=id,creator_id,requested_by,depth,seen_at,taken_at&taken_at=is.null&order=id.asc");
     const fresh = [];
     for (const row of rows) {
       const id = remember(row, "опрос");
-      if (id !== null) fresh.push(id);
+      if (id === null) continue;
+      fresh.push(id);
+      // Просьбу должен приносить Realtime за секунды; опрос — страховка, и его находка значит
+      // лаг до минуты. Первый опрос при старте — не лаг: он подбирает всё, что накопилось,
+      // пока компьютер спал.
+      residentNotice("poll", `просьба #${id} поймана опросом, а не Realtime${firstPoll ? " (первый опрос при старте)" : ""}`);
     }
     await markSeen(fresh);
     if (pending.size > 0) await drain();
   } catch (e) {
-    log(`опрос просьб не вышел: ${String(e?.message ?? e).split("\n")[0]}`);
+    const text = String(e?.message ?? e).split("\n")[0];
+    log(`опрос просьб не вышел: ${text}`);
+    residentNotice("db", `опрос просьб не вышел: ${text}`);
+  } finally {
+    firstPoll = false;
   }
 }
 await poll();
@@ -343,7 +398,9 @@ try {
   if (due && !stopping) planRetry(due, hhmm(new Date(scheduled.started_at)));
   else log("несделанных повторов нет");
 } catch (e) {
-  log(`повтор не восстановлен: ${String(e?.message ?? e).split("\n")[0]}`);
+  const text = String(e?.message ?? e).split("\n")[0];
+  log(`повтор не восстановлен: ${text}`);
+  residentNotice("db", `повтор не восстановлен: ${text}`);
 }
 
 // 5. Догон пропущенного слота — последним делом: он может занять минуты, а часы, Realtime,
@@ -356,5 +413,7 @@ try {
   log(`последний обход: ${last ? last.toLocaleString() : "не было ни одного"}; пропущенный слот: ${missed ? missed.toLocaleTimeString() : "нет"}`);
   if (missed && !stopping) await runScheduled("catchup", missed);
 } catch (e) {
-  log(`догон не вышел: ${String(e?.message ?? e).split("\n")[0]}`);
+  const text = String(e?.message ?? e).split("\n")[0];
+  log(`догон не вышел: ${text}`);
+  residentNotice("db", `догон пропущенного слота не вышел: ${text}`);
 }

@@ -13,6 +13,7 @@
 // Отфильтровать всё равно надо: в последней пачке приезжают и старые соседи по странице.
 
 import { launchFresh } from "./browser.mjs";
+import { notice } from "./notices.mjs";
 
 const PROFILE_TIMEOUT_MS = 45_000;
 const SCROLL_ROUNDS = 80;      // потолок кругов прокрутки
@@ -76,6 +77,7 @@ async function attempt(handle, { browserChoice, log, since = null }) {
     }
     const stopScreen = await page.evaluate((re) => new RegExp(re, "i").test(document.body.innerText), STOP_SCREEN.source);
     if (!info) {
+      if (stopScreen) notice("stop", `@${handle}: стоп-экран TikTok на странице профиля`);
       throw new Error(stopScreen ? `стоп-экран TikTok на профиле @${handle}` : `профиль не найден: @${handle}`);
     }
 
@@ -154,17 +156,25 @@ export async function collectTikTok(creator, { browserChoice = "", retryPauseMs 
   // «за неделю ноль» бывает у живого профиля, который просто молчал, и повтор тут не поможет.
   const enough = first.rawCount > 0 || !first.profile.videosCount;
   if (enough) {
-    if (first.rawCount === 0 && first.stopScreen) throw new Error(`стоп-экран TikTok у @${handle}`);
+    if (first.rawCount === 0 && first.stopScreen) {
+      notice("stop", `@${handle}: стоп-экран TikTok`);
+      throw new Error(`стоп-экран TikTok у @${handle}`);
+    }
     return { profile: first.profile, videos: first.videos };
   }
 
   // Ноль видео при непустом профиле — обычно «выдохшийся» профиль браузера.
   // Одна повторная попытка в новом временном профиле, после паузы. Глубина та же.
   log?.(`  видео 0 при ${first.profile.videosCount} по профилю — повтор в новом профиле через ${Math.round(retryPauseMs / 1000)} с`);
+  notice("list", `@${handle}: список видео пуст при ${first.profile.videosCount} по профилю — повтор в новом профиле`);
   await sleep(retryPauseMs);
   const second = await attempt(handle, { browserChoice, log, since });
   if (second.rawCount === 0) {
-    if (second.stopScreen) throw new Error(`стоп-экран TikTok у @${handle}`);
+    if (second.stopScreen) {
+      notice("stop", `@${handle}: стоп-экран TikTok и на второй попытке`);
+      throw new Error(`стоп-экран TikTok у @${handle}`);
+    }
+    notice("list", `@${handle}: список видео пуст после двух попыток (по профилю ${second.profile.videosCount})`);
     throw new Error(`список видео пуст после двух попыток: @${handle} (по профилю ${second.profile.videosCount})`);
   }
   return { profile: second.profile, videos: second.videos };
