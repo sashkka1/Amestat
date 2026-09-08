@@ -194,10 +194,10 @@ export function CreatorStats({
   if (!loaded || !summary) return <StatsSkeleton />;
 
   return (
-    <div className={cn("flex flex-col gap-4", stale && "opacity-60 transition-opacity")}>
+    <div className={cn("flex min-w-0 flex-col gap-4", stale && "opacity-60 transition-opacity")}>
       <KpiRow items={totalsToKpis(summary.now, summary.prev)} />
 
-      <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
+      <div className="grid min-w-0 gap-4 lg:grid-cols-[1fr_260px]">
         <PerformanceChart data={loaded.daily} />
         <div className="flex flex-col gap-4">
           <Tile

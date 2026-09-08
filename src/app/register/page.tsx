@@ -2,10 +2,13 @@
 
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { registerByInvite } from "@/lib/api/auth";
+import { Skeleton } from "@/components/ui/skeleton";
+import { INVITE_REASON, checkInvite, registerByInvite } from "@/lib/api/auth";
+import { useLoader } from "@/lib/use-loader";
 
 // Страница публичная: сюда приходят по одноразовой ссылке от админа. Токен проверяет
 // триггер базы, его русские отказы показываем как есть.
@@ -29,6 +32,30 @@ function RegisterRoute() {
       </Shell>
     );
   }
+  return <RegisterGate token={token} />;
+}
+
+// Ссылку проверяем до формы: заполнять её ради отказа в конце незачем.
+function RegisterGate({ token }: { token: string }) {
+  const { data, error, loading } = useLoader(() => checkInvite(token), [token]);
+
+  if (loading || !data) {
+    return (
+      <div className="w-full max-w-sm rounded-xl border bg-card p-6 shadow-sm" aria-busy="true">
+        <Skeleton className="mb-3 h-7 w-32" />
+        <Skeleton className="h-40 w-full" />
+      </div>
+    );
+  }
+  if (error) return <Shell>Не удалось проверить ссылку: {error}</Shell>;
+  if (!data.ok) return <Shell>{data.error}</Shell>;
+  if (data.data !== "ok") {
+    return (
+      <Shell>
+        {INVITE_REASON[data.data]}. Попросите администратора прислать новую ссылку.
+      </Shell>
+    );
+  }
   return <RegisterForm token={token} />;
 }
 
@@ -36,7 +63,13 @@ function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="w-full max-w-sm rounded-xl border bg-card p-6 text-center shadow-sm">
       <h1 className="mb-2 text-xl font-semibold tracking-tight">Регистрация</h1>
-      <p className="text-sm text-muted-foreground">{children}</p>
+      <p className="mb-5 text-sm text-muted-foreground">{children}</p>
+      <Link
+        href="/login/"
+        className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+      >
+        Ко входу
+      </Link>
     </div>
   );
 }

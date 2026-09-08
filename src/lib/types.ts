@@ -30,6 +30,9 @@ export type Invite = {
 // Админ вставляет только заметку и себя: токен и срок ставит база (миграция v3).
 export type InviteInsert = { note?: string; created_by: string };
 
+// Что RPC check_invite думает о ссылке (миграция v5).
+export type InviteCheck = "ok" | "used" | "expired" | "invalid";
+
 export type Creator = {
   id: string;
   platform: Platform;
@@ -208,8 +211,16 @@ export type VideoStats = {
   saves_delta: number;
 };
 
-// Результат RPC creator_daily_views и daily_views_all.
-export type DailyViews = { day: string; views: number; likes: number };
+// Результат RPC creator_daily_views и daily_views_all (миграция v4): пять счётчиков
+// на конец каждого дня. Значения накопительные — «по дням» сайт считает разностью.
+export type DailyViews = {
+  day: string;
+  views: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  saves: number;
+};
 
 // Результат RPC creators_overview: по одному ряду на видимого креатора за срок.
 export type CreatorOverview = {
@@ -274,6 +285,16 @@ export type Database = {
       admin_set_password: {
         Args: { p_user: string; p_password: string };
         Returns: undefined;
+      };
+      // Проверки до регистрации (миграция v5): зовутся без входа. Нужны потому, что
+      // Supabase прячет текст исключения триггера за общим «Database error saving new user».
+      check_invite: {
+        Args: { p_token: string };
+        Returns: InviteCheck;
+      };
+      login_taken: {
+        Args: { p_login: string };
+        Returns: boolean;
       };
     };
     Enums: Record<never, never>;

@@ -20,13 +20,15 @@ type Mode = "daily" | "total";
 const SERIES = [
   { key: "views", label: "Просмотры", color: "var(--chart-1)" },
   { key: "likes", label: "Лайки", color: "var(--chart-3)" },
+  { key: "comments", label: "Комментарии", color: "var(--chart-4)" },
+  { key: "shares", label: "Репосты", color: "var(--chart-5)" },
+  { key: "saves", label: "Сохранения", color: "var(--chart-2)" },
 ] as const;
 type SeriesKey = (typeof SERIES)[number]["key"];
 
-// «Динамика»: ряды по дням. База отдаёт накопительные счётчики на конец каждого дня,
-// поэтому «по дням» — это разность с предыдущим днём, «накопительно» — сами суммы.
-// Рядов два, а не пять: daily_views_all и creator_daily_views считают только просмотры
-// и лайки; комментарии и репосты по дням в базе не разложены.
+// «Динамика»: пять рядов по дням (миграция v4). База отдаёт накопительные счётчики на
+// конец каждого дня, поэтому «накопительно» — это сами суммы, а «по дням» — разность
+// с предыдущим днём. У первого дня предыдущего нет, поэтому там ноль, а не всплеск.
 export function PerformanceChart({
   data,
   right,
@@ -39,17 +41,18 @@ export function PerformanceChart({
   const [mode, setMode] = useState<Mode>("daily");
   const [hidden, setHidden] = useState<Set<SeriesKey>>(() => new Set());
 
-  const rows = useMemo(() => {
-    if (mode === "total") return data.map((d) => ({ day: d.day, views: d.views, likes: d.likes }));
-    return data.map((d, i) => {
-      const prev = i === 0 ? null : data[i - 1];
-      return {
-        day: d.day,
-        views: prev ? Math.max(d.views - prev.views, 0) : 0,
-        likes: prev ? Math.max(d.likes - prev.likes, 0) : 0,
-      };
-    });
-  }, [data, mode]);
+  const rows = useMemo(
+    () =>
+      data.map((d, i) => {
+        const prev = i === 0 ? null : data[i - 1];
+        const row: Record<string, number | string> = { day: d.day };
+        for (const s of SERIES) {
+          row[s.key] = mode === "total" ? d[s.key] : prev ? Math.max(d[s.key] - prev[s.key], 0) : 0;
+        }
+        return row;
+      }),
+    [data, mode],
+  );
 
   function toggle(k: SeriesKey) {
     setHidden((prev) => {

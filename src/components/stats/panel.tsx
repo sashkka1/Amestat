@@ -1,8 +1,17 @@
 import { cn } from "@/lib/utils";
 
 // Белая карточка на сером фоне: одна рамка, радиус 12, тень-волосок.
+//
+// `min-w-0` здесь обязателен: карточка — элемент flex-колонки страницы, а у таких
+// минимальная ширина по умолчанию равна ширине содержимого. Без него широкая таблица
+// растягивает саму карточку за край окна и её обрезает, вместо того чтобы прокручиваться
+// внутри (прокрутку даёт обёртка в `ui/table`). `overflow-hidden` держит углы скруглёнными.
 export function Panel({ className, children }: { className?: string; children: React.ReactNode }) {
-  return <section className={cn("rounded-xl border bg-card shadow-sm", className)}>{children}</section>;
+  return (
+    <section className={cn("min-w-0 overflow-hidden rounded-xl border bg-card shadow-sm", className)}>
+      {children}
+    </section>
+  );
 }
 
 // Шапка карточки: заголовок слева, управление справа.
