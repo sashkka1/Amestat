@@ -1,89 +1,114 @@
 "use client";
 
+import { useMemo } from "react";
 import { AuthGate } from "@/components/auth-gate";
-import { Header } from "@/components/header";
-import { SyncControl } from "@/components/sync-control";
-import { CreatorsList } from "@/components/creators/creators-list";
+import { Page, PageError, PageSkeleton } from "@/components/page";
+import { PeriodChip } from "@/components/period-chip";
+import { KpiRow, totalsToKpis } from "@/components/stats/kpi-row";
+import { PerformanceChart } from "@/components/stats/performance-chart";
+import { TopPosts } from "@/components/stats/top-posts";
+import { TopCreators, buildCreatorRows } from "@/components/stats/top-creators";
+import { VideosTable } from "@/components/stats/videos-table";
 import { Skeleton } from "@/components/ui/skeleton";
-import { createClient } from "@/lib/supabase/client";
+import {
+  creatorsOverview,
+  dailyViewsAll,
+  listCreators,
+  listVideosWithCounters,
+  sumOverview,
+  type VideoRow,
+} from "@/lib/queries";
+import { earliestAdded, publishedIn, toPosts, toTableRows } from "@/lib/video-rows";
 import { useLoader } from "@/lib/use-loader";
-import type { Creator, CreatorLatest, CreatorTag, Tag } from "@/lib/types";
+import { usePeriod } from "@/lib/use-period";
+import type { Creator } from "@/lib/types";
 
-type HomeData = {
-  creators: Creator[];
-  tags: Tag[];
-  creatorTags: CreatorTag[];
-  latest: CreatorLatest[];
-};
+type Base = { creators: Creator[]; videos: VideoRow[] };
 
-async function loadHome(): Promise<HomeData> {
-  const supabase = createClient();
-  const [creatorsRes, tagsRes, creatorTagsRes, latestRes] = await Promise.all([
-    supabase
-      .from("creators")
-      .select("*")
-      .order("sort_order", { ascending: true })
-      .order("added_at", { ascending: true }),
-    supabase.from("tags").select("*").order("name"),
-    supabase.from("creator_tags").select("*"),
-    supabase.from("creator_latest").select("*"),
-  ]);
-  const error = creatorsRes.error ?? tagsRes.error ?? creatorTagsRes.error ?? latestRes.error;
-  if (error) throw new Error(error.message);
-  return {
-    creators: creatorsRes.data ?? [],
-    tags: tagsRes.data ?? [],
-    creatorTags: creatorTagsRes.data ?? [],
-    latest: latestRes.data ?? [],
-  };
+async function loadBase(): Promise<Base> {
+  const [creators, videos] = await Promise.all([listCreators(), listVideosWithCounters()]);
+  return { creators, videos };
 }
 
 export default function HomePage() {
   return (
     <AuthGate>
-      <Home />
+      <Dashboard />
     </AuthGate>
   );
 }
 
-function Home() {
-  const { data, error, loading, reload } = useLoader(loadHome, []);
+function Dashboard() {
+  const base = useLoader(loadBase, []);
+  const creators = useMemo(() => base.data?.creators ?? [], [base.data]);
+  const earliest = useMemo(() => earliestAdded(creators), [creators]);
+  const period = usePeriod(earliest);
 
-  return (
-    <>
-      <Header>
-        <SyncControl creatorId={null} buttonLabel="Обновить всё" onSynced={reload} />
-      </Header>
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-4">
-        {error ? (
-          <p className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
-            Не удалось прочитать базу: {error}
-          </p>
-        ) : loading && !data ? (
-          <ListSkeleton />
-        ) : data ? (
-          <CreatorsList
-            creators={data.creators}
-            tags={data.tags}
-            creatorTags={data.creatorTags}
-            latest={data.latest}
-            onChanged={reload}
-          />
-        ) : null}
-      </main>
-    </>
+  const fromMs = period.range?.from.getTime() ?? null;
+  const toMs = period.range?.to.getTime() ?? null;
+
+  // Прошлый срок той же длины — вторым вызовом того же RPC: иначе не с чем сравнить плитки.
+  const stats = useLoader(async () => {
+    if (!period.range || !period.previous) return null;
+    const [now, prev, daily] = await Promise.all([
+      creatorsOverview(period.range),
+      creatorsOverview(period.previous),
+      dailyViewsAll(period.range),
+    ]);
+    return { now, prev, daily };
+  }, [fromMs, toMs]);
+
+  const tableRows = useMemo(
+    () => (base.data ? toTableRows(base.data.videos, base.data.creators) : []),
+    [base.data],
   );
-}
 
-function ListSkeleton() {
+  const range = period.range;
+  const topPosts = useMemo(() => {
+    if (!range) return [];
+    return toPosts(tableRows.filter((r) => publishedIn(r.publishedAt, range)));
+  }, [tableRows, range]);
+
+  const totals = stats.data ? sumOverview(stats.data.now) : null;
+  const prevTotals = stats.data ? sumOverview(stats.data.prev) : null;
+
   return (
-    <div className="flex flex-col gap-4" aria-busy="true">
-      <Skeleton className="h-8 w-full" />
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <Skeleton key={i} className="h-28 w-full" />
-        ))}
-      </div>
-    </div>
+    <Page
+      title="Дашборд"
+      subtitle="Сводка по всем креаторам"
+      actions={<PeriodChip period={period} />}
+    >
+      {base.error ? (
+        <PageError error={base.error} />
+      ) : base.loading && !base.data ? (
+        <PageSkeleton />
+      ) : (
+        <>
+          {stats.error ? (
+            <PageError error={stats.error} />
+          ) : totals && prevTotals ? (
+            <KpiRow items={totalsToKpis(totals, prevTotals)} />
+          ) : (
+            <Skeleton className="h-28 w-full" />
+          )}
+
+          {stats.data ? (
+            <PerformanceChart data={stats.data.daily} />
+          ) : (
+            <Skeleton className="h-72 w-full" />
+          )}
+
+          <TopPosts posts={topPosts} />
+
+          {stats.data ? (
+            <TopCreators rows={buildCreatorRows(creators, stats.data.now)} />
+          ) : (
+            <Skeleton className="h-56 w-full" />
+          )}
+
+          <VideosTable rows={tableRows} title="Новые видео" defaultSort="published" />
+        </>
+      )}
+    </Page>
   );
 }

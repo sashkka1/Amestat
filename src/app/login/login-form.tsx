@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 
 export function LoginForm() {
   const router = useRouter();
-  const [email, setEmail] = useState("");
+  const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -19,7 +19,7 @@ export function LoginForm() {
     setError(null);
     setPending(true);
     try {
-      const res = await login(email, password);
+      const res = await login(account, password);
       if (!res.ok) {
         setError(res.error);
         return;
@@ -33,14 +33,15 @@ export function LoginForm() {
   return (
     <form onSubmit={submit} className="flex flex-col gap-4">
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="email">Почта</Label>
+        <Label htmlFor="account">Логин или почта</Label>
         <Input
-          id="email"
-          name="email"
-          type="email"
-          autoComplete="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
+          id="account"
+          name="account"
+          type="text"
+          autoComplete="username"
+          value={account}
+          onChange={(e) => setAccount(e.target.value)}
+          autoFocus
           required
         />
       </div>

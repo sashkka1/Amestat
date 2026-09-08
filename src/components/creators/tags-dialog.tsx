@@ -15,11 +15,14 @@ import {
 import { Input } from "@/components/ui/input";
 import { TagPill } from "@/components/tag-pill";
 import { createTag, deleteTag, updateTag } from "@/lib/api/tags";
+import { useProfile } from "@/lib/profile-context";
 import type { Tag } from "@/lib/types";
 
 const DEFAULT_COLOR = "#6B7280";
 
+// Теги у каждого свои (v2): создаём их на вошедшего, чужих он и не увидит.
 export function TagsDialog({ tags, onChanged }: { tags: Tag[]; onChanged: () => void }) {
+  const profile = useProfile();
   const [open, setOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState(DEFAULT_COLOR);
@@ -28,7 +31,7 @@ export function TagsDialog({ tags, onChanged }: { tags: Tag[]; onChanged: () => 
   function create(e: React.FormEvent) {
     e.preventDefault();
     startTransition(async () => {
-      const res = await createTag(newName, newColor);
+      const res = await createTag(newName, newColor, profile.user_id);
       if (!res.ok) {
         toast.error(res.error);
         return;
@@ -49,7 +52,9 @@ export function TagsDialog({ tags, onChanged }: { tags: Tag[]; onChanged: () => 
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Теги</DialogTitle>
-          <DialogDescription>Имя и цвет. Удаление снимает тег со всех креаторов.</DialogDescription>
+          <DialogDescription>
+            Имя и цвет. Теги свои у каждого: чужие не видны. Удаление снимает тег со всех креаторов.
+          </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={create} className="flex items-center gap-2">

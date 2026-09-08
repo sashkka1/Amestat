@@ -1,8 +1,34 @@
-// Типы строк — вручную, по supabase/migrations/20260907142636_init.sql.
+// Типы строк — вручную, по supabase/migrations/ (init → videos_ours → v2_roles_api).
 // Меняется схема — меняется этот файл в тот же заход.
 
 export type Platform = "tiktok" | "instagram";
 export type SyncTrigger = "schedule" | "catchup" | "manual";
+export type Role = "admin" | "manager";
+
+export type Profile = {
+  user_id: string;
+  role: Role;
+  login: string;
+  display_name: string;
+  invited_by: string | null;
+  created_at: string;
+};
+
+export type ProfileUpdate = { display_name?: string };
+
+export type Invite = {
+  id: string;
+  token: string;
+  note: string;
+  created_by: string;
+  created_at: string;
+  expires_at: string;
+  used_at: string | null;
+  used_by: string | null;
+};
+
+// Админ вставляет только заметку и себя: токен и срок ставит база (миграция v3).
+export type InviteInsert = { note?: string; created_by: string };
 
 export type Creator = {
   id: string;
@@ -19,6 +45,12 @@ export type Creator = {
   sync_error: string | null;
   // Галочка «все видео наши»: новые видео этого креатора считаются в статистике.
   all_videos_ours: boolean;
+  // Кто выпустил ссылку подключения; null — заведён руками.
+  connected_by: string | null;
+  // open_id TikTok: есть — креатор подключён через официальный API.
+  tiktok_open_id: string | null;
+  // Ключ протух — обход не идёт, пока креатор не пройдёт по ссылке заново.
+  needs_reconnect: boolean;
 };
 
 export type CreatorInsert = {
@@ -35,18 +67,51 @@ export type CreatorInsert = {
   last_synced_at?: string | null;
   sync_error?: string | null;
   all_videos_ours?: boolean;
+  connected_by?: string | null;
+  tiktok_open_id?: string | null;
+  needs_reconnect?: boolean;
 };
 
 export type CreatorUpdate = Partial<CreatorInsert>;
+
+export type CreatorManager = {
+  creator_id: string;
+  manager_id: string;
+  assigned_by: string | null;
+  assigned_at: string;
+};
+
+export type CreatorManagerInsert = {
+  creator_id: string;
+  manager_id: string;
+  assigned_by?: string | null;
+  assigned_at?: string;
+};
+
+export type CreatorArchive = {
+  id: string;
+  platform: Platform;
+  handle: string;
+  display_name: string;
+  description: string;
+  avatar_url: string | null;
+  profile_url: string;
+  added_at: string;
+  managers: string[];
+  deleted_at: string;
+  deleted_by: string | null;
+  deleted_by_login: string;
+};
 
 export type Tag = {
   id: string;
   name: string;
   color: string;
   created_at: string;
+  owner_id: string;
 };
 
-export type TagInsert = { id?: string; name: string; color?: string; created_at?: string };
+export type TagInsert = { id?: string; name: string; color?: string; created_at?: string; owner_id: string };
 export type TagUpdate = Partial<TagInsert>;
 
 export type CreatorTag = { creator_id: string; tag_id: string };
@@ -71,7 +136,7 @@ export type Video = {
   duration_s: number | null;
   first_seen_at: string;
   last_seen_at: string;
-  // «Наше» — считается в статистике; ставит триггер по галочке креатора, меняет владелец.
+  // «Наше» — считается в статистике; ставит триггер по галочке креатора, меняет пользователь.
   ours: boolean;
 };
 
@@ -88,22 +153,6 @@ export type VideoSnap = {
   saves: number | null;
 };
 
-export type SyncRequest = {
-  id: number;
-  requested_at: string;
-  creator_id: string | null;
-  taken_at: string | null;
-  run_id: number | null;
-};
-
-export type SyncRequestInsert = {
-  id?: never;
-  requested_at?: string;
-  creator_id?: string | null;
-  taken_at?: string | null;
-  run_id?: number | null;
-};
-
 export type SyncRun = {
   id: number;
   started_at: string;
@@ -114,6 +163,9 @@ export type SyncRun = {
   creators_done: number;
   creators_failed: number;
   log: string;
+  requested_by: string | null;
+  // 'all' — обход всех видимых; иначе id одного креатора.
+  scope: string;
 };
 
 export type CreatorLatest = {
@@ -156,8 +208,23 @@ export type VideoStats = {
   saves_delta: number;
 };
 
-// Результат RPC creator_daily_views.
+// Результат RPC creator_daily_views и daily_views_all.
 export type DailyViews = { day: string; views: number; likes: number };
+
+// Результат RPC creators_overview: по одному ряду на видимого креатора за срок.
+export type CreatorOverview = {
+  creator_id: string;
+  followers_now: number | null;
+  followers_delta: number | null;
+  videos_total: number;
+  videos_published: number;
+  views_delta: number;
+  likes_delta: number;
+  comments_delta: number;
+  shares_delta: number;
+  saves_delta: number;
+  median_views_delta: number | null;
+};
 
 type Relationships = [];
 
@@ -165,13 +232,21 @@ type Relationships = [];
 export type Database = {
   public: {
     Tables: {
+      profiles: { Row: Profile; Insert: never; Update: ProfileUpdate; Relationships: Relationships };
+      invites: { Row: Invite; Insert: InviteInsert; Update: never; Relationships: Relationships };
       creators: { Row: Creator; Insert: CreatorInsert; Update: CreatorUpdate; Relationships: Relationships };
+      creator_managers: {
+        Row: CreatorManager;
+        Insert: CreatorManagerInsert;
+        Update: never;
+        Relationships: Relationships;
+      };
+      creators_archive: { Row: CreatorArchive; Insert: never; Update: never; Relationships: Relationships };
       tags: { Row: Tag; Insert: TagInsert; Update: TagUpdate; Relationships: Relationships };
       creator_tags: { Row: CreatorTag; Insert: CreatorTag; Update: Partial<CreatorTag>; Relationships: Relationships };
       creator_snaps: { Row: CreatorSnap; Insert: never; Update: never; Relationships: Relationships };
       videos: { Row: Video; Insert: never; Update: VideoUpdate; Relationships: Relationships };
       video_snaps: { Row: VideoSnap; Insert: never; Update: never; Relationships: Relationships };
-      sync_requests: { Row: SyncRequest; Insert: SyncRequestInsert; Update: never; Relationships: Relationships };
       sync_runs: { Row: SyncRun; Insert: never; Update: never; Relationships: Relationships };
     };
     Views: {
@@ -186,6 +261,19 @@ export type Database = {
       creator_daily_views: {
         Args: { p_creator: string; p_from: string; p_to: string };
         Returns: DailyViews[];
+      };
+      creators_overview: {
+        Args: { p_from: string; p_to: string };
+        Returns: CreatorOverview[];
+      };
+      daily_views_all: {
+        Args: { p_from: string; p_to: string };
+        Returns: DailyViews[];
+      };
+      // Пароль менеджеру ставит админ, старого не видя (миграция v3).
+      admin_set_password: {
+        Args: { p_user: string; p_password: string };
+        Returns: undefined;
       };
     };
     Enums: Record<never, never>;

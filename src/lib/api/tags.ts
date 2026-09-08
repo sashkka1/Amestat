@@ -9,7 +9,8 @@ function normalizeColor(color: string): string | null {
   return COLOR_RE.test(c) ? c.toUpperCase() : null;
 }
 
-export async function createTag(name: string, color: string): Promise<ActionResult<Tag>> {
+// Теги у каждого свои (v2): owner_id обязателен и совпадает с вошедшим — RLS иначе откажет.
+export async function createTag(name: string, color: string, ownerId: string): Promise<ActionResult<Tag>> {
   const n = name.trim();
   if (!n) return fail("Имя тега пустое");
   const c = normalizeColor(color);
@@ -17,7 +18,7 @@ export async function createTag(name: string, color: string): Promise<ActionResu
 
   const { data, error } = await createClient()
     .from("tags")
-    .insert({ name: n, color: c })
+    .insert({ name: n, color: c, owner_id: ownerId })
     .select()
     .single();
   if (error) {

@@ -1,0 +1,130 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { ExternalLinkIcon, XIcon } from "lucide-react";
+import { Cover } from "@/components/cover";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Panel } from "@/components/stats/panel";
+import { VideoHistoryChart } from "./daily-chart";
+import { videoHistory } from "@/lib/queries";
+import { describeVsMedian } from "@/lib/stats";
+import { fmtDateTime, fmtDelta, fmtNum } from "@/lib/format";
+import type { VideoStats } from "@/lib/types";
+
+export const PANEL_METRICS = [
+  { key: "views", label: "Просмотры" },
+  { key: "likes", label: "Лайки" },
+  { key: "comments", label: "Комментарии" },
+  { key: "shares", label: "Репосты" },
+  { key: "saves", label: "Сохранения" },
+] as const;
+export type MetricKey = (typeof PANEL_METRICS)[number]["key"];
+
+// Выбранное видео: сравнение с медианой креатора за срок и своя история по снимкам.
+export function VideoPanel({
+  row,
+  medians,
+  onClose,
+}: {
+  row: VideoStats;
+  medians: Record<MetricKey, number | null>;
+  onClose: () => void;
+}) {
+  // История помнит, чьё она видео: сменилась строка — до ответа показываем скелет.
+  const [loaded, setLoaded] = useState<{
+    videoId: string;
+    data: { t: string; views: number }[] | null;
+    error: string | null;
+  } | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const videoId = row.video_id;
+    videoHistory(videoId).then(
+      (data) => {
+        if (alive) setLoaded({ videoId, data, error: null });
+      },
+      (e: unknown) => {
+        if (alive) setLoaded({ videoId, data: null, error: e instanceof Error ? e.message : String(e) });
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [row.video_id]);
+
+  const current = loaded?.videoId === row.video_id ? loaded : null;
+
+  return (
+    <Panel className="flex flex-col gap-4 p-4">
+      <div className="flex gap-4">
+        <Cover src={row.cover_url} width={56} />
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-sm font-medium">{row.caption || "без подписи"}</p>
+            <Button variant="ghost" size="icon-sm" onClick={onClose} title="Закрыть" aria-label="Закрыть">
+              <XIcon />
+            </Button>
+          </div>
+          <a
+            href={row.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+          >
+            Открыть на площадке
+            <ExternalLinkIcon className="size-3" />
+          </a>
+          <p className="text-xs text-muted-foreground">
+            опубликовано: {fmtDateTime(row.published_at)}
+            {!row.ours && " · не наше"}
+          </p>
+        </div>
+      </div>
+
+      <div>
+        <h3 className="mb-2 text-xs font-medium text-muted-foreground">Сравнение с медианой за срок</h3>
+        <Table className="text-[13px]">
+          <TableHeader>
+            <TableRow>
+              <TableHead className="text-muted-foreground">Счётчик</TableHead>
+              <TableHead className="text-right text-muted-foreground">Это видео</TableHead>
+              <TableHead className="text-right text-muted-foreground">Медиана</TableHead>
+              <TableHead className="text-right text-muted-foreground">Итог</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {PANEL_METRICS.map((m) => {
+              const value = row[`${m.key}_delta`];
+              const now = row[`${m.key}_now`];
+              return (
+                <TableRow key={m.key}>
+                  <TableCell>{m.label}</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {fmtDelta(value)}
+                    <span className="text-muted-foreground"> · всего {fmtNum(now)}</span>
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">{fmtNum(medians[m.key])}</TableCell>
+                  <TableCell className="text-right">{describeVsMedian(value, medians[m.key])}</TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
+
+      <div>
+        <h3 className="mb-2 text-xs font-medium text-muted-foreground">Просмотры по снимкам</h3>
+        {current?.error ? (
+          <p className="text-xs text-destructive">Не удалось прочитать снимки: {current.error}</p>
+        ) : current?.data ? (
+          <VideoHistoryChart data={current.data} />
+        ) : (
+          <Skeleton className="h-36 w-full" />
+        )}
+      </div>
+    </Panel>
+  );
+}

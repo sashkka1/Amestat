@@ -2,28 +2,56 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { createClient } from "@/lib/supabase/client";
+import { logout } from "@/lib/api/auth";
+import { myProfile } from "@/lib/api/profiles";
+import { ProfileProvider } from "@/lib/profile-context";
+import type { Profile, Role } from "@/lib/types";
 
-// Сторож для всех страниц, кроме /login/: сервера нет, поэтому вход проверяется в браузере.
-// Без сессии — на /login/; пока проверяем — скелет, чтобы не мигать содержимым.
-export function AuthGate({ children }: { children: React.ReactNode }) {
+type State =
+  | { kind: "checking" }
+  | { kind: "ok"; profile: Profile }
+  | { kind: "no-profile" }
+  | { kind: "forbidden" }
+  | { kind: "error"; message: string };
+
+// Сторож для всех страниц, кроме публичных (/login/, /register/, /connected/): сервера нет,
+// поэтому вход проверяется в браузере. Без сессии — на /login/; вошёл, но строки в
+// profiles нет — «Доступ не выдан»; роль не подходит странице — «Только для администратора».
+export function AuthGate({ children, role }: { children: React.ReactNode; role?: Role }) {
   const router = useRouter();
-  const [ready, setReady] = useState(false);
+  const [state, setState] = useState<State>({ kind: "checking" });
 
   useEffect(() => {
     const supabase = createClient();
     let alive = true;
+    let checkedFor: string | null = null;
+
+    async function check(userId: string) {
+      if (checkedFor === userId) return;
+      checkedFor = userId;
+      try {
+        const profile = await myProfile(userId);
+        if (!alive) return;
+        if (!profile) setState({ kind: "no-profile" });
+        else if (role && profile.role !== role) setState({ kind: "forbidden" });
+        else setState({ kind: "ok", profile });
+      } catch (e) {
+        if (alive) setState({ kind: "error", message: e instanceof Error ? e.message : String(e) });
+      }
+    }
 
     void supabase.auth.getSession().then(({ data }) => {
       if (!alive) return;
-      if (data.session) setReady(true);
+      if (data.session) void check(data.session.user.id);
       else router.replace("/login/");
     });
 
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!alive) return;
-      if (session) setReady(true);
+      if (session) void check(session.user.id);
       else router.replace("/login/");
     });
 
@@ -31,10 +59,60 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
       alive = false;
       sub.subscription.unsubscribe();
     };
-  }, [router]);
+  }, [router, role]);
 
-  if (!ready) return <GateSkeleton />;
-  return <>{children}</>;
+  switch (state.kind) {
+    case "checking":
+      return <GateSkeleton />;
+    case "ok":
+      return <ProfileProvider value={state.profile}>{children}</ProfileProvider>;
+    case "no-profile":
+      return (
+        <Blocked title="Доступ не выдан">
+          Вход прошёл, но для этого пользователя нет роли. Попросите администратора выдать доступ.
+        </Blocked>
+      );
+    case "forbidden":
+      return (
+        <Blocked title="Только для администратора" home>
+          Эта страница менеджеру недоступна.
+        </Blocked>
+      );
+    case "error":
+      return <Blocked title="Не удалось проверить доступ">{state.message}</Blocked>;
+  }
+}
+
+function Blocked({ title, children, home }: { title: string; children: React.ReactNode; home?: boolean }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  async function onLogout() {
+    setBusy(true);
+    try {
+      await logout();
+    } finally {
+      setBusy(false);
+      router.replace("/login/");
+    }
+  }
+  return (
+    <main className="flex flex-1 items-center justify-center p-4">
+      <div className="w-full max-w-sm rounded-xl border bg-card p-6 text-center shadow-sm">
+        <h1 className="mb-2 text-xl font-semibold tracking-tight">{title}</h1>
+        <p className="mb-5 text-sm text-muted-foreground">{children}</p>
+        <div className="flex justify-center gap-2">
+          {home && (
+            <Button variant="outline" onClick={() => router.replace("/")}>
+              На главную
+            </Button>
+          )}
+          <Button variant={home ? "ghost" : "default"} onClick={onLogout} disabled={busy}>
+            Выйти
+          </Button>
+        </div>
+      </div>
+    </main>
+  );
 }
 
 function GateSkeleton() {

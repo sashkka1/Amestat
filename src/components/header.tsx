@@ -2,14 +2,34 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { LogOutIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { logout } from "@/lib/api/auth";
+import { useProfile } from "@/lib/profile-context";
+import { profileName } from "@/lib/api/profiles";
+import { cn } from "@/lib/utils";
 
-export function Header({ children }: { children?: React.ReactNode }) {
+const ADMIN_NAV = [
+  { href: "/", label: "Дашборд" },
+  { href: "/creators/", label: "Креаторы" },
+  { href: "/managers/", label: "Креатор-менеджеры" },
+  { href: "/archive/", label: "Архив" },
+];
+
+const MANAGER_NAV = [
+  { href: "/", label: "Дашборд" },
+  { href: "/creators/", label: "Креаторы" },
+];
+
+// Шапка со вкладками. Что видно, решает роль: архив и менеджеры — только админу.
+export function Header() {
   const router = useRouter();
+  const pathname = usePathname();
+  const profile = useProfile();
   const [busy, setBusy] = useState(false);
+
+  const nav = profile.role === "admin" ? ADMIN_NAV : MANAGER_NAV;
 
   async function onLogout() {
     setBusy(true);
@@ -22,12 +42,34 @@ export function Header({ children }: { children?: React.ReactNode }) {
   }
 
   return (
-    <header className="sticky top-0 z-20 border-b bg-background/95 backdrop-blur">
-      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
-        <Link href="/" className="text-lg font-semibold tracking-tight">
+    <header className="sticky top-0 z-20 border-b bg-card/95 backdrop-blur">
+      <div className="mx-auto flex max-w-[88rem] flex-wrap items-center gap-x-5 gap-y-2 px-5 py-2.5">
+        <Link href="/" className="text-base font-semibold tracking-tight">
           Amestat
         </Link>
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">{children}</div>
+        <nav className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+          {nav.map((item) => {
+            const active = isActive(pathname, item.href);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={cn(
+                  "rounded-lg px-2.5 py-1.5 text-sm transition-colors",
+                  active
+                    ? "bg-muted font-medium text-foreground"
+                    : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                )}
+              >
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+        <span className="hidden text-xs text-muted-foreground sm:inline">
+          {profileName(profile)}
+          {profile.role === "admin" ? " · админ" : " · менеджер"}
+        </span>
         <Button variant="ghost" size="sm" title="Выйти" onClick={onLogout} disabled={busy}>
           <LogOutIcon data-icon="inline-start" />
           <span className="hidden sm:inline">Выйти</span>
@@ -35,4 +77,14 @@ export function Header({ children }: { children?: React.ReactNode }) {
       </div>
     </header>
   );
+}
+
+// Карточка креатора живёт по /creator/, но относится ко вкладке «Креаторы».
+function isActive(pathname: string | null, href: string): boolean {
+  if (!pathname) return false;
+  const p = pathname.endsWith("/") ? pathname : `${pathname}/`;
+  if (href === "/") return p === "/";
+  if (href === "/creators/") return p === "/creators/" || p === "/creator/";
+  if (href === "/managers/") return p === "/managers/" || p === "/manager/";
+  return p === href;
 }

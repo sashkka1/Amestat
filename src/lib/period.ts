@@ -46,6 +46,12 @@ export function resolvePeriod(
   }
 }
 
+// Прошлый срок той же длины, впритык перед нынешним: с ним сравниваются плитки.
+export function previousRange(range: PeriodRange): PeriodRange {
+  const len = range.to.getTime() - range.from.getTime();
+  return { from: new Date(range.from.getTime() - len), to: new Date(range.from.getTime()) };
+}
+
 // Значение для <input type="date"> в местном поясе (YYYY-MM-DD).
 export function toDateInputValue(d: Date): string {
   const y = d.getFullYear();

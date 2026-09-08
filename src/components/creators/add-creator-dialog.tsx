@@ -18,7 +18,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { createCreator, setCreatorAvatar } from "@/lib/api/creators";
-import { requestSync } from "@/lib/api/sync";
 import { uploadAvatar } from "@/lib/avatar-upload";
 import { parseHandle } from "@/lib/handle";
 
@@ -69,13 +68,8 @@ export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
         }
       }
 
-      const sync = await requestSync(id);
-      if (sync.ok) {
-        toast.success(`@${created.data.handle} добавлен — данные появятся после обхода`);
-      } else {
-        toast.success(`@${created.data.handle} добавлен`);
-        toast.error(sync.error);
-      }
+      // Сборщика сайт не зовёт: обход идёт по расписанию в Supabase.
+      toast.success(`@${created.data.handle} добавлен — данные появятся после ближайшего обхода`);
       setOpen(false);
       reset();
       onAdded();
@@ -93,9 +87,9 @@ export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
       }}
     >
       <DialogTrigger asChild>
-        <Button>
+        <Button size="sm">
           <PlusIcon data-icon="inline-start" />
-          Добавить креатора
+          Добавить вручную
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">

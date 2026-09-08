@@ -83,17 +83,6 @@ export async function deleteCreator(id: string): Promise<ActionResult> {
   return { ok: true, data: undefined };
 }
 
-// Порядок руками: sort_order = позиция в переданном списке.
-export async function saveOrder(ids: string[]): Promise<ActionResult> {
-  const supabase = createClient();
-  const results = await Promise.all(
-    ids.map((id, i) => supabase.from("creators").update({ sort_order: i + 1 }).eq("id", id)),
-  );
-  const failed = results.find((r) => r.error);
-  if (failed?.error) return fail(`Порядок не сохранился: ${failed.error.message}`);
-  return { ok: true, data: undefined };
-}
-
 export async function setCreatorTag(
   creatorId: string,
   tagId: string,
