@@ -187,9 +187,10 @@ powershell -ExecutionPolicy Bypass -File .\install-task.ps1
 поднимает `node watch.mjs` без окна и ждёт его — пока резидент жив, задача числится
 «Выполняется», второй экземпляр не запустится, а упавший резидент планировщик поднимает
 заново (3 раза по 5 минут). Повторный запуск скрипта пересоздаёт задачу,
-`uninstall-task.ps1` её снимает. Проверить сейчас, не выходя из системы:
-`Start-ScheduledTask -TaskName 'Amestat collector'`; остановить резидент —
-`Stop-ScheduledTask -TaskName 'Amestat collector'`.
+`uninstall-task.ps1` её снимает вместе с работающим резидентом. Проверить сейчас, не выходя
+из системы: `Start-ScheduledTask -TaskName 'Amestat collector'`; остановить резидент до
+следующего входа — `stop-task.ps1` (один `Stop-ScheduledTask` гасит только wscript, а
+`node watch.mjs` остаётся жить — скрипт добивает и его).
 
 ## Логи
 
