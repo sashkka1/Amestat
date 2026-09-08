@@ -8,6 +8,8 @@ import { toast } from "sonner";
 import { AuthGate } from "@/components/auth-gate";
 import { Page, PageError, PageSkeleton } from "@/components/page";
 import { Avatar } from "@/components/avatar";
+import { PlatformChip } from "@/components/platform";
+import { PlatformSwitch } from "@/components/platform-switch";
 import { LocalTime } from "@/components/local-time";
 import { Panel, PanelHead, Empty } from "@/components/stats/panel";
 import { Button } from "@/components/ui/button";
@@ -40,6 +42,7 @@ import {
 } from "@/lib/api/profiles";
 import { listCreatorManagers, listCreators } from "@/lib/queries";
 import { fmtNum } from "@/lib/format";
+import { matchesPlatform, usePlatformFilter } from "@/lib/platform-filter";
 import { useLoader } from "@/lib/use-loader";
 import type { Creator, Profile } from "@/lib/types";
 
@@ -95,13 +98,26 @@ function ManagerView({ id }: { id: string }) {
   // Radix Select пустую строку за значение не считает — держим undefined.
   const [pick, setPick] = useState<string | undefined>(undefined);
 
-  const assignedList = useMemo(
+  // Переключатель тот же, что на дашборде и в «Креаторах»: положение общее через localStorage.
+  // Площадка режет оба списка сразу — и привязанных, и тех, кого можно привязать.
+  const platform = usePlatformFilter();
+  const platformFilter = platform.filter;
+
+  const assignedAll = useMemo(
     () => (data ? data.creators.filter((c) => data.assigned.has(c.id)) : []),
     [data],
   );
-  const free = useMemo(
+  const freeAll = useMemo(
     () => (data ? data.creators.filter((c) => !data.assigned.has(c.id)) : []),
     [data],
+  );
+  const assignedList = useMemo(
+    () => assignedAll.filter((c) => matchesPlatform(platformFilter, c.platform)),
+    [assignedAll, platformFilter],
+  );
+  const free = useMemo(
+    () => freeAll.filter((c) => matchesPlatform(platformFilter, c.platform)),
+    [freeAll, platformFilter],
   );
 
   const displayName = name ?? manager?.display_name ?? "";
@@ -158,6 +174,7 @@ function ManagerView({ id }: { id: string }) {
       actions={
         manager ? (
           <>
+            <PlatformSwitch state={platform} />
             <PasswordDialog manager={manager} />
             <Button variant="destructive" size="sm" onClick={() => setConfirmDelete(true)}>
               <Trash2Icon data-icon="inline-start" />
@@ -226,7 +243,9 @@ function ManagerView({ id }: { id: string }) {
                 <SelectContent>
                   {free.length === 0 ? (
                     <SelectItem value="none" disabled>
-                      Все креаторы уже привязаны
+                      {freeAll.length === 0
+                        ? "Все креаторы уже привязаны"
+                        : "На этой площадке свободных нет"}
                     </SelectItem>
                   ) : (
                     free.map((c) => (
@@ -240,7 +259,11 @@ function ManagerView({ id }: { id: string }) {
             </PanelHead>
 
             {assignedList.length === 0 ? (
-              <Empty>Креаторов пока нет — привяжите их выбором справа сверху.</Empty>
+              <Empty>
+                {assignedAll.length === 0
+                  ? "Креаторов пока нет — привяжите их выбором справа сверху."
+                  : "На этой площадке привязанных нет."}
+              </Empty>
             ) : (
               <Table className="text-[13px]">
                 <TableHeader>
@@ -264,7 +287,9 @@ function ManagerView({ id }: { id: string }) {
                             </span>
                           </Link>
                         </TableCell>
-                        <TableCell className="text-muted-foreground">{c.platform}</TableCell>
+                        <TableCell>
+                          <PlatformChip platform={c.platform} />
+                        </TableCell>
                         <TableCell>
                           <Button
                             variant="ghost"

@@ -49,7 +49,8 @@ export function TagsDialog({ tags, onChanged }: { tags: Tag[]; onChanged: () => 
           Теги
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-md">
+      {/* Список тегов растёт: диалог не выше экрана, внутри прокрутка. */}
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Теги</DialogTitle>
           <DialogDescription>

@@ -60,7 +60,8 @@ export function InviteDialog({ onCreated }: { onCreated: () => void }) {
           Сгенерировать ссылку регистрации
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-lg">
+      {/* На низком экране кнопки не должны уезжать за край: не выше экрана, внутри прокрутка. */}
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Ссылка регистрации менеджера</DialogTitle>
           <DialogDescription>

@@ -12,6 +12,7 @@ import { LocalTime } from "@/components/local-time";
 import { TagPicker } from "@/components/creators/tag-picker";
 import { TagsDialog } from "@/components/creators/tags-dialog";
 import { AddCreatorDialog } from "@/components/creators/add-creator-dialog";
+import { RowSyncButton } from "@/components/creators/row-sync-button";
 import { Panel, PanelHead, Empty } from "@/components/stats/panel";
 import { SortHead, nextSort, type SortDir } from "@/components/stats/sort-head";
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,7 @@ import {
 import { fmtNum } from "@/lib/format";
 import { matchesPlatform, PLATFORM_FILTER_LABELS, usePlatformFilter } from "@/lib/platform-filter";
 import { useLoader } from "@/lib/use-loader";
+import { useSyncQueue } from "@/lib/use-sync-queue";
 import { useProfile } from "@/lib/profile-context";
 import type { Creator, CreatorLatest, CreatorOverview, CreatorTag, Tag } from "@/lib/types";
 
@@ -74,6 +76,11 @@ function CreatorsScreen() {
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey] = useState<Key>("views");
   const [dir, setDir] = useState<SortDir>("desc");
+
+  // Очередь обновления — одна на таблицу. Список креаторов для неё берётся весь, до фильтра
+  // площадки и поиска: иначе просьба переставала бы отслеживаться, стоило спрятать строку.
+  const queueIds = useMemo(() => data?.creators.map((c) => c.id) ?? [], [data]);
+  const queue = useSyncQueue(queueIds, reload);
 
   // Галочки тегов меняются сразу, база — следом. Перечитали страницу — берём свежее.
   const [localTags, setLocalTags] = useState<CreatorTag[]>([]);
@@ -199,7 +206,21 @@ function CreatorsScreen() {
         <PageSkeleton blocks={1} />
       ) : data ? (
         <Panel>
-          <PanelHead title="Список" subtitle={`${fmtNum(visible.length)} из ${fmtNum(rows.length)}`}>
+          <PanelHead
+            title="Список"
+            subtitle={
+              <>
+                {fmtNum(visible.length)} из {fmtNum(rows.length)}
+                {/* Молчать об этом нельзя: строки просто перестали бы показывать очередь. */}
+                {queue.error && (
+                  <span className="text-destructive" title={queue.error}>
+                    {" "}
+                    · очередь обновления не читается
+                  </span>
+                )}
+              </>
+            }
+          >
             <div className="relative w-52">
               <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -251,6 +272,7 @@ function CreatorsScreen() {
                   <SortHead k="views" label="Просмотры за 7 дней" sortKey={sortKey} dir={dir} onSort={onSort} />
                   <SortHead k="synced" label="Обновлено" sortKey={sortKey} dir={dir} onSort={onSort} />
                   <TableHead className="text-muted-foreground">Состояние</TableHead>
+                  <TableHead className="w-10" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -293,6 +315,14 @@ function CreatorsScreen() {
                       </TableCell>
                       <TableCell>
                         <Status creator={r.creator} />
+                      </TableCell>
+                      <TableCell>
+                        {/* Одинаково у админа и у менеджера: RLS пускает просьбу за
+                            креатора, которого человек видит. */}
+                        <RowSyncButton
+                          state={queue.rows.get(r.creator.id)}
+                          onAsk={(depth) => void queue.ask(r.creator.id, depth)}
+                        />
                       </TableCell>
                     </TableRow>
                   );

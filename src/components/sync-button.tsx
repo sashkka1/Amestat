@@ -8,35 +8,23 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { createClient } from "@/lib/supabase/client";
 import { latestRun, openRequests, requestsByIds, requestSync, runsByIds } from "@/lib/api/sync";
-import type { SyncDepth, SyncRequest, SyncRun } from "@/lib/types";
+import {
+  PHASE_TEXT,
+  POLL_MS,
+  UNAVAILABLE_TEXT,
+  runsResult,
+  stage,
+  type Phase,
+} from "@/lib/sync-phase";
+import type { SyncDepth, SyncRun } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-// Страховка на случай, если Realtime не доехал: пока идёт ожидание, перечитываем сами.
-const POLL_MS = 15_000;
 // Столько ждём хоть какого-то ответа. Обычно за это время база сама пишет владельцу в
 // Telegram и ставит notified_at (миграция v8); таймер нужен, если бот не настроен.
 const NO_ANSWER_MS = 3 * 60_000;
 
-// Покой → в очереди → принято резидентом → идёт обход → снова покой, с новым временем.
-type Phase = "idle" | "queued" | "seen" | "running";
-
 // Какую строку матрицы выбрали: всех креаторов или только тех, что на этой странице.
 type Target = "all" | "page";
-
-// Состояние пачки просьб: решает слабейшее звено — пока хоть одна не принята, вся пачка
-// в очереди. seenAny и notified смотрят на всю пачку сразу: хоть где-то есть — значит есть.
-function stage(reqs: SyncRequest[]): { phase: Phase; seenAny: boolean; notified: boolean } {
-  const phase: Phase = reqs.every((r) => r.taken_at)
-    ? "running"
-    : reqs.some((r) => !r.seen_at && !r.taken_at)
-      ? "queued"
-      : "seen";
-  return {
-    phase,
-    seenAny: reqs.some((r) => r.seen_at || r.taken_at),
-    notified: reqs.some((r) => r.notified_at),
-  };
-}
 
 // Последний по времени обход из пачки — его время идёт в строку «Обновлено …».
 function newest(runs: SyncRun[]): SyncRun | null {
@@ -108,10 +96,9 @@ export function SyncButton({
     const last = finished ? newest(finished) : null;
     if (last) {
       setRun(last);
-      // Не удался хоть один обход пачки — показываем первую же ошибку.
-      const bad = finished?.find((r) => r.ok === false);
-      if (bad) toast.error(bad.error || "Обход не удался");
-      else toast.success("Обновлено");
+      const res = runsResult(finished ?? []);
+      if (res.ok) toast.success(res.text);
+      else toast.error(res.text);
     }
     onDoneRef.current();
   }, []);
@@ -302,17 +289,17 @@ export function SyncButton({
             Не удалось прочитать состояние
           </span>
         ) : phase === "running" ? (
-          "Идёт обход…"
+          PHASE_TEXT.running
         ) : phase === "seen" ? (
-          "Принято, ждёт очереди…"
+          PHASE_TEXT.seen
         ) : phase === "queued" ? (
           // Молчание сборщика — не ошибка пользователя: цвет обычный, просьба сохранена.
           notified ? (
-            "Обновление в настоящий момент недоступно, сообщение отправлено, в ближайшее время обновим"
+            UNAVAILABLE_TEXT
           ) : late ? (
             "Сборщик не отвечает, просьба сохранена: обновим, как только он проснётся"
           ) : (
-            "В очереди…"
+            PHASE_TEXT.queued
           )
         ) : run ? (
           <>

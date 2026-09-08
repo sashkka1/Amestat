@@ -1,14 +1,17 @@
 "use client";
 
+import { useMemo } from "react";
 import { AuthGate } from "@/components/auth-gate";
 import { Page, PageError, PageSkeleton } from "@/components/page";
 import { Avatar } from "@/components/avatar";
 import { PlatformChip } from "@/components/platform";
+import { PlatformSwitch } from "@/components/platform-switch";
 import { LocalTime } from "@/components/local-time";
 import { Panel, PanelHead, Empty } from "@/components/stats/panel";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { listArchive } from "@/lib/queries";
 import { fmtNum } from "@/lib/format";
+import { matchesPlatform, PLATFORM_FILTER_LABELS, usePlatformFilter } from "@/lib/platform-filter";
 import { useLoader } from "@/lib/use-loader";
 
 export default function ArchivePage() {
@@ -23,18 +26,37 @@ export default function ArchivePage() {
 // креатор принадлежал. Снимки и видео уходят каскадом — вернуть креатора отсюда нельзя.
 function ArchiveScreen() {
   const { data, error, loading } = useLoader(listArchive, []);
+  // Переключатель тот же, что на дашборде и в «Креаторах»: положение общее через localStorage.
+  const platform = usePlatformFilter();
+  const platformFilter = platform.filter;
+
+  // Счётчик «N записей» считает по выбранной площадке — как и всё, что ниже.
+  const list = useMemo(
+    () => (data ?? []).filter((a) => matchesPlatform(platformFilter, a.platform)),
+    [data, platformFilter],
+  );
 
   return (
-    <Page title="Архив" subtitle="Удалённые креаторы: кто и когда">
+    <Page
+      title="Архив"
+      subtitle={
+        platformFilter === "all"
+          ? "Удалённые креаторы: кто и когда"
+          : `Удалённые креаторы: кто и когда · ${PLATFORM_FILTER_LABELS[platformFilter]}`
+      }
+      actions={<PlatformSwitch state={platform} />}
+    >
       {error ? (
         <PageError error={error} />
       ) : loading && !data ? (
         <PageSkeleton blocks={1} />
       ) : data ? (
         <Panel>
-          <PanelHead title="Удалённые" subtitle={`${fmtNum(data.length)} записей`} />
-          {data.length === 0 ? (
-            <Empty>Никого не удаляли.</Empty>
+          <PanelHead title="Удалённые" subtitle={`${fmtNum(list.length)} записей`} />
+          {list.length === 0 ? (
+            <Empty>
+              {data.length === 0 ? "Никого не удаляли." : "На этой площадке удалённых нет."}
+            </Empty>
           ) : (
             <Table className="text-[13px]">
               <TableHeader>
@@ -48,7 +70,7 @@ function ArchiveScreen() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data.map((a) => {
+                {list.map((a) => {
                   const name = a.display_name || a.handle;
                   return (
                     <TableRow key={a.id}>

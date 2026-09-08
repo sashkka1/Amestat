@@ -80,7 +80,8 @@ export function EditCreatorDialog({
           <PencilIcon />
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-md">
+      {/* На низком экране кнопки не должны уезжать за край: не выше экрана, внутри прокрутка. */}
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
         <form onSubmit={save} className="flex flex-col gap-4">
           <DialogHeader>
             <DialogTitle>Креатор @{creator.handle}</DialogTitle>
