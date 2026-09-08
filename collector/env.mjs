@@ -51,6 +51,17 @@ export function loadEnv() {
   const retryMin = retryRaw === "" ? NaN : Number(retryRaw);
   const retryMs = Number.isFinite(retryMin) && retryMin > 0 ? Math.round(retryMin * 60_000) : 60 * 60_000;
 
+  // Комментарии: за сколько последних дней брать видео. По умолчанию 7.
+  // Шаг и без того долгий — страница на каждое видео, — а старые обсуждения уже не растут.
+  const commentsDaysRaw = (raw.AMESTAT_COMMENTS_DAYS || "").trim();
+  const commentsDaysNum = commentsDaysRaw === "" ? NaN : Number(commentsDaysRaw);
+  const commentsDays = Number.isFinite(commentsDaysNum) && commentsDaysNum > 0 ? Math.round(commentsDaysNum) : 7;
+
+  // Потолок комментариев на одно видео. По умолчанию 100.
+  const commentsMaxRaw = (raw.AMESTAT_COMMENTS_MAX || "").trim();
+  const commentsMaxNum = commentsMaxRaw === "" ? NaN : Number(commentsMaxRaw);
+  const commentsMax = Number.isFinite(commentsMaxNum) && commentsMaxNum > 0 ? Math.round(commentsMaxNum) : 100;
+
   // Instagram: пусто — Graph API, если есть токен; иначе браузер (пока заглушка).
   const igToken = raw.IG_ACCESS_TOKEN || "";
   const igUserId = raw.IG_USER_ID || "";
@@ -64,6 +75,8 @@ export function loadEnv() {
     browser: raw.AMESTAT_BROWSER || "",
     pauseMs,
     retryMs,
+    commentsDays,
+    commentsMax,
     igToken,
     igUserId,
     igSource,

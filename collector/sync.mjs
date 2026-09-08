@@ -15,6 +15,9 @@
 //     видео, 'week' — только за последние 7 дней. Снимок профиля делается всегда одинаково.
 //   • Повтор после неудачи (`failedOnly`) берёт только тех, у кого в `creators.sync_error`
 //     что-то есть: успевшие собраться второй раз за час не тревожатся.
+//   • Тексты комментариев — отдельный шаг ПОСЛЕ снимков видео и только по свежим роликам
+//     (`AMESTAT_COMMENTS_DAYS`, у которых комментарии вообще есть). Он ходит вторым браузером,
+//     под сессией фейкового аккаунта, и ошибка на видео обход не валит: снимки уже записаны.
 //   • Картинки Instagram на чужих адресах не остаются: аватар и обложки перекладываются в
 //     свой бакет (`images.mjs`), в базу идёт наш публичный адрес. Причина — в `images.mjs`;
 //     у TikTok картинки показываются как есть, и его это не касается вовсе.
@@ -24,12 +27,17 @@ import { loadEnv } from "./env.mjs";
 import { collectTikTok } from "./tiktok.mjs";
 import { collectInstagramGraph } from "./instagram-graph.mjs";
 import { collectInstagramWeb } from "./instagram-web.mjs";
+import { collectTikTokComments } from "./comments-tiktok.mjs";
+import { collectInstagramComments } from "./comments-instagram.mjs";
+import { launchProfile } from "./browser.mjs";
 import { rehostImage, isOurs, avatarPath, coverPath } from "./images.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const CREATOR_FIELDS = "id,platform,handle,display_name,avatar_custom,sort_order,added_at";
-const COVERS_PARALLEL = 4;    // столько обложек качаем разом
-const COVERS_PAUSE_MS = 100;  // и пауза между пачками: чужой CDN не любит очередь запросов подряд
+const COVERS_PARALLEL = 4;      // столько обложек качаем разом
+const COVERS_PAUSE_MS = 100;    // и пауза между пачками: чужой CDN не любит очередь запросов подряд
+const COMMENTS_PAUSE_MS = 3000; // пауза между видео на шаге комментариев
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Очередь в процессе: следующий обход ждёт, пока закончится текущий.
 let chain = Promise.resolve();
@@ -116,6 +124,85 @@ async function rehostInstagram(creator, profile, videos, log) {
   return { avatarUrl, covers };
 }
 
+/**
+ * Тексты комментариев к свежим видео креатора — второй заход браузером, уже под сессией
+ * фейкового аккаунта (постоянный профиль `profile-opera`). Число комментариев к этому моменту
+ * уже лежит в `video_snaps.comments`; здесь собираются сами тексты.
+ *
+ * Правила шага:
+ *   • берутся только видео за последние `AMESTAT_COMMENTS_DAYS` дней и только те, у которых
+ *     комментарии есть вовсе: у старых обсуждение уже не растёт, у пустых брать нечего;
+ *   • браузер открывается ОДИН на креатора и закрывается в `finally` — профиль постоянный,
+ *     второй процесс на этой папке не встанет;
+ *   • TikTok водится с настоящим окном: в скрытом он отдаёт пустые тела и капчу (см.
+ *     `comments-tiktok.mjs`). Instagram обходится скрытым;
+ *   • ошибка одного видео шаг не валит, обход не роняет и `creators.sync_error` не ставит:
+ *     комментарии — добавка к снимкам, а не их условие.
+ */
+async function collectComments(creator, videos, env, log) {
+  const platform = creator.platform ?? "tiktok";
+  const collect = platform === "tiktok" ? collectTikTokComments
+    : platform === "instagram" ? collectInstagramComments
+      : null;
+  if (!collect) return;
+
+  const since = Date.now() - env.commentsDays * DAY_MS;
+  const picked = videos.filter((v) => (v.comments ?? 0) > 0 && v.publishedAt !== null && Date.parse(v.publishedAt) >= since);
+  if (picked.length === 0) {
+    log?.(`  комментарии: видео 0, собрано 0, не вышло 0 (свежих с комментариями нет за ${env.commentsDays} дн.)`);
+    return;
+  }
+
+  const headless = platform !== "tiktok";
+  let browser = null;
+  try {
+    // Предыдущий браузер только что закрылся, и Opera на его хвосте поднимается через раз —
+    // даём процессу уйти совсем, а не спорим с ним за профиль.
+    await sleep(COMMENTS_PAUSE_MS);
+    browser = await launchProfile(env.browser, { headless });
+  } catch (e) {
+    // Нет профиля или не поднялся браузер — снимки уже записаны, обход этим не портим.
+    log?.(`  комментарии: ${String(e?.message ?? e).split("\n")[0]}`);
+    return;
+  }
+  log?.(`  комментарии: браузер ${browser.describe}${headless ? "" : ", окно настоящее — скрытому TikTok их не отдаёт"}`);
+
+  let rows = 0, failed = 0;
+  try {
+    for (let i = 0; i < picked.length; i++) {
+      const video = picked[i];
+      try {
+        const list = await collect(browser.ctx, { id: video.id, url: video.url, creatorHandle: creator.handle }, { max: env.commentsMax, log });
+        const now = new Date().toISOString();
+        if (list.length > 0) {
+          // `first_seen_at` не шлём вовсе: его база ставит один раз, при первой встрече.
+          await upsert("video_comments", list.map((c) => ({
+            id: c.id,
+            video_id: video.id,
+            parent_id: c.parentId,
+            author_handle: c.authorHandle,
+            author_name: c.authorName,
+            text: c.text,
+            likes: c.likes,
+            replies: c.replies,
+            created_at: c.createdAt,
+            last_seen_at: now,
+          })), "video_id,id");
+        }
+        await patch(`videos?id=eq.${encodeURIComponent(video.id)}`, { comments_synced_at: now });
+        rows += list.length;
+      } catch (e) {
+        failed++;
+        log?.(`    видео ${video.id}: ${String(e?.message ?? e).split("\n")[0]}`);
+      }
+      if (i < picked.length - 1) await sleep(COMMENTS_PAUSE_MS);
+    }
+  } finally {
+    await browser.cleanup();
+  }
+  log?.(`  комментарии: видео ${picked.length}, собрано ${rows}, не вышло ${failed}`);
+}
+
 async function collectOne(creator, env, depth, log) {
   const collect = pickCollector(creator, env, depth);
   const { profile, videos } = await collect(log);
@@ -155,6 +242,10 @@ async function collectOne(creator, env, depth, log) {
       shares: v.shares ?? null,
       saves: v.saves ?? null,
     })));
+
+    // Тексты комментариев — после снимков и только по свежим видео: строки `video_comments`
+    // ссылаются на `videos`, значит upsert выше должен пройти первым.
+    await collectComments(creator, videos, env, log);
   }
 
   // Своя картинка владельца сильнее аватара площадки.

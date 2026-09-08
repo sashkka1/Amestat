@@ -18,7 +18,8 @@ const INSTAGRAM_URL_RE = /(?:https?:\/\/)?(?:[a-z0-9-]+\.)*instagram\.com\/([^/?
 // или Reels иначе завела бы креатора «p».
 const INSTAGRAM_RESERVED = new Set(["p", "reel", "reels", "stories", "explore", "accounts", "direct", "tv"]);
 
-function profileUrl(platform: Platform, handle: string): string {
+// Адрес профиля по имени: годится и для креатора, и для автора комментария.
+export function profileUrl(platform: Platform, handle: string): string {
   return platform === "instagram"
     ? `https://www.instagram.com/${handle}/`
     : `https://www.tiktok.com/@${handle}`;

@@ -144,9 +144,30 @@ export type Video = {
   last_seen_at: string;
   // «Наше» — считается в статистике; ставит триггер по галочке креатора, меняет пользователь.
   ours: boolean;
+  // Когда сборщик последний раз снимал тексты комментариев (миграция v11); null — ещё не снимал.
+  comments_synced_at: string | null;
 };
 
 export type VideoUpdate = { ours?: boolean };
+
+// Тексты комментариев площадки (миграция v11). Пишет только сборщик; сайт читает то,
+// что пускает can_see_creator через видео. Ключ — пара (video_id, id).
+export type VideoComment = {
+  id: string;
+  video_id: string;
+  // Ответ на комментарий: id родителя; у корневых null.
+  parent_id: string | null;
+  author_handle: string;
+  author_name: string;
+  text: string;
+  likes: number | null;
+  // Число ответов у корневого комментария.
+  replies: number | null;
+  // Когда написан на площадке; площадка может его не отдать.
+  created_at: string | null;
+  first_seen_at: string;
+  last_seen_at: string;
+};
 
 export type VideoSnap = {
   id: number;
@@ -282,6 +303,7 @@ export type Database = {
       creator_snaps: { Row: CreatorSnap; Insert: never; Update: never; Relationships: Relationships };
       videos: { Row: Video; Insert: never; Update: VideoUpdate; Relationships: Relationships };
       video_snaps: { Row: VideoSnap; Insert: never; Update: never; Relationships: Relationships };
+      video_comments: { Row: VideoComment; Insert: never; Update: never; Relationships: Relationships };
       sync_runs: { Row: SyncRun; Insert: never; Update: never; Relationships: Relationships };
       sync_requests: {
         Row: SyncRequest;

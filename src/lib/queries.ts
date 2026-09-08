@@ -10,6 +10,7 @@ import type {
   Platform,
   Tag,
   Video,
+  VideoComment,
   VideoLatest,
   VideoStats,
 } from "./types";
@@ -161,6 +162,43 @@ export async function videoHistory(videoId: string): Promise<{ t: string; views:
     .order("taken_at", { ascending: true });
   fail(error);
   return (data ?? []).map((s) => ({ t: s.taken_at, views: s.views ?? 0 }));
+}
+
+// Комментарии одного видео (миграция v11). Их бывают сотни, поэтому страницами:
+// count — сколько всего в базе, по нему панель решает, показывать ли «Показать ещё».
+export type CommentSort = "likes" | "newest";
+
+export async function listVideoComments(
+  videoId: string,
+  { sort, limit, offset = 0 }: { sort: CommentSort; limit: number; offset?: number },
+): Promise<{ rows: VideoComment[]; count: number }> {
+  let query = createClient()
+    .from("video_comments")
+    .select("*", { count: "exact" })
+    .eq("video_id", videoId);
+  query =
+    sort === "likes"
+      ? query.order("likes", { ascending: false, nullsFirst: false })
+      : query.order("created_at", { ascending: false, nullsFirst: false });
+  // Второй ключ — чтобы страницы не перемешивались: у комментариев с одинаковыми
+  // лайками (или без даты) порядок иначе от запроса к запросу свой.
+  const { data, error, count } = await query
+    .order("id", { ascending: true })
+    .range(offset, offset + limit - 1);
+  fail(error);
+  return { rows: data ?? [], count: count ?? 0 };
+}
+
+// Когда у этого видео последний раз снимали тексты комментариев. Отдельным запросом:
+// video_stats_between про колонку videos.comments_synced_at не знает.
+export async function videoCommentsSyncedAt(videoId: string): Promise<string | null> {
+  const { data, error } = await createClient()
+    .from("videos")
+    .select("comments_synced_at")
+    .eq("id", videoId)
+    .maybeSingle();
+  fail(error);
+  return data?.comments_synced_at ?? null;
 }
 
 export async function creatorsOverview(range: PeriodRange): Promise<CreatorOverview[]> {

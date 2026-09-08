@@ -8,10 +8,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Panel } from "@/components/stats/panel";
 import { VideoHistoryChart } from "./daily-chart";
+import { VideoComments } from "./video-comments";
 import { videoHistory } from "@/lib/queries";
 import { describeVsMedian } from "@/lib/stats";
 import { fmtDateTime, fmtDelta, fmtNum } from "@/lib/format";
-import type { VideoStats } from "@/lib/types";
+import type { Platform, VideoStats } from "@/lib/types";
 
 export const PANEL_METRICS = [
   { key: "views", label: "Просмотры" },
@@ -26,10 +27,16 @@ export type MetricKey = (typeof PANEL_METRICS)[number]["key"];
 export function VideoPanel({
   row,
   medians,
+  platform,
+  refreshKey,
   onClose,
 }: {
   row: VideoStats;
   medians: Record<MetricKey, number | null>;
+  // Площадка креатора: по ней строятся ссылки на авторов комментариев.
+  platform: Platform;
+  // Меняется после обхода — комментарии и история по снимкам перечитываются.
+  refreshKey: number;
   onClose: () => void;
 }) {
   // История помнит, чьё она видео: сменилась строка — до ответа показываем скелет.
@@ -53,7 +60,8 @@ export function VideoPanel({
     return () => {
       alive = false;
     };
-  }, [row.video_id]);
+    // refreshKey в списке нарочно: после обхода у видео появился новый снимок, график должен его увидеть.
+  }, [row.video_id, refreshKey]);
 
   const current = loaded?.videoId === row.video_id ? loaded : null;
 
@@ -125,6 +133,14 @@ export function VideoPanel({
           <Skeleton className="h-36 w-full" />
         )}
       </div>
+
+      {/* Список длинный — стоит последним, чтобы график не уезжал за экран. */}
+      <VideoComments
+        videoId={row.video_id}
+        platform={platform}
+        total={row.comments_now}
+        refreshKey={refreshKey}
+      />
     </Panel>
   );
 }

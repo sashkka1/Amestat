@@ -233,7 +233,13 @@ export function CreatorStats({
       <TopPosts posts={posts} title="Лучшие видео за срок" showCreator={false} />
 
       {selected && (
-        <VideoPanel row={selected} medians={summary.medians} onClose={() => setSelectedId(null)} />
+        <VideoPanel
+          row={selected}
+          medians={summary.medians}
+          platform={creator.platform}
+          refreshKey={refreshKey}
+          onClose={() => setSelectedId(null)}
+        />
       )}
 
       <VideosTable
