@@ -16,6 +16,7 @@ import { RowSyncButton } from "@/components/creators/row-sync-button";
 import { Panel, PanelHead, Empty } from "@/components/stats/panel";
 import { SortHead, nextSort, type SortDir } from "@/components/stats/sort-head";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
@@ -267,6 +268,10 @@ function CreatorsScreen() {
                 <TableRow>
                   <SortHead k="name" label="Креатор" sortKey={sortKey} dir={dir} onSort={onSort} align="left" />
                   <TableHead className="text-muted-foreground">Теги</TableHead>
+                  {/* Галочка «все видео наши» — только показать (владелец, 2026-09-08: «пометка,
+                      все ли данного креатора мы считаем своими, которую нельзя снимать»);
+                      меняется она в карточке креатора. */}
+                  <TableHead className="text-center text-muted-foreground">Все наши</TableHead>
                   <SortHead k="followers" label="Подписчики" sortKey={sortKey} dir={dir} onSort={onSort} />
                   <SortHead k="videos" label="Видео" sortKey={sortKey} dir={dir} onSort={onSort} />
                   <SortHead k="views" label="Просмотры за 7 дней" sortKey={sortKey} dir={dir} onSort={onSort} />
@@ -306,6 +311,19 @@ function CreatorsScreen() {
                             onChange={(tagId, on) => onTagChange(r.creator.id, tagId, on)}
                           />
                         </div>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <Checkbox
+                          checked={r.creator.all_videos_ours}
+                          disabled
+                          aria-label={r.creator.all_videos_ours ? "Все видео наши" : "Наши только помеченные видео"}
+                          title={
+                            r.creator.all_videos_ours
+                              ? "Все видео креатора считаются нашими"
+                              : "Наши только помеченные видео — меняется в карточке креатора"
+                          }
+                          className="disabled:opacity-100 disabled:cursor-default"
+                        />
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{fmtNum(r.followers)}</TableCell>
                       <TableCell className="text-right tabular-nums">{fmtNum(r.videos)}</TableCell>
