@@ -299,7 +299,7 @@ async function collectOne(creator, env, depth, log) {
   return { videos: videos.length, followers: profile.followers };
 }
 
-async function doSync({ trigger, creatorId, failedOnly, depth, requestedBy, requestIds, onLog }) {
+async function doSync({ trigger, creatorId, failedOnly, depth, requestedBy, requestIds, slotLabel, onLog }) {
   const env = loadEnv();
   const lines = [];
   const log = (text) => {
@@ -327,7 +327,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, requestedBy, requ
     log(`обход не начался: ${text}`);
     notice("run", `обход не начался: ${text}`);
     // Строки в базе нет, но сказать владельцу надо тем более: сайт тоже читает из базы.
-    await reportRun({ runId: null, trigger, depth, done: 0, failed: 0, log });
+    await reportRun({ runId: null, trigger, depth, done: 0, failed: 0, slotLabel, log });
     return { runId: null, ok: false, done: 0, failed: 0, error: text, failures, depth, log: lines.join("\n") };
   }
   const who = failedOnly ? "только неудавшиеся" : creatorId ? `креатор ${creatorId}` : "все";
@@ -395,7 +395,9 @@ async function doSync({ trigger, creatorId, failedOnly, depth, requestedBy, requ
   } finally {
     // Сначала сообщение владельцу, потом запись итога: текст замечаний уходит в `lines` и должен
     // попасть в `sync_runs.log` — иначе на сайте не видно, о чём владельцу сказали.
-    await reportRun({ runId, trigger, depth, done, failed, log });
+    // `slotLabel` — только у неудавшегося повтора: одно письмо на обход, отдельного «не удался
+    // дважды» больше нет (владелец, 2026-09-08: два письма об одном событии).
+    await reportRun({ runId, trigger, depth, done, failed, slotLabel: failed > 0 || firstError ? slotLabel ?? null : null, log });
     if (runId) {
       try {
         await patch(`sync_runs?id=eq.${runId}`, {
@@ -419,13 +421,15 @@ async function doSync({ trigger, creatorId, failedOnly, depth, requestedBy, requ
 /**
  * Один обход. Пока идёт предыдущий — ждёт его в очереди.
  * `{ trigger: 'schedule'|'catchup'|'manual'|'retry', creatorId?, failedOnly?, depth?,
- *    requestedBy?, requestIds?, onLog? }`
+ *    requestedBy?, requestIds?, slotLabel?, onLog? }`
+ * `slotLabel` — час неудавшегося слота у повтора: если и повтор не удался, письмо обхода
+ * получает строку «вторая неудача подряд после слота HH:MM» и второго письма не бывает.
  * Отдаёт `{ runId, ok, done, failed, error, failures, depth, log }` — исключений не бросает.
  * `failures` — `[{ handle, error }]` по каждому неудавшемуся креатору: из них резидент
  * собирает сообщение владельцу в Telegram.
  */
-export function runSync({ trigger = "manual", creatorId = null, failedOnly = false, depth = "all", requestedBy = null, requestIds = [], onLog } = {}) {
-  const args = { trigger, creatorId, failedOnly, depth: depth === "week" ? "week" : "all", requestedBy, requestIds, onLog };
+export function runSync({ trigger = "manual", creatorId = null, failedOnly = false, depth = "all", requestedBy = null, requestIds = [], slotLabel = null, onLog } = {}) {
+  const args = { trigger, creatorId, failedOnly, depth: depth === "week" ? "week" : "all", requestedBy, requestIds, slotLabel, onLog };
   pending++;
   const next = chain.then(
     () => doSync(args),

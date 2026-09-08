@@ -1,38 +1,62 @@
--- Версия 11 (2026-09-08): комментарии к видео — не только число, но и сами тексты
--- (владелец: «коменты тоже нужно собирать, и количество, и сами»).
---
--- Число комментариев уже лежит в снимках (video_snaps.comments). Тексты — отдельной таблицей:
--- одна строка на комментарий площадки, повторный обход обновляет лайки и last_seen_at.
--- Пишет только сборщик (service_role), сайт читает то, что пускает can_see_creator через видео.
+-- Версия 4 (2026-09-08): график «Динамика» по пяти рядам, как на макете владельца —
+-- к просмотрам и лайкам по дням добавляются комментарии, репосты и сохранения.
+-- Обе функции пересоздаются с новым набором колонок; сайт читает их по именам.
 
-create table public.video_comments (
-  id            text not null,                                              -- id комментария на площадке
-  video_id      text not null references public.videos (id) on delete cascade,
-  parent_id     text,                                                       -- ответ на комментарий: id родителя, у корневых null
-  author_handle text not null default '',                                   -- @имя автора
-  author_name   text not null default '',                                   -- отображаемое имя автора
-  text          text not null default '',
-  likes         integer,
-  replies       integer,                                                    -- число ответов у корневого комментария
-  created_at    timestamptz,                                                -- когда написан на площадке
-  first_seen_at timestamptz not null default now(),
-  last_seen_at  timestamptz not null default now(),
-  primary key (video_id, id)
-);
+drop function public.daily_views_all(timestamptz, timestamptz);
+drop function public.creator_daily_views(uuid, timestamptz, timestamptz);
 
-comment on table public.video_comments is 'Комментарии к видео с площадок. Пишет сборщик, читают вошедшие по видимости креатора.';
+create function public.creator_daily_views(p_creator uuid, p_from timestamptz, p_to timestamptz)
+returns table (day date, views bigint, likes bigint, comments bigint, shares bigint, saves bigint)
+language sql
+stable
+security invoker
+set search_path = ''
+as $$
+  with days as (
+    select generate_series(date_trunc('day', p_from), date_trunc('day', p_to), interval '1 day')::date as day
+  ),
+  per_video_day as (
+    select distinct on (d.day, s.video_id) d.day, s.video_id, s.views, s.likes, s.comments, s.shares, s.saves
+    from days d
+    join public.videos v on v.creator_id = p_creator and v.ours
+    join public.video_snaps s on s.video_id = v.id and s.taken_at < (d.day + 1)::timestamptz
+    order by d.day, s.video_id, s.taken_at desc
+  )
+  select d.day,
+         coalesce(sum(p.views), 0)::bigint, coalesce(sum(p.likes), 0)::bigint,
+         coalesce(sum(p.comments), 0)::bigint, coalesce(sum(p.shares), 0)::bigint, coalesce(sum(p.saves), 0)::bigint
+  from days d
+  left join per_video_day p on p.day = d.day
+  group by d.day
+  order by d.day;
+$$;
 
-create index video_comments_video_created_idx on public.video_comments (video_id, created_at desc);
-create index video_comments_video_likes_idx   on public.video_comments (video_id, likes desc);
+create function public.daily_views_all(p_from timestamptz, p_to timestamptz)
+returns table (day date, views bigint, likes bigint, comments bigint, shares bigint, saves bigint)
+language sql
+stable
+security invoker
+set search_path = ''
+as $$
+  with days as (
+    select generate_series(date_trunc('day', p_from), date_trunc('day', p_to), interval '1 day')::date as day
+  ),
+  per_video_day as (
+    select distinct on (d.day, s.video_id) d.day, s.video_id, s.views, s.likes, s.comments, s.shares, s.saves
+    from days d
+    join public.videos v on v.ours
+    join public.creators c on c.id = v.creator_id   -- RLS оставит видимых
+    join public.video_snaps s on s.video_id = v.id and s.taken_at < (d.day + 1)::timestamptz
+    order by d.day, s.video_id, s.taken_at desc
+  )
+  select d.day,
+         coalesce(sum(p.views), 0)::bigint, coalesce(sum(p.likes), 0)::bigint,
+         coalesce(sum(p.comments), 0)::bigint, coalesce(sum(p.shares), 0)::bigint, coalesce(sum(p.saves), 0)::bigint
+  from days d
+  left join per_video_day p on p.day = d.day
+  group by d.day
+  order by d.day;
+$$;
 
-alter table public.video_comments enable row level security;
-
-create policy "sees visible comments" on public.video_comments
-  for select to authenticated
-  using (exists (select 1 from public.videos v where v.id = video_id and public.can_see_creator(v.creator_id)));
-
--- Когда комментарии этого видео снимались последний раз: сборщик решает, кого обходить, сайт
--- показывает свежесть списка.
-alter table public.videos add column comments_synced_at timestamptz;
-
-comment on column public.videos.comments_synced_at is 'Последний снятый список комментариев (тексты); null — ещё не снимались.';
+revoke execute on function public.creator_daily_views(uuid, timestamptz, timestamptz) from anon;
+revoke execute on function public.daily_views_all(timestamptz, timestamptz) from anon;

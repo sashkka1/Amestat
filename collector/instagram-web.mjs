@@ -28,8 +28,16 @@
 // комментариями: там уже живут проверка профиля, свой срок на запуск и вторая попытка (Opera
 // на хвосте предыдущего браузера встаёт через раз). Здесь окно скрытое: Instagram отдаёт всё
 // и headless, в отличие от TikTok.
-import { launchProfile, PROFILE_DIR } from "./browser.mjs";
+import { launchProfile, PROFILE_DIR, trimTraffic } from "./browser.mjs";
 import { notice } from "./notices.mjs";
+
+// Куда странице профиля вообще можно ходить. Всё остальное отсекается (`trimTraffic`), плюс
+// независимо от хоста — видео (`media`) и шрифты.
+// ⚠️ Зачем: раньше перехват стоял ТОЛЬКО на шаге комментариев, а этот шаг открывал профиль,
+// ленту и вкладку Reels без него — и держал 55 renderer'ов (владелец, 2026-09-08: «чинить»).
+// ⚠️ Список — тот же, что у комментариев Instagram в `sync.mjs` (`HOSTS_INSTAGRAM`); общего
+// места у них нет, поэтому меняешь здесь — глянь и там.
+const HOSTS_INSTAGRAM = ["instagram.com", "cdninstagram", "fbcdn.net", "facebook.com"];
 
 const NAV_TIMEOUT_MS = 45_000;
 const SETTLE_MS = 5_000;       // столько страница успевает попросить первую пачку
@@ -223,8 +231,17 @@ export async function collectInstagramWeb(creator, { depth = "all", browserChoic
   }
   const ctx = browser.ctx;
 
+  let traffic = null;
   try {
     log?.(`  браузер: ${browser.describe}, профиль ${PROFILE_DIR}`);
+    // Чужие хосты, видео и шрифты в этот браузер не пускаем: браузер живёт весь сбор креатора,
+    // а лента и Reels тянут за собой десятки чужих кадров. Не поставился перехват — шаг всё
+    // равно идёт, просто прожорливее.
+    try {
+      traffic = await trimTraffic(ctx, HOSTS_INSTAGRAM, { log });
+    } catch (e) {
+      log?.(`  лишнее отсечь не вышло: ${String(e?.message ?? e).split("\n")[0]}`);
+    }
     // Отсутствие cookie `sessionid` — признак истёкшей сессии, но НЕ приговор сам по себе:
     // приговор выносится ниже, разом со всеми признаками и только на пустых руках.
     const noSession = !(await ctx.cookies("https://www.instagram.com")).some((c) => c.name === "sessionid");
@@ -406,6 +423,11 @@ export async function collectInstagramWeb(creator, { depth = "all", browserChoic
     const videos = picked.map(({ code, productType, ...v }) => v);
     return { profile, videos };
   } finally {
+    // Счёт перехвата пишем при любом исходе: на неудачном обходе он нужнее всего.
+    if (traffic) {
+      const { aborted, passed } = traffic();
+      log?.(`  лишних запросов отсечено ${aborted}, пропущено ${passed}`);
+    }
     // ⚠️ Профиль НЕ стирается: в нём вход фейкового аккаунта. Про это помнит сам `cleanup()`.
     // Вкладку закрываем сами: профиль постоянный, и незакрытая всплывёт при следующем запуске.
     await browser.cleanup();

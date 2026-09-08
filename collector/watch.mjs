@@ -20,9 +20,18 @@
 // их итог человек видит на сайте сам.
 //
 // Про свои беды резидент сообщает сам: отвалившийся Realtime, просьба, пойманная опросом
-// вместо подписки, назначенный повтор и молчащая база уходят замечаниями (`notices.mjs`), но не
-// чаще одного сообщения в 5 минут на код. Замечания самого обхода к ним не примешиваются — их
-// в конце обхода отправляет `sync.mjs` одним сообщением.
+// вместо подписки, назначенный повтор и молчащая база уходят замечаниями (`notices.mjs`) —
+// ОДНИМ письмом на все коды и не чаще раза в 5 минут. Замечания самого обхода к ним не
+// примешиваются: их в конце обхода отправляет `sync.mjs` своим сообщением.
+//
+// ⚠️ Правила тишины (владелец, 2026-09-08 — семь сообщений за 12 минут после сна ноутбука):
+//   • Realtime мигает CHANNEL_ERROR/TIMED_OUT → SUBSCRIBED по десять раз на дню, и это норма:
+//     письмо уходит, только если подписки нет дольше пяти минут подряд, и один раз о возвращении.
+//   • Одиночный `fetch failed` — не беда: пишем, когда опрос не выходит три раза подряд.
+//   • Первые 90 секунд после старта и после сна (часы «прыгнули» — между тиками больше 3 минут)
+//     замечания о сети только в лог: сеть после пробуждения встаёт не сразу.
+//   • «Повтор назначен» — письмо только при свежей неудаче; восстановленный после перезапуска
+//     повтор уходит строкой в лог: владелец это письмо уже получал.
 //
 // ⚠️ `seen_at` у просьбы ставится СРАЗУ, как только резидент её услышал, — до обхода и до
 // очереди. Это ответ сторожу в базе (pg_cron, миграция v8): просьба, не принятая за 3 минуты,
@@ -39,7 +48,11 @@ import { runSync, busy } from "./sync.mjs";
 import { missedSlot, nextSlot, retryDue } from "./schedule.mjs";
 import { resolveBrowser, killLeftoverBrowsers } from "./browser.mjs";
 import { sendTelegram } from "./telegram.mjs";
-import { residentNotice, setNoticeLog } from "./notices.mjs";
+import {
+  residentNotice, setNoticeLog, startWarmup,
+  streak, sleepGap, realtimeStep, realtimeDown,
+  DB_STREAK, REALTIME_DOWN_MS,
+} from "./notices.mjs";
 
 const TICK_MS = 60_000;   // как часто смотрим на часы
 // Страховка на случай отвалившегося Realtime — раз в минуту, а не реже: сторож в базе ждёт
@@ -77,6 +90,18 @@ function log(text) {
 // обхода — значит и писать о них надо в тот же лог, с отметкой времени.
 setNoticeLog(log);
 
+// ------------------------------------------------------------------ база: считаем неудачи подряд
+// Одиночный `fetch failed` владельцу не нужен: сеть моргнула — следующая минута всё поправит.
+// Письмо уходит, когда дело не выходит три раза подряд (три минуты), и один раз о возвращении.
+const dbStreaks = new Map();   // что именно не вышло → состояние счётчика
+
+function dbResult(what, ok, text = "") {
+  const { state, say } = streak(dbStreaks.get(what), ok, DB_STREAK);
+  dbStreaks.set(what, state);
+  if (say === "down") residentNotice("db", `${what} не выходит ${state.fails} раз подряд: ${text}`);
+  else if (say === "up") residentNotice("db", `${what}: связь с базой вернулась`);
+}
+
 // ------------------------------------------------------------------ очередь просьб с сайта
 const pending = new Map();   // id просьбы → строка
 const handled = new Set();   // уже отданные в обход, чтобы опрос не подобрал их второй раз
@@ -104,11 +129,12 @@ async function markSeen(ids) {
   try {
     await patch(`sync_requests?id=in.(${ids.join(",")})&seen_at=is.null`, { seen_at: new Date().toISOString() });
     log(`просьбы приняты: ${ids.map((i) => `#${i}`).join(", ")}`);
+    dbResult("отметка просьб принятыми", true);
   } catch (e) {
     // Не пометилось — обход всё равно пойдёт, но сторож может успеть позвать владельца зря.
     const text = String(e?.message ?? e).split("\n")[0];
     log(`просьбы не помечены принятыми: ${text}`);
-    residentNotice("db", `просьбы не помечены принятыми: ${text}`);
+    dbResult("отметка просьб принятыми", false, text);
   }
 }
 
@@ -162,7 +188,13 @@ async function launch(opts) {
 let retryTimer = null;
 let retryAt = null;
 
-function planRetry(due, slotLabel) {
+/**
+ * Назначает повтор. `fresh` — обход только что не удался; письмо «повтор назначен» уходит
+ * ТОЛЬКО в этом случае. Повтор, восстановленный по базе после перезапуска (в том числе
+ * просроченный, который пойдёт сразу), — строка в лог: это письмо владелец уже получал в тот
+ * раз, когда повтор назначался впервые, а результат обхода придёт своим письмом.
+ */
+function planRetry(due, slotLabel, { fresh = false } = {}) {
   if (retryTimer) {
     log(`повтор уже назначен на ${retryAt.toLocaleString()} — второй не завожу`);
     return;
@@ -178,22 +210,22 @@ function planRetry(due, slotLabel) {
       residentNotice("run", `повтор сорвался: ${text}`);
     });
   }, delay);
-  log(`повтор назначен на ${due.toLocaleString()} (через ${Math.round(delay / 60_000)} мин), слот ${slotLabel}`);
-  residentNotice("retry", `обход слота ${slotLabel} не удался — повтор назначен на ${due.toLocaleTimeString()}`);
+  log(`повтор ${fresh ? "назначен" : "восстановлен"} на ${due.toLocaleString()} (через ${Math.round(delay / 60_000)} мин), слот ${slotLabel}${fresh ? "" : " — письмо не шлю, оно уже уходило"}`);
+  if (fresh) residentNotice("retry", `обход слота ${slotLabel} не удался — повтор назначен на ${due.toLocaleTimeString()}`);
 }
 
-/** Одно сообщение владельцу: обход не удался дважды. */
-async function callOwner({ slotLabel, retryLabel, failures, error, runId }) {
+/**
+ * Сообщение владельцу о том, что повтор не смог даже начаться: база недоступна, обхода нет,
+ * значит и письма от `reportRun` не будет — сказать больше некому.
+ * ⚠️ Неудачный повтор сюда не попадает: у него есть своё письмо обхода со строкой
+ * «вторая неудача подряд после слота HH:MM» (владелец, 2026-09-08: два письма об одном событии).
+ */
+async function callOwner({ slotLabel, retryLabel, error }) {
   const lines = [
-    `Amestat: обход по расписанию не удался дважды. Слот ${slotLabel}, повтор ${retryLabel}.`,
+    `Amestat: повтор обхода не смог начаться. Слот ${slotLabel}, повтор ${retryLabel}.`,
+    `База не ответила: ${error}`,
+    "Строки в sync_runs нет — на сайте этого тоже не видно.",
   ];
-  if (failures?.length) {
-    lines.push("Не собрались:");
-    for (const f of failures) lines.push(`@${f.handle} — ${f.error}`);
-  } else if (error) {
-    lines.push(`Обход не дошёл до креаторов: ${error}`);
-  }
-  lines.push(runId ? `Подробности в sync_runs #${runId}.` : "Строки в sync_runs нет — база была недоступна.");
   const sent = await sendTelegram(lines.join("\n"), { log });
   if (sent) log("владельцу отправлено сообщение в Telegram");
 }
@@ -211,7 +243,7 @@ async function runRetry(slotLabel) {
     // владельцу надо сказать: сам он этого не увидит, сайт тоже читает из базы.
     const text = String(e?.message ?? e).split("\n")[0];
     log(`повтор не начался: ${text}`);
-    await callOwner({ slotLabel, retryLabel, failures: [], error: text, runId: null });
+    await callOwner({ slotLabel, retryLabel, error: text });
     return;
   }
   if (failedCreators.length === 0) {
@@ -220,15 +252,16 @@ async function runRetry(slotLabel) {
   }
 
   log(`повтор по неудавшимся (${failedCreators.map((c) => `@${c.handle}`).join(", ")})`);
-  const res = await launch({ trigger: "retry", failedOnly: true, depth: "all" });
-  if (res.ok) return;
-  await callOwner({ slotLabel, retryLabel, failures: res.failures, error: res.error, runId: res.runId });
+  // `slotLabel` уходит в обход: неудача повтора скажется строкой в его собственном письме,
+  // а второго письма (прежний `callOwner`) больше нет.
+  const res = await launch({ trigger: "retry", failedOnly: true, depth: "all", slotLabel });
+  if (!res.ok) log(`вторая неудача подряд после слота ${slotLabel} — сказано письмом обхода #${res.runId ?? "?"}`);
 }
 
 /** Обход по расписанию или догон: неудача заводит повтор через час. */
 async function runScheduled(trigger, slot) {
   const res = await launch({ trigger, depth: "all" });
-  if (!res.ok && !stopping) planRetry(new Date(Date.now() + env.retryMs), hhmm(slot ?? new Date()));
+  if (!res.ok && !stopping) planRetry(new Date(Date.now() + env.retryMs), hhmm(slot ?? new Date()), { fresh: true });
   return res;
 }
 
@@ -264,6 +297,9 @@ const browser = (() => {
     return `не выбран (${String(e?.message ?? e).split("\n")[0]})`;
   }
 })();
+// Прогрев: первые полторы минуты сеть только поднимается (особенно если компьютер спал), и
+// её отказы владельцу не нужны — они уходят в лог и никуда больше.
+startWarmup("старта");
 log(`резидент запущен. Браузер: ${browser}. Пауза между креаторами ${Math.round(env.pauseMs / 1000)} с. Повтор после неудачи через ${Math.round(env.retryMs / 60_000)} мин. Instagram: ${env.igSource}. Логи: ${logsDir}`);
 
 // 0. Остатки прошлых обходов: упавший обход оставляет окно Opera на нашем профиле, а оно и
@@ -282,8 +318,17 @@ try {
 // 1. Часы: каждую минуту смотрим, не наступил ли слот.
 let nextAt = nextSlot(new Date());
 log(`следующий слот: ${nextAt.toLocaleString()}`);
+let lastTickAt = Date.now();
 const tick = setInterval(() => {
   const now = new Date();
+  // Часы «прыгнули» — компьютер спал, а не тикал. Сеть после пробуждения встаёт не сразу,
+  // поэтому её ближайшие отказы идут только в лог (прогрев).
+  const slept = sleepGap(lastTickAt, now.getTime());
+  lastTickAt = now.getTime();
+  if (slept > 0) {
+    log(`прогрев после сна: ушло ${slept} мин`);
+    startWarmup("сна");
+  }
   if (now >= nextAt) {
     const slot = nextAt;
     nextAt = nextSlot(now);
@@ -297,7 +342,40 @@ const tick = setInterval(() => {
 }, TICK_MS);
 
 // 2. Realtime: вставки в sync_requests.
-let realtimeBroke = false;   // была ли подписка сломана: чтобы сказать и о возвращении
+// Подписка у Supabase переподключается сама по десять раз на дню (в логе 2026-09-08: 13:31,
+// 15:31, 15:49, 16:12, 17:33…), и мигание CHANNEL_ERROR/TIMED_OUT → SUBSCRIBED внутри пяти
+// минут событием не считается вовсе. Сторож заводится на пять минут и снимается возвращением
+// подписки; сработал — значит просьбы всё это время ловит только опрос, и вот об этом письмо.
+let realtime = { downSince: null, told: false };
+let realtimeTimer = null;
+
+function realtimeStatus(ok) {
+  const step = realtimeStep(realtime, ok, Date.now());
+  realtime = step.state;
+  if (ok) {
+    if (realtimeTimer) {
+      clearTimeout(realtimeTimer);
+      realtimeTimer = null;
+    }
+    if (step.say?.kind === "up") {
+      residentNotice("realtime", `Realtime вернулся, перерыв ${step.say.minutes} мин — просьбы снова ловлю подпиской`);
+    }
+    return;
+  }
+  // ⚠️ Сторож заводится один раз на перерыв: CHANNEL_ERROR сыплется пачками, и перезавод
+  // таймера на каждом отодвигал бы пять минут бесконечно.
+  if (realtimeTimer || realtime.told) return;
+  realtimeTimer = setTimeout(() => {
+    realtimeTimer = null;
+    const late = realtimeDown(realtime, Date.now());
+    realtime = late.state;
+    if (late.say) {
+      residentNotice("realtime", `Realtime не работает с ${hhmm(new Date(late.say.since))}, просьбы ловлю опросом раз в минуту`);
+    }
+  }, REALTIME_DOWN_MS);
+  realtimeTimer.unref?.();
+}
+
 const supabase = createClient(env.supabaseUrl, env.serviceKey, {
   auth: { persistSession: false, autoRefreshToken: false },
   realtime: { params: { eventsPerSecond: 5 } },
@@ -318,12 +396,10 @@ const channel = supabase
     });
   })
   .subscribe((status) => {
+    // Лог видит каждое мигание — по нему и разбирают, как часто оно случается. Владелец
+    // узнаёт только о затяжном перерыве и о возвращении после него.
     log(`Realtime: ${status}`);
-    // Отвалился и вернулся — оба события стоят замечания: пока подписки нет, просьба с сайта
-    // ждёт опроса, а это до минуты лага. Чаще одного сообщения в 5 минут они не уйдут.
-    if (status !== "SUBSCRIBED") residentNotice("realtime", `подписка на просьбы: ${status}`);
-    else if (realtimeBroke) residentNotice("realtime", "подписка на просьбы вернулась (SUBSCRIBED)");
-    realtimeBroke = status !== "SUBSCRIBED";
+    realtimeStatus(status === "SUBSCRIBED");
   });
 
 // 3. Страховка: раз в минуту спрашиваем невзятые просьбы сами. Берём все, у кого пусто
@@ -345,12 +421,13 @@ async function poll() {
       // пока компьютер спал.
       residentNotice("poll", `просьба #${id} поймана опросом, а не Realtime${firstPoll ? " (первый опрос при старте)" : ""}`);
     }
+    dbResult("опрос просьб", true);
     await markSeen(fresh);
     if (pending.size > 0) await drain();
   } catch (e) {
     const text = String(e?.message ?? e).split("\n")[0];
     log(`опрос просьб не вышел: ${text}`);
-    residentNotice("db", `опрос просьб не вышел: ${text}`);
+    dbResult("опрос просьб", false, text);
   } finally {
     firstPoll = false;
   }
@@ -376,6 +453,10 @@ async function stop(signal) {
     clearTimeout(retryTimer);
     retryTimer = null;
   }
+  if (realtimeTimer) {
+    clearTimeout(realtimeTimer);
+    realtimeTimer = null;
+  }
   try {
     await channel.unsubscribe();
     await supabase.removeAllChannels();
@@ -395,7 +476,9 @@ try {
   const [scheduled] = await get("sync_runs?select=started_at,finished_at,ok&trigger=in.(schedule,catchup)&order=started_at.desc&limit=1");
   const [lastRetry] = await get("sync_runs?select=started_at&trigger=eq.retry&order=started_at.desc&limit=1");
   const due = retryDue(new Date(), scheduled ?? null, lastRetry ?? null, env.retryMs);
-  if (due && !stopping) planRetry(due, hhmm(new Date(scheduled.started_at)));
+  // `fresh: false` — восстановленный повтор владельцу не письмо: он его уже получал тогда,
+  // когда повтор назначался впервые. Просрочен и пойдёт сразу — тем более: придёт письмо обхода.
+  if (due && !stopping) planRetry(due, hhmm(new Date(scheduled.started_at)), { fresh: false });
   else log("несделанных повторов нет");
 } catch (e) {
   const text = String(e?.message ?? e).split("\n")[0];
