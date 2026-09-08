@@ -24,13 +24,12 @@
 // Список идёт от новых к старым, поэтому «неделя» — ранний выход, а не фильтр в конце;
 // отфильтровать всё равно надо: в последней пачке приезжают старые соседи по странице.
 
-import { chromium } from "playwright-core";
-import { existsSync } from "node:fs";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { resolveBrowser } from "./browser.mjs";
+// Браузер поднимается общим `launchProfile()` из `browser.mjs` — тем же, которым ходят за
+// комментариями: там уже живут проверка профиля, свой срок на запуск и вторая попытка (Opera
+// на хвосте предыдущего браузера встаёт через раз). Здесь окно скрытое: Instagram отдаёт всё
+// и headless, в отличие от TikTok.
+import { launchProfile, PROFILE_DIR } from "./browser.mjs";
 
-const PROFILE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "profile-opera");
 const NAV_TIMEOUT_MS = 45_000;
 const SETTLE_MS = 5_000;       // столько страница успевает попросить первую пачку
 const FEED_ROUNDS = 40;        // потолок кругов прокрутки ленты
@@ -47,6 +46,8 @@ const RATE_JSON = /Please wait a few minutes|"require_login"|checkpoint_required
 const MISSING_TEXT = /Sorry, this page isn'?t available|Извините, эта страница недоступна|К сожалению, эта страница недоступна|Страница недоступна/i;
 const PRIVATE_TEXT = /This account is private|Аккаунт закрыт|закрытый аккаунт/i;
 
+// Те же слова, что в `comments-instagram.mjs`: беда одна и та же, и владелец должен читать
+// одинаковый текст, откуда бы он ни пришёл. ⚠️ Дубль намеренный — правишь здесь, правь и там.
 const ERR_SESSION = "Instagram: сессия фейкового аккаунта истекла — войди в Opera заново и сними копию профиля";
 const ERR_LIMIT = "Instagram: площадка ограничила запросы, попробуй позже";
 
@@ -209,29 +210,23 @@ async function scrollRound(page) {
 export async function collectInstagramWeb(creator, { depth = "all", browserChoice = "", log } = {}) {
   const handle = String(creator?.handle ?? "").replace(/^@/, "");
   if (!handle) throw new Error("у креатора пустой handle");
-  if (!existsSync(PROFILE_DIR)) {
-    throw new Error(`Instagram: нет копии профиля Opera (${PROFILE_DIR}) — сними её с входом фейкового аккаунта`);
-  }
   const since = depth === "week" ? Date.now() - WEEK_MS : null;
 
-  const browser = resolveBrowser(browserChoice);
-  let ctx = null;
+  // Нет профиля, не поднялся браузер — оба текста приходят из `launchProfile`; своих слов
+  // добавляем ровно одно, чтобы в `sync_error` было видно площадку.
+  let browser = null;
   try {
-    ctx = await chromium.launchPersistentContext(PROFILE_DIR, {
-      ...(browser.executablePath ? { executablePath: browser.executablePath } : { channel: "chrome" }),
-      headless: true,
-      viewport: { width: 1280, height: 900 },
-      args: ["--disable-blink-features=AutomationControlled", "--no-first-run"],
-      ignoreDefaultArgs: ["--enable-automation"],
-    });
+    browser = await launchProfile(browserChoice, { headless: true });
   } catch (e) {
-    throw new Error(`Instagram: браузер не запустился (${browser.describe}): ${String(e?.message ?? e).split("\n")[0]}`);
+    throw new Error(`Instagram: ${String(e?.message ?? e).split("\n")[0]}`);
   }
+  const ctx = browser.ctx;
 
   try {
     log?.(`  браузер: ${browser.describe}, профиль ${PROFILE_DIR}`);
-    const names = (await ctx.cookies("https://www.instagram.com")).map((c) => c.name);
-    if (!names.includes("sessionid")) throw new Error(ERR_SESSION);
+    // Отсутствие cookie `sessionid` — признак истёкшей сессии, но НЕ приговор сам по себе:
+    // приговор выносится ниже, разом со всеми признаками и только на пустых руках.
+    const noSession = !(await ctx.cookies("https://www.instagram.com")).some((c) => c.name === "sessionid");
 
     const page = await ctx.newPage();
     const posts = new Map();   // pk → узел ленты
@@ -294,7 +289,19 @@ export async function collectInstagramWeb(creator, { depth = "all", browserChoic
     await page.waitForTimeout(SETTLE_MS);
 
     const head = await readHead(page);
-    if (lostSession || head.loginWall) throw new Error(ERR_SESSION);
+    const stats = pickStats(head);
+    // Собрать хоть что-нибудь — значит прочесть счётчики профиля или получить публикации.
+    const gotSomething = () => posts.size > 0 || stats.followers.value !== null || stats.posts.value !== null;
+
+    // ⚠️ Ни форма входа, ни пометка `login_required`, ни отсутствие cookie `sessionid` сами по
+    // себе не означают потерянную сессию: форму Instagram держит на странице и у вошедшего, а
+    // `login_required` приезжает в отдельных ответах при живой сессии (проба 2026-09-08 — та же
+    // ложная тревога, что уже вылечена в `comments-instagram.mjs`). Приговором это становится,
+    // только когда собрать не удалось ничего — ни профиля, ни публикаций.
+    if ((noSession || lostSession || head.loginWall) && !gotSomething()) {
+      log?.(`  вход не подтвердился: адрес ${head.url}, стена входа=${head.loginWall}, login_required=${lostSession}, cookie sessionid=${noSession ? "нет" : "есть"}, публикаций ${posts.size}`);
+      throw new Error(ERR_SESSION);
+    }
     // Ограничение объявляем, только когда оно и правда помешало: одинокая пометка в чужом
     // ответе при пришедшей первой пачке — не повод объявить обход неудачным.
     if ((limited || RATE_TEXT.test(head.bodyText)) && posts.size === 0) throw new Error(ERR_LIMIT);
@@ -303,10 +310,7 @@ export async function collectInstagramWeb(creator, { depth = "all", browserChoic
     if (status === 404 || (MISSING_TEXT.test(head.bodyText) && posts.size === 0)) throw new Error(`Instagram: профиль не найден: @${handle}`);
     if (PRIVATE_TEXT.test(head.bodyText) && posts.size === 0) throw new Error(`Instagram: закрытый профиль: @${handle}`);
 
-    const stats = pickStats(head);
-    if (stats.followers.value === null && stats.posts.value === null && posts.size === 0) {
-      throw new Error(`Instagram: профиль не найден: @${handle}`);
-    }
+    if (!gotSomething()) throw new Error(`Instagram: профиль не найден: @${handle}`);
     log?.(`  счётчики профиля: подписчики ${stats.followers.value ?? "?"} (${stats.followers.from}${stats.followers.approx ? ", ПРИБЛИЗИТЕЛЬНО" : ""}), подписки ${stats.following.value ?? "?"} (${stats.following.from}), публикаций ${stats.posts.value ?? "?"} (${stats.posts.from})`);
 
     // Лента: листаем до конца, до потолка или до первой публикации старше недели.
@@ -316,7 +320,8 @@ export async function collectInstagramWeb(creator, { depth = "all", browserChoic
       await scrollRound(page);
       stale = posts.size === before ? stale + 1 : 0;
     }
-    if (lostSession) throw new Error(ERR_SESSION);
+    // Тот же порядок, что и до прокрутки: пометка в ответе — приговор только на пустых руках.
+    if ((noSession || lostSession) && !gotSomething()) throw new Error(ERR_SESSION);
     if (limited && posts.size === 0) throw new Error(ERR_LIMIT);
 
     const owner = [...posts.values()].find((n) => n.user?.username?.toLowerCase() === handle.toLowerCase())?.user ?? null;
@@ -383,10 +388,7 @@ export async function collectInstagramWeb(creator, { depth = "all", browserChoic
     const videos = picked.map(({ code, productType, ...v }) => v);
     return { profile, videos };
   } finally {
-    try {
-      await ctx.close();
-    } catch {
-      // Браузер мог упасть сам. ⚠️ Профиль НЕ стираем: в нём вход фейкового аккаунта.
-    }
+    // ⚠️ Профиль НЕ стирается: в нём вход фейкового аккаунта. Про это помнит сам `cleanup()`.
+    await browser.cleanup();
   }
 }

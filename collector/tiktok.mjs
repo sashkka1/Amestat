@@ -107,12 +107,15 @@ async function attempt(handle, { browserChoice, log, since = null }) {
     const stopAfter = await page.evaluate((re) => new RegExp(re, "i").test(document.body.innerText), STOP_SCREEN.source);
     const all = [...seen.values()].map((v) => {
       const vs2 = v.statsV2 ?? {}, vs1 = v.stats ?? {};
+      // Фотопост (карусель картинок) TikTok адресует как /photo/<id>: у него в ответе есть
+      // `imagePost`, а страница /video/<id> не открывается — та же развилка, что в comments-tiktok.
+      const isPhoto = !!v.imagePost;
       return {
         id: v.id,
         publishedAt: v.createTime ? new Date(Number(v.createTime) * 1000).toISOString() : null,
         caption: v.desc || "",
-        coverUrl: v.video?.cover ?? null,
-        url: `https://www.tiktok.com/@${handle}/video/${v.id}`,
+        coverUrl: v.video?.cover ?? v.imagePost?.images?.[0]?.imageURL?.urlList?.[0] ?? null,
+        url: `https://www.tiktok.com/@${handle}/${isPhoto ? "photo" : "video"}/${v.id}`,
         durationS: v.video?.duration ?? null,
         views: num(vs2.playCount ?? vs1.playCount),
         likes: num(vs2.diggCount ?? vs1.diggCount),

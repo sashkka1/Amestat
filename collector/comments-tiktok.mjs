@@ -14,6 +14,11 @@
 //     запрос, одноразовый msToken сгорает — и приходит то же пустое тело плюс капча.
 //  3. Прокручивать надо САМ список: колесо над правой панелью его не двигает. Ищем
 //     прокручиваемого предка первого комментария (это `DivCommentMain`) и двигаем `scrollTop`.
+//  4. Не всякий пост живёт по адресу `/video/<id>`: фотопосты-карусели TikTok адресует через
+//     `/photo/<id>`, а на `/video/<id>` отвечает ошибкой (оба прогона 2026-09-08 на видео
+//     7682811121417456929 у @toplombard_warszaw — `net::ERR_HTTP_RESPONSE_CODE_FAILURE`).
+//     Поэтому неудачное открытие `/video/` — не приговор: тот же id пробуется по `/photo/`,
+//     дальше всё как обычно. Комментарии фотопостов идут в ту же таблицу.
 //
 // Из DOM комментарии не читаются вовсе: в разметке нет `cid`, а без него строку не записать —
 // ключ таблицы `(video_id, id)`. Разметка нужна только как признак «список отрисовался».
@@ -29,11 +34,14 @@ const FIRST_WAIT_MS = 20_000;   // столько ждём первую пачк
 const ROUNDS = 40;              // потолок кругов прокрутки списка
 const STALE_ROUNDS = 4;         // столько кругов без прироста — значит список кончился
 const ROUND_WAIT_MS = 8_000;    // столько ждём ответ на круг прокрутки
+const POST_WAIT_MS = 5_000;     // столько ждём сам пост на странице, прежде чем звать его пропавшим
 const TAB_LABELS = ["Комментарии", "Comments"];
 const COOKIE_LABELS = ["Разрешить все", "Allow all"];
 
 const STOP_SCREEN = /Передвиньте ползунок|совместить пазл|Drag the slider|puzzle|captcha|Verify to continue|Something went wrong/i;
 const ITEM_SELECTOR = '[class*="DivCommentItemWrapper"], [data-e2e="comment-level-1"]';
+// Признак «пост на странице есть»: плеер видео или контейнер просмотра (у фотопоста плеера нет).
+const POST_SELECTOR = 'video, [data-e2e="video-detail"], [data-e2e="detail-photo"], [class*="DivBrowserModeContainer"], [class*="DivVideoContainer"]';
 
 const num = (x) => (x === null || x === undefined || x === "" ? null : Number(x));
 
@@ -83,6 +91,67 @@ async function dismissCookies(page) {
     }
   }
   return false;
+}
+
+/**
+ * Тот же пост по адресу `/photo/<id>` — так TikTok адресует фотопосты-карусели.
+ * Отдаёт null, если адреса не из чего собрать (нет ни `/video/<id>`, ни ника с id).
+ */
+export function photoUrl(url, video) {
+  const link = String(url ?? "");
+  if (/\/video\/\d+/.test(link)) return link.replace(/\/video\/(\d+)/, "/photo/$1");
+  const handle = String(video?.creatorHandle ?? "").replace(/^@/, "");
+  const id = String(video?.id ?? "");
+  return handle && id ? `https://www.tiktok.com/@${handle}/photo/${id}` : null;
+}
+
+/**
+ * Одно открытие адреса. Отдаёт `{ error, post }`: беда навигации (или null) и виден ли сам пост.
+ * Сюда же уехали пауза на «встать на ноги» и баннер cookies — вторая попытка ждёт того же.
+ */
+async function openOnce(page, link) {
+  try {
+    const res = await page.goto(link, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
+    const status = res?.status() ?? null;
+    if (status !== null && status >= 400) return { error: `ответ ${status}`, post: false };
+  } catch (e) {
+    return { error: String(e?.message ?? e).split("\n")[0], post: false };
+  }
+  await page.waitForTimeout(SETTLE_MS);
+  await dismissCookies(page);
+  let post = true;
+  try {
+    await page.waitForSelector(POST_SELECTOR, { state: "attached", timeout: POST_WAIT_MS });
+  } catch {
+    // Ни плеера, ни контейнера просмотра — страница открылась, а поста на ней нет.
+    post = false;
+  }
+  return { error: null, post };
+}
+
+/**
+ * Страница поста. Сначала `/video/<id>`; не открылась или поста на ней не видно — тот же id
+ * по адресу `/photo/<id>` (см. пункт 4 в шапке файла). Отдаёт, каким адресом кончилось дело;
+ * не открылось ничем — бросает ту же ошибку, что бросалась и раньше.
+ * Экспортируется ради теста: живьём этот путь виден, только когда TikTok опять сломает адрес.
+ */
+export async function openPost(page, url, video, log) {
+  const first = await openOnce(page, url);
+  if (!first.error && first.post) return "/video/";
+  const why = first.error ?? "поста на странице нет";
+  const alt = photoUrl(url, video);
+  if (!alt || alt === url) {
+    if (first.error) throw new Error(`страница видео не открылась: ${why}`);
+    return "/video/";   // адреса `/photo/` не из чего собрать — работаем с тем, что открылось
+  }
+  log?.(`    /video/ не открылся, пробую /photo/ (${why})`);
+  const second = await openOnce(page, alt);
+  if (!second.error) return "/photo/";
+  if (first.error) throw new Error(`страница видео не открылась: ${why}; /photo/ тоже: ${second.error}`);
+  // `/video/` всё-таки открывалась, просто без плеера, — возвращаемся к ней и пробуем как есть.
+  log?.(`    /photo/ не открылся (${second.error}) — работаю с /video/`);
+  await openOnce(page, url);
+  return "/video/";
 }
 
 /**
@@ -188,13 +257,7 @@ export async function collectTikTokComments(ctx, video, { max = 100, log } = {})
   });
 
   try {
-    try {
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
-    } catch (e) {
-      throw new Error(`страница видео не открылась: ${String(e?.message ?? e).split("\n")[0]}`);
-    }
-    await page.waitForTimeout(SETTLE_MS);
-    await dismissCookies(page);
+    const where = await openPost(page, url, video, log);
     let opened = await openCommentsTab(page, log);
     if (!opened) {
       // Первая страница после запуска браузера открывается «холодной»: правой панели нет
@@ -235,7 +298,7 @@ export async function collectTikTokComments(ctx, video, { max = 100, log } = {})
     }
 
     state = await readState(page, ITEM_SELECTOR, STOP_SCREEN.source);
-    log?.(`    видео ${videoId}: комментариев ${seen.size}, ответов ${bodies} (пустых ${empty}), кругов ${rounds}, строк в списке ${state.real}/${state.items}, вкладка ${opened ?? "не открылась"}${state.stopScreen ? ", СТОП-ЭКРАН" : ""}`);
+    log?.(`    видео ${videoId}: комментариев ${seen.size}, ответов ${bodies} (пустых ${empty}), кругов ${rounds}, строк в списке ${state.real}/${state.items}, вкладка ${opened ?? "не открылась"}, адрес ${where}${state.stopScreen ? ", СТОП-ЭКРАН" : ""}`);
 
     if (seen.size === 0) {
       if (state.stopScreen) throw new Error(`TikTok показал капчу на видео ${videoId}`);

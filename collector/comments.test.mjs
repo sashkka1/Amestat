@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseTikTokComments } from "./comments-tiktok.mjs";
+import { parseTikTokComments, photoUrl, openPost } from "./comments-tiktok.mjs";
 import { parseInstagramComments, commentsFromHtml } from "./comments-instagram.mjs";
 
 // --- TikTok: `/api/comment/list/` ---------------------------------------------------------
@@ -57,6 +57,80 @@ test("TikTok: ответ на комментарий помнит родител
   const { comments } = parseTikTokComments({ comments: [{ cid: "2", reply_id: "1", text: "ответ", user: {} }] });
   assert.equal(comments[0].parentId, "1");
   assert.equal(comments[0].authorHandle, "");
+});
+
+test("TikTok: фотопост адресуется тем же id через /photo/", () => {
+  assert.equal(
+    photoUrl("https://www.tiktok.com/@toplombard_warszaw/video/7682811121417456929", {}),
+    "https://www.tiktok.com/@toplombard_warszaw/photo/7682811121417456929",
+  );
+  // Адреса `/video/` нет вовсе — собираем из ника и id.
+  assert.equal(
+    photoUrl("https://www.tiktok.com/@kto/", { creatorHandle: "@kto", id: "123" }),
+    "https://www.tiktok.com/@kto/photo/123",
+  );
+  // Собрать не из чего — пробовать нечего, и вызывающий это увидит по null.
+  assert.equal(photoUrl("https://www.tiktok.com/", {}), null);
+  // Адрес уже фотопостовый — второй попытки не будет: она совпадёт с первой.
+  assert.equal(
+    photoUrl("https://www.tiktok.com/@kto/photo/123", { creatorHandle: "kto", id: "123" }),
+    "https://www.tiktok.com/@kto/photo/123",
+  );
+});
+
+// --- TikTok: запасной адрес `/photo/` ------------------------------------------------------
+//
+// Живьём эта развилка видна только тогда, когда TikTok снова откажет на `/video/`, поэтому
+// страница здесь поддельная: она помнит, куда ходили, и отвечает так, как велено по адресу.
+
+const VIDEO_URL = "https://www.tiktok.com/@toplombard_warszaw/video/7682811121417456929";
+const PHOTO_URL = "https://www.tiktok.com/@toplombard_warszaw/photo/7682811121417456929";
+
+/** `reply(адрес)` — Error (навигация упала) или код ответа; `hasPost(адрес)` — виден ли пост. */
+function fakePage(reply, hasPost = () => true) {
+  const visited = [];
+  return {
+    visited,
+    async goto(link) {
+      visited.push(link);
+      const answer = reply(link);
+      if (answer instanceof Error) throw answer;
+      return { status: () => answer };
+    },
+    async waitForTimeout() {},
+    async waitForSelector() {
+      if (!hasPost(visited.at(-1))) throw new Error("узел не появился");
+    },
+    // Баннера cookies на поддельной странице нет вовсе.
+    getByRole: () => ({ count: async () => 0, first: () => ({ click: async () => {} }) }),
+  };
+}
+
+test("TikTok: `/video/` не открылся — пост берётся по `/photo/`", async () => {
+  const page = fakePage((link) => (link.includes("/video/") ? new Error("net::ERR_HTTP_RESPONSE_CODE_FAILURE") : 200));
+  const lines = [];
+  assert.equal(await openPost(page, VIDEO_URL, {}, (t) => lines.push(t)), "/photo/");
+  assert.deepEqual(page.visited, [VIDEO_URL, PHOTO_URL], "второй ход идёт по тому же id, но в /photo/");
+  assert.match(lines.join("\n"), /\/video\/ не открылся, пробую \/photo\//);
+});
+
+test("TikTok: страница без поста — тоже повод попробовать `/photo/`", async () => {
+  const page = fakePage(() => 200, (link) => link.includes("/photo/"));
+  assert.equal(await openPost(page, VIDEO_URL, {}, () => {}), "/photo/");
+});
+
+test("TikTok: `/video/` открылся — второго хода нет", async () => {
+  const page = fakePage(() => 200);
+  assert.equal(await openPost(page, VIDEO_URL, {}), "/video/");
+  assert.deepEqual(page.visited, [VIDEO_URL]);
+});
+
+test("TikTok: не открылось ни то ни другое — прежняя ошибка, а не тишина", async () => {
+  const page = fakePage((link) => (link.includes("/video/") ? new Error("net::ERR_HTTP_RESPONSE_CODE_FAILURE") : 404));
+  await assert.rejects(
+    () => openPost(page, VIDEO_URL, {}, () => {}),
+    /^Error: страница видео не открылась: net::ERR_HTTP_RESPONSE_CODE_FAILURE; \/photo\/ тоже: ответ 404$/,
+  );
 });
 
 // --- Instagram: `…media_id__comments__connection` ------------------------------------------
