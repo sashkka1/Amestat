@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { AuthGate } from "@/components/auth-gate";
 import { Page, PageError, PageSkeleton } from "@/components/page";
 import { PeriodChip } from "@/components/period-chip";
+import { SyncButton } from "@/components/sync-button";
 import { CreatorHeader } from "@/components/creator/creator-header";
 import { CreatorStats } from "@/components/creator/creator-stats";
 import { creatorById, listCreatorManagers, listCreatorTags, listTags } from "@/lib/queries";
@@ -85,12 +86,19 @@ function CreatorView({ id }: { id: string }) {
   );
   const period = usePeriod(earliest);
   const name = creator ? creator.display_name || creator.handle : "Креатор";
+  // «Только эта страница» на карточке — это один креатор.
+  const pageCreatorIds = useMemo(() => [id], [id]);
 
   return (
     <Page
       title={name}
       subtitle={creator ? `@${creator.handle}` : undefined}
-      actions={<PeriodChip period={period} />}
+      actions={
+        <>
+          <SyncButton scope={id} pageCreatorIds={pageCreatorIds} onDone={refresh} />
+          <PeriodChip period={period} />
+        </>
+      }
     >
       {error ? (
         <PageError error={error} />

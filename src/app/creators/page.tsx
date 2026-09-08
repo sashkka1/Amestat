@@ -6,6 +6,7 @@ import { SearchIcon } from "lucide-react";
 import { AuthGate } from "@/components/auth-gate";
 import { Page, PageError, PageSkeleton } from "@/components/page";
 import { Avatar } from "@/components/avatar";
+import { PlatformSwitch } from "@/components/platform-switch";
 import { TagPill } from "@/components/tag-pill";
 import { LocalTime } from "@/components/local-time";
 import { TagPicker } from "@/components/creators/tag-picker";
@@ -24,6 +25,7 @@ import {
   listTags,
 } from "@/lib/queries";
 import { fmtNum } from "@/lib/format";
+import { matchesPlatform, PLATFORM_FILTER_LABELS, usePlatformFilter } from "@/lib/platform-filter";
 import { useLoader } from "@/lib/use-loader";
 import { useProfile } from "@/lib/profile-context";
 import type { Creator, CreatorLatest, CreatorOverview, CreatorTag, Tag } from "@/lib/types";
@@ -65,6 +67,9 @@ type Key = "name" | "followers" | "videos" | "views" | "synced";
 function CreatorsScreen() {
   const profile = useProfile();
   const { data, error, loading, reload } = useLoader(loadData, []);
+  // Переключатель тот же, что на дашборде: положение общее через localStorage.
+  const platform = usePlatformFilter();
+  const platformFilter = platform.filter;
   const [search, setSearch] = useState("");
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey] = useState<Key>("views");
@@ -91,14 +96,18 @@ function CreatorsScreen() {
       arr.push(t);
       tagsByCreator.set(ct.creator_id, arr);
     }
-    return data.creators.map((c) => ({
-      creator: c,
-      tags: tagsByCreator.get(c.id) ?? [],
-      followers: latestById.get(c.id)?.followers ?? null,
-      videos: overviewById.get(c.id)?.videos_total ?? 0,
-      views: overviewById.get(c.id)?.views_delta ?? 0,
-    }));
-  }, [data, localTags]);
+    // Площадка отсеивается здесь, до поиска и тегов: счётчик «N из M» считает по строкам
+    // этого списка, значит и M должно быть уже по выбранной площадке.
+    return data.creators
+      .filter((c) => matchesPlatform(platformFilter, c.platform))
+      .map((c) => ({
+        creator: c,
+        tags: tagsByCreator.get(c.id) ?? [],
+        followers: latestById.get(c.id)?.followers ?? null,
+        videos: overviewById.get(c.id)?.videos_total ?? 0,
+        views: overviewById.get(c.id)?.views_delta ?? 0,
+      }));
+  }, [data, localTags, platformFilter]);
 
   function onTagChange(creatorId: string, tagId: string, on: boolean) {
     setLocalTags((prev) => {
@@ -167,9 +176,18 @@ function CreatorsScreen() {
   return (
     <Page
       title="Креаторы"
-      subtitle={profile.role === "admin" ? "Все креаторы" : "Привязанные к вам креаторы"}
+      subtitle={
+        platformFilter === "all"
+          ? profile.role === "admin"
+            ? "Все креаторы"
+            : "Привязанные к вам креаторы"
+          : profile.role === "admin"
+            ? `Только ${PLATFORM_FILTER_LABELS[platformFilter]}`
+            : `Привязанные к вам креаторы · ${PLATFORM_FILTER_LABELS[platformFilter]}`
+      }
       actions={
         <>
+          <PlatformSwitch state={platform} />
           {data && <TagsDialog tags={data.tags} onChanged={reload} />}
           {profile.role === "admin" && <AddCreatorDialog onAdded={reload} />}
         </>
@@ -216,7 +234,11 @@ function CreatorsScreen() {
 
           {visible.length === 0 ? (
             <Empty>
-              {rows.length === 0 ? "Креаторов пока нет." : "Никто не подходит под поиск и фильтр."}
+              {rows.length > 0
+                ? "Никто не подходит под поиск и фильтр."
+                : platformFilter === "all"
+                  ? "Креаторов пока нет."
+                  : "На этой площадке креаторов нет."}
             </Empty>
           ) : (
             <Table className="text-[13px]">

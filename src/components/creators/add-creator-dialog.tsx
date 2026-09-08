@@ -17,12 +17,23 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { PlatformIcon } from "@/components/platform";
 import { createCreator, setCreatorAvatar } from "@/lib/api/creators";
 import { uploadAvatar } from "@/lib/avatar-upload";
 import { parseHandle } from "@/lib/handle";
+import type { Platform } from "@/lib/types";
+
+const PLATFORMS: { key: Platform; label: string; placeholder: string }[] = [
+  { key: "tiktok", label: "TikTok", placeholder: "https://www.tiktok.com/@name или @name" },
+  { key: "instagram", label: "Instagram", placeholder: "https://www.instagram.com/name/ или name" },
+];
+
+const PARSE_ERROR =
+  "Не понял ссылку или имя. Нужно: https://www.tiktok.com/@name, https://www.instagram.com/name/, @name или name";
 
 export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
   const [open, setOpen] = useState(false);
+  const [platform, setPlatform] = useState<Platform>("tiktok");
   const [raw, setRaw] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -31,9 +42,17 @@ export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const parsed = parseHandle(raw);
+  // Голое имя разбирается по выбранной площадке; ссылка с доменом решает сама.
+  const parsed = parseHandle(raw, platform);
+
+  function onRawChange(value: string) {
+    setRaw(value);
+    const byLink = parseHandle(value, platform);
+    if (byLink && byLink.platform !== platform) setPlatform(byLink.platform);
+  }
 
   function reset() {
+    setPlatform("tiktok");
     setRaw("");
     setName("");
     setDescription("");
@@ -46,12 +65,18 @@ export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
     e.preventDefault();
     setError(null);
     if (!parsed) {
-      setError("Не понял ссылку или имя. Нужно: https://www.tiktok.com/@name, @name или name");
+      setError(PARSE_ERROR);
       return;
     }
     setBusy(true);
     try {
-      const created = await createCreator({ raw, name, description, allVideosOurs: allOurs });
+      const created = await createCreator({
+        raw,
+        platform,
+        name,
+        description,
+        allVideosOurs: allOurs,
+      });
       if (!created.ok) {
         setError(created.error);
         return;
@@ -68,7 +93,7 @@ export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
         }
       }
 
-      // Сборщика сайт не зовёт: обход идёт по расписанию в Supabase.
+      // Сборщика отсюда не зовём: данные придут с ближайшим обходом или по кнопке «Обновить».
       toast.success(`@${created.data.handle} добавлен — данные появятся после ближайшего обхода`);
       setOpen(false);
       reset();
@@ -92,28 +117,51 @@ export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
           Добавить вручную
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-md">
+      {/* Семь полей не влезают в низкое окно: диалог не выше экрана, внутри прокрутка. */}
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
         <form onSubmit={submit} className="flex flex-col gap-4">
           <DialogHeader>
             <DialogTitle>Новый креатор</DialogTitle>
             <DialogDescription>
-              Ссылка на профиль TikTok или имя. Статистика появится после ближайшего обхода.
+              Ссылка на профиль TikTok или Instagram — или имя. Статистика появится после
+              ближайшего обхода.
             </DialogDescription>
           </DialogHeader>
+
+          <div className="flex flex-col gap-1.5">
+            <Label>Площадка</Label>
+            <div className="flex gap-1.5">
+              {PLATFORMS.map((p) => (
+                <Button
+                  key={p.key}
+                  type="button"
+                  size="sm"
+                  variant={platform === p.key ? "secondary" : "outline"}
+                  aria-pressed={platform === p.key}
+                  onClick={() => setPlatform(p.key)}
+                >
+                  <PlatformIcon platform={p.key} />
+                  {p.label}
+                </Button>
+              ))}
+            </div>
+          </div>
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="raw">Ссылка или @имя</Label>
             <Input
               id="raw"
               value={raw}
-              onChange={(e) => setRaw(e.target.value)}
-              placeholder="https://www.tiktok.com/@name или @name"
+              onChange={(e) => onRawChange(e.target.value)}
+              placeholder={PLATFORMS.find((p) => p.key === platform)?.placeholder}
               autoFocus
               required
             />
             {raw.trim() && (
               <p className="text-xs text-muted-foreground">
-                {parsed ? `Будет @${parsed.handle} · ${parsed.profileUrl}` : "Не похоже на имя TikTok"}
+                {parsed
+                  ? `Будет @${parsed.handle} · ${parsed.profileUrl}`
+                  : "Не похоже на имя TikTok или Instagram"}
               </p>
             )}
           </div>
@@ -164,7 +212,7 @@ export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             />
             <p className="text-xs text-muted-foreground">
-              Необязательно: без неё аватар подтянет сборщик из TikTok.
+              Необязательно: без неё аватар подтянет сборщик с площадки.
             </p>
           </div>
 

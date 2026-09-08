@@ -7,6 +7,7 @@ import type {
   CreatorOverview,
   CreatorTag,
   DailyViews,
+  Platform,
   Tag,
   Video,
   VideoLatest,
@@ -171,10 +172,16 @@ export async function creatorsOverview(range: PeriodRange): Promise<CreatorOverv
   return data ?? [];
 }
 
-export async function dailyViewsAll(range: PeriodRange): Promise<DailyViews[]> {
+// График по дням считает база, поэтому фильтр площадки уходит в неё параметром
+// (миграция v10): null — все площадки, как было до переключателя.
+export async function dailyViewsAll(
+  range: PeriodRange,
+  platform: Platform | null = null,
+): Promise<DailyViews[]> {
   const { data, error } = await createClient().rpc("daily_views_all", {
     p_from: range.from.toISOString(),
     p_to: range.to.toISOString(),
+    p_platform: platform,
   });
   fail(error);
   return data ?? [];

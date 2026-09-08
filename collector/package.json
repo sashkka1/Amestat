@@ -1,0 +1,16 @@
+{
+  "name": "amestat-collector",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Локальный сборщик статистики Amestat: водит установленный браузер и пишет в Supabase",
+  "scripts": {
+    "run": "node run.mjs",
+    "watch": "node watch.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.115.0",
+    "playwright-core": "1.63.0"
+  }
+}

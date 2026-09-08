@@ -2,7 +2,10 @@
 // Меняется схема — меняется этот файл в тот же заход.
 
 export type Platform = "tiktok" | "instagram";
-export type SyncTrigger = "schedule" | "catchup" | "manual";
+// retry — повтор через час после неудачного обхода по расписанию, заводит сборщик (миграция v7).
+export type SyncTrigger = "schedule" | "catchup" | "manual" | "retry";
+// Глубина обхода (миграция v7): all — весь список видео, week — только за последние 7 дней.
+export type SyncDepth = "all" | "week";
 export type Role = "admin" | "manager";
 
 export type Profile = {
@@ -169,7 +172,28 @@ export type SyncRun = {
   requested_by: string | null;
   // 'all' — обход всех видимых; иначе id одного креатора.
   scope: string;
+  depth: SyncDepth;
 };
+
+// Просьба «обновить» с сайта (миграция v6). Сайт вставляет, сборщик дома забирает:
+// taken_at — забрал, run_id — обход, который её выполнил.
+export type SyncRequest = {
+  id: number;
+  requested_at: string;
+  requested_by: string;
+  // null — обойти всех видимых креаторов.
+  creator_id: string | null;
+  // Резидент дома принял просьбу в очередь: компьютер и сборщик живы (миграция v8).
+  seen_at: string | null;
+  taken_at: string | null;
+  run_id: number | null;
+  depth: SyncDepth;
+  // База сама (pg_cron) написала владельцу в Telegram: просьбу никто не принял за 3 минуты.
+  notified_at: string | null;
+};
+
+// Остальное ставит база: requested_at и depth — по умолчанию, taken_at и run_id — сборщик.
+export type SyncRequestInsert = { requested_by: string; creator_id?: string | null; depth?: SyncDepth };
 
 export type CreatorLatest = {
   creator_id: string;
@@ -259,6 +283,12 @@ export type Database = {
       videos: { Row: Video; Insert: never; Update: VideoUpdate; Relationships: Relationships };
       video_snaps: { Row: VideoSnap; Insert: never; Update: never; Relationships: Relationships };
       sync_runs: { Row: SyncRun; Insert: never; Update: never; Relationships: Relationships };
+      sync_requests: {
+        Row: SyncRequest;
+        Insert: SyncRequestInsert;
+        Update: never;
+        Relationships: Relationships;
+      };
     };
     Views: {
       creator_latest: { Row: CreatorLatest; Relationships: Relationships };
@@ -277,8 +307,9 @@ export type Database = {
         Args: { p_from: string; p_to: string };
         Returns: CreatorOverview[];
       };
+      // p_platform необязателен (миграция v10): null — все площадки.
       daily_views_all: {
-        Args: { p_from: string; p_to: string };
+        Args: { p_from: string; p_to: string; p_platform?: string | null };
         Returns: DailyViews[];
       };
       // Пароль менеджеру ставит админ, старого не видя (миграция v3).

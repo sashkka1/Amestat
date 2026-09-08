@@ -1,15 +1,22 @@
 import { createClient } from "@/lib/supabase/client";
 import { parseHandle } from "@/lib/handle";
+import type { Platform } from "@/lib/types";
 import { fail, UNIQUE_VIOLATION, type ActionResult } from "./result";
 
 export async function createCreator(input: {
   raw: string;
+  // Выбор площадки в диалоге: ссылка с доменом всё равно решает сама.
+  platform: Platform;
   name: string;
   description: string;
   allVideosOurs: boolean;
 }): Promise<ActionResult<{ id: string; handle: string }>> {
-  const parsed = parseHandle(input.raw);
-  if (!parsed) return fail("Не понял ссылку или имя. Нужно: https://www.tiktok.com/@name, @name или name");
+  const parsed = parseHandle(input.raw, input.platform);
+  if (!parsed) {
+    return fail(
+      "Не понял ссылку или имя. Нужно: https://www.tiktok.com/@name, https://www.instagram.com/name/, @name или name",
+    );
+  }
 
   const supabase = createClient();
 
@@ -72,10 +79,14 @@ export async function updateCreator(
 export async function deleteCreator(id: string): Promise<ActionResult> {
   const supabase = createClient();
 
-  // Свои картинки в бакете подчищаем; снимки и видео уйдут каскадом в базе.
-  const { data: files } = await supabase.storage.from("avatars").list(id);
-  if (files && files.length > 0) {
-    await supabase.storage.from("avatars").remove(files.map((f) => `${id}/${f.name}`));
+  // Свои картинки в бакете подчищаем; снимки и видео уйдут каскадом в базе. Два места:
+  // `<id>/` — что загрузил владелец, `instagram/<id>/` — аватар и обложки, которые сборщик
+  // переложил из Instagram (их CDN не даёт показывать картинки на чужом сайте).
+  for (const folder of [id, `instagram/${id}`]) {
+    const { data: files } = await supabase.storage.from("avatars").list(folder);
+    if (files && files.length > 0) {
+      await supabase.storage.from("avatars").remove(files.map((f) => `${folder}/${f.name}`));
+    }
   }
 
   const { error } = await supabase.from("creators").delete().eq("id", id);

@@ -49,3 +49,8 @@ CLAUDE.md
 # Supabase CLI: временные файлы локального окружения
 supabase/.temp/
 supabase/.branches/
+
+# Сборщик: свои зависимости, журналы обходов и профили браузера — только на этом компьютере
+collector/node_modules/
+collector/logs/
+collector/profile*/

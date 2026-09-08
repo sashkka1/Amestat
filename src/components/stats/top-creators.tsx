@@ -37,7 +37,16 @@ export function buildCreatorRows(creators: Creator[], overview: CreatorOverview[
 }
 
 // «Лучшие креаторы» за срок. Ранг — место в текущей сортировке.
-export function TopCreators({ rows, limit }: { rows: CreatorRow[]; limit?: number }) {
+// countLabel — что именно сосчитано в подписи: при фильтре площадки это уже не «все».
+export function TopCreators({
+  rows,
+  limit,
+  countLabel = "Все креаторы",
+}: {
+  rows: CreatorRow[];
+  limit?: number;
+  countLabel?: string;
+}) {
   const [sortKey, setSortKey] = useState<Key>("views");
   const [dir, setDir] = useState<SortDir>("desc");
 
@@ -55,7 +64,7 @@ export function TopCreators({ rows, limit }: { rows: CreatorRow[]; limit?: numbe
 
   return (
     <Panel>
-      <PanelHead title="Лучшие креаторы" subtitle={`Все креаторы: ${rows.length}`} />
+      <PanelHead title="Лучшие креаторы" subtitle={`${countLabel}: ${rows.length}`} />
       {sorted.length === 0 ? (
         <Empty>Креаторов пока нет.</Empty>
       ) : (

@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Сборщик — отдельный Node-пакет со своими правилами, правила Next к нему не относятся.
+    "collector/**",
   ]),
 ]);
 
