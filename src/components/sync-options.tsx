@@ -1,21 +1,19 @@
 "use client";
 
 import { useCallback, useSyncExternalStore } from "react";
-import { Checkbox } from "@/components/ui/checkbox";
-import { cn } from "@/lib/utils";
 
-// Три пункта попапа «Обновить» (владелец, 2026-09-08): что именно снимать в этом обходе —
-// тексты комментариев, ветки ответов под ними и надо ли брать тексты у не наших видео.
-// Уходят в просьбу как sync_requests.comments и .replies (миграция v12) и .all_videos (v13).
+// Память попапа «Обновить» (владелец, 2026-09-08): что именно снимать в этом обходе —
+// тексты комментариев и ветки ответов под ними. Уходят в просьбу как sync_requests.comments
+// и .replies (миграция v12). Сами блоки выбора — в `components/sync-choice.tsx`.
 //
-// Кусок общий для кнопки над страницей (`sync-button.tsx`) и кнопки в строке списка
+// Значение общее для кнопки над страницей (`sync-button.tsx`) и кнопки в строке списка
 // (`creators/row-sync-button.tsx`): выбор один на оба места и живёт в localStorage — как
 // переключатель площадки в `lib/platform-filter.ts`.
 //
-// 🔴 Третья галочка — исключение: она НЕ запоминается и при каждом открытии попапа стоит
-// выключенной. Тексты у всех видео подряд — самый долгий обход, и такой запрос должен быть
-// осознанным каждый раз, а не унаследованным от прошлого раза. Поэтому её состояние живёт
-// в попапе (useState у кнопки), а сюда приходит параметрами.
+// 🔴 Третий блок, «И у не наших видео» (.all_videos, миграция v13), сюда не попадает: он НЕ
+// запоминается и при каждом открытии попапа стоит выключенным. Тексты у всех видео подряд —
+// самый долгий обход, и такой запрос должен быть осознанным каждый раз, а не унаследованным
+// от прошлого раза. Поэтому его состояние живёт в попапе (useState у кнопки).
 
 export const SYNC_COMMENTS_KEY = "amestat.sync.comments";
 export const SYNC_REPLIES_KEY = "amestat.sync.replies";
@@ -92,74 +90,4 @@ export function useSyncOptions(): SyncOptionsState {
   }, []);
 
   return { ...options, setComments, setReplies };
-}
-
-// Сами галочки с подсказкой — одинаковые в обоих попапах.
-// idPrefix разводит id: попапов на странице несколько (кнопка сверху и по кнопке в строке).
-// allVideos/onAllVideos — третья галочка: её состояние держит попап, здесь только показ.
-export function SyncOptionsFields({
-  idPrefix,
-  allVideos,
-  onAllVideos,
-}: {
-  idPrefix: string;
-  allVideos: boolean;
-  onAllVideos: (on: boolean) => void;
-}) {
-  const { comments, replies, setComments, setReplies } = useSyncOptions();
-  const commentsId = `${idPrefix}-comments`;
-  const repliesId = `${idPrefix}-replies`;
-  const allVideosId = `${idPrefix}-all-videos`;
-
-  // Сняли «комментарии» — гаснут обе нижние галочки: без текстов снимать нечего ни в
-  // ветках, ни у не наших видео. `replies` гасит сам стор, а третью — вот эта строка.
-  function toggleComments(on: boolean) {
-    setComments(on);
-    if (!on) onAllVideos(false);
-  }
-
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex items-center gap-2">
-        <Checkbox id={commentsId} checked={comments} onCheckedChange={(v) => toggleComments(v === true)} />
-        <label htmlFor={commentsId} className="cursor-pointer text-xs leading-tight">
-          Снимать комментарии
-        </label>
-      </div>
-      <div className={cn("flex items-center gap-2", !comments && "opacity-50")}>
-        <Checkbox
-          id={repliesId}
-          checked={replies}
-          disabled={!comments}
-          onCheckedChange={(v) => setReplies(v === true)}
-        />
-        <label
-          htmlFor={repliesId}
-          className={cn("text-xs leading-tight", comments ? "cursor-pointer" : "cursor-not-allowed")}
-        >
-          Снимать ветки ответов
-        </label>
-      </div>
-      <div className={cn("flex items-center gap-2", !comments && "opacity-50")}>
-        <Checkbox
-          id={allVideosId}
-          checked={comments && allVideos}
-          disabled={!comments}
-          onCheckedChange={(v) => onAllVideos(v === true)}
-        />
-        <label
-          htmlFor={allVideosId}
-          className={cn("text-xs leading-tight", comments ? "cursor-pointer" : "cursor-not-allowed")}
-        >
-          Комментарии и у не наших видео
-        </label>
-      </div>
-      <p className="text-xs leading-snug text-muted-foreground">
-        Без комментариев обход в разы быстрее; ветки — самая долгая часть.
-      </p>
-      <p className="text-xs leading-snug text-muted-foreground">
-        Обычно тексты комментариев снимаются только у наших видео; это долго.
-      </p>
-    </div>
-  );
 }

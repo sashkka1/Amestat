@@ -4,7 +4,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { openRequests, requestSync, requestsByIds, runsByIds } from "@/lib/api/sync";
 import { createClient } from "@/lib/supabase/client";
-import { POLL_MS, allVideosTail, runsResult, stage, type Phase } from "@/lib/sync-phase";
+import {
+  POLL_MS,
+  allVideosTail,
+  progressText,
+  runsResult,
+  stage,
+  triggerText,
+  type Phase,
+} from "@/lib/sync-phase";
 import type { SyncDepth, SyncPick, SyncRequest, SyncRun } from "@/lib/types";
 
 // Очередь обновления для целого списка креаторов: одно состояние на всю таблицу, а не по
@@ -12,9 +20,15 @@ import type { SyncDepth, SyncPick, SyncRequest, SyncRun } from "@/lib/types";
 // на полусотне креаторов это полсотни каналов и полсотни запросов раз в 15 секунд ради
 // одних и тех же двух таблиц.
 
-// Что показывать в строке: фаза (покоя здесь не бывает — строки без просьбы в карте нет)
-// и «недоступно» — база написала владельцу, что просьбу никто не принял.
-export type RowSync = { phase: Exclude<Phase, "idle">; unavailable: boolean };
+// Что показывать в строке: фаза (покоя здесь не бывает — строки без просьбы в карте нет),
+// «недоступно» — база написала владельцу, что просьбу никто не принял, и ход обхода
+// (миграция v14): чей он и сколько сделано. Оба поля null, пока обхода ещё нет.
+export type RowSync = {
+  phase: Exclude<Phase, "idle">;
+  unavailable: boolean;
+  trigger: string | null;
+  progress: string | null;
+};
 
 export type SyncQueue = {
   // Только креаторы с открытой просьбой; у остальных строк кнопка в покое.
@@ -33,6 +47,8 @@ export function useSyncQueue(creatorIds: string[], onDone: () => void): SyncQueu
   const [reqs, setReqs] = useState<SyncRequest[]>([]);
   // Вставка ушла, id ещё не вернулись: строка обязана закрутиться сразу по нажатию.
   const [sending, setSending] = useState<string[]>([]);
+  // Идущие обходы наших просьб — из них подсказка строки: «Обновляем 3 из 10 · @…».
+  const [running, setRunning] = useState<SyncRun[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   // Читается внутри check(), но менять его при каждом изменении нельзя: на нём висят каналы.
@@ -94,6 +110,10 @@ export function useSyncQueue(creatorIds: string[], onDone: () => void): SyncQueu
 
     if (genRef.current !== gen) return;
     watchedRef.current = open.map((r) => r.id);
+    // Ход показывают только незакрытые обходы: у закрытых счётчики уже итоговые, и строка
+    // всё равно уходит в покой. Пусто было, пусто и осталось — состояние не трогаем.
+    const live = runs.filter((r) => !r.finished_at);
+    setRunning((prev) => (prev.length === 0 && live.length === 0 ? prev : live));
     // Пусто было, пусто и осталось — не трогаем состояние: сверка идёт по каждому чужому
     // событию Realtime, и новый пустой массив зря перерисовывал бы всю таблицу.
     setReqs((prev) => (prev.length === 0 && open.length === 0 ? prev : open));
@@ -199,16 +219,31 @@ export function useSyncQueue(creatorIds: string[], onDone: () => void): SyncQueu
         byCreator.set(c, list);
       }
     }
+    const runById = new Map(running.map((r) => [r.id, r] as const));
     const out = new Map<string, RowSync>();
     for (const [creatorId, list] of byCreator) {
       const s = stage(list);
       if (s.phase === "idle") continue;
-      out.set(creatorId, { phase: s.phase, unavailable: s.notified });
+      // Обходы этой строки: несколько просьб сборщик мог свести в один — id повторяются.
+      const own = [...new Set(list.flatMap((r) => (r.run_id === null ? [] : [r.run_id])))].flatMap(
+        (id) => {
+          const run = runById.get(id);
+          return run ? [run] : [];
+        },
+      );
+      out.set(creatorId, {
+        phase: s.phase,
+        unavailable: s.notified,
+        trigger: own.length > 0 ? triggerText(own) : null,
+        progress: own.length > 0 ? progressText(own) : null,
+      });
     }
     // Отправляем прямо сейчас — строки в базе ещё нет, но ждать её уже начали.
-    for (const c of sending) if (!out.has(c)) out.set(c, { phase: "queued", unavailable: false });
+    for (const c of sending)
+      if (!out.has(c))
+        out.set(c, { phase: "queued", unavailable: false, trigger: null, progress: null });
     return out;
-  }, [reqs, ids, sending]);
+  }, [reqs, ids, sending, running]);
 
   return { rows, ask, error };
 }

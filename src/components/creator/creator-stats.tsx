@@ -55,17 +55,17 @@ async function loadStats(
   };
 }
 
-// Суммы считаются только по нашим видео: не наши в статистику не идут.
+// Суммы — по всем видео креатора (владелец, 2026-09-08/09): пометка «наше» решает только,
+// снимать ли подробности (тексты комментариев), а на общие счётчики не влияет.
 function totalsOf(rows: VideoStats[], range: PeriodRange): Totals {
-  const ours = rows.filter((r) => r.ours);
   const t: Totals = {
-    views: sum(ours.map((r) => r.views_delta)),
-    likes: sum(ours.map((r) => r.likes_delta)),
-    comments: sum(ours.map((r) => r.comments_delta)),
-    shares: sum(ours.map((r) => r.shares_delta)),
-    saves: sum(ours.map((r) => r.saves_delta)),
+    views: sum(rows.map((r) => r.views_delta)),
+    likes: sum(rows.map((r) => r.likes_delta)),
+    comments: sum(rows.map((r) => r.comments_delta)),
+    shares: sum(rows.map((r) => r.shares_delta)),
+    saves: sum(rows.map((r) => r.saves_delta)),
     engagement: 0,
-    videos: ours.filter((r) => publishedIn(r.published_at, range)).length,
+    videos: rows.filter((r) => publishedIn(r.published_at, range)).length,
     followers: 0,
     followersDelta: 0,
   };
@@ -132,9 +132,11 @@ export function CreatorStats({
     if (!loaded) return null;
     const now = totalsOf(loaded.rows, loaded.range);
     const prev = totalsOf(loaded.prevRows, loaded.prevRange);
-    const ours = loaded.rows.filter((r) => r.ours);
+    // Плитка «С подробностями» — сколько видео помечено `ours`: у них снимаются тексты
+    // комментариев. На суммы и медианы пометка не влияет.
+    const detailedCount = loaded.rows.filter((r) => r.ours).length;
     // Медиана считается по видео, которые за срок вышли или что-то набрали.
-    const active = ours.filter((r) => r.views_delta > 0 || publishedIn(r.published_at, loaded.range));
+    const active = loaded.rows.filter((r) => r.views_delta > 0 || publishedIn(r.published_at, loaded.range));
     const medians = Object.fromEntries(
       PANEL_METRICS.map((m) => [m.key, median(active.map((r) => r[`${m.key}_delta`]))]),
     ) as Record<MetricKey, number | null>;
@@ -142,7 +144,7 @@ export function CreatorStats({
       loaded.followersNow !== null && loaded.followersBefore !== null
         ? loaded.followersNow - loaded.followersBefore
         : null;
-    return { now, prev, medians, oursCount: ours.length, activeCount: active.length, followersDelta };
+    return { now, prev, medians, detailedCount, activeCount: active.length, followersDelta };
   }, [loaded]);
 
   const tableRows: VideoTableRow[] = useMemo(() => {
@@ -223,8 +225,8 @@ export function CreatorStats({
           />
           <Tile
             icon={VideoIcon}
-            label="Наших видео"
-            value={fmtNum(summary.oursCount)}
+            label="С подробностями"
+            value={fmtNum(summary.detailedCount)}
             hint={`всего собрано: ${loaded.rows.length}`}
           />
         </div>

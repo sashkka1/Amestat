@@ -1,4 +1,4 @@
-import type { SyncRequest, SyncRun } from "@/lib/types";
+import type { SyncRequest, SyncRun, SyncTrigger } from "@/lib/types";
 
 // Общая часть двух мест, которые ждут обход: кнопки «Обновить» над страницей
 // (`components/sync-button.tsx`) и очереди строк списка (`lib/use-sync-queue.ts`).
@@ -15,8 +15,53 @@ export const POLL_MS = 15_000;
 export const PHASE_TEXT: Record<Exclude<Phase, "idle">, string> = {
   queued: "В очереди…",
   seen: "Принято, ждёт очереди…",
-  running: "Идёт обход…",
+  // Слова обхода без счётчиков: пока сборщик не отобрал список, сказать «3 из 10» нечем.
+  running: "Обновляем…",
 };
+
+// Чей обход идёт (владелец, 2026-09-09: «чтобы понимать, чей обход, когда сам ничего не
+// просил»). Подпись серым над строкой хода — и у кнопки, и в подсказке строки списка.
+export const TRIGGER_TEXT: Record<SyncTrigger, string> = {
+  schedule: "Обход по расписанию",
+  catchup: "Догон пропущенного слота",
+  retry: "Повтор неудавшихся",
+  manual: "Обновление по просьбе",
+};
+
+// Подпись пачки: сборщик сводит просьбы в один обход, поэтому берём первый — у сведённых
+// обходов повод один и тот же.
+export function triggerText(runs: SyncRun[]): string | null {
+  const first = runs[0];
+  return first ? TRIGGER_TEXT[first.trigger] : null;
+}
+
+// Сколько сделано из скольких и кого собираем прямо сейчас (миграция v14):
+// «Обновляем 3 из 10 · @npodcast123 · @julia.snkvch, ошибок 2».
+// Общее у кнопки «Обновить» и у строк списка — иначе два места считают ход по-разному.
+// Пачка складывается: сборщик мог завести по обходу на площадку.
+export function progressText(runs: SyncRun[]): string {
+  let total = 0;
+  let known = false;
+  let done = 0;
+  let failed = 0;
+  const handles: string[] = [];
+  for (const r of runs) {
+    if (r.creators_total !== null) {
+      total += r.creators_total;
+      known = true;
+    }
+    // Сделано — и удачные, и упавшие: обход прошёл их обоих.
+    done += r.creators_done + r.creators_failed;
+    failed += r.creators_failed;
+    for (const h of r.current_handles) if (!handles.includes(h)) handles.push(h);
+  }
+  // Список ещё не отобран — считать не из чего, остаются прежние слова.
+  if (!known) return PHASE_TEXT.running;
+  const who = handles.length > 0 ? ` · ${handles.join(" · ")}` : "";
+  const bad = failed > 0 ? `, ошибок ${failed}` : "";
+  // Пачка могла собраться из обхода со списком и обхода без него — «11 из 10» не пишем.
+  return `Обновляем ${Math.min(done, total)} из ${total}${who}${bad}`;
+}
 
 // База сама написала владельцу в Telegram: просьбу никто не принял за три минуты.
 // Формулировки две, потому что места разные: у кнопки — целая строка рядом, места хватает;

@@ -338,7 +338,6 @@ function CreatorsScreen() {
                         {/* Одинаково у админа и у менеджера: RLS пускает просьбу за
                             креатора, которого человек видит. */}
                         <RowSyncButton
-                          creatorId={r.creator.id}
                           state={queue.rows.get(r.creator.id)}
                           onAsk={(depth, pick) => void queue.ask(r.creator.id, depth, pick)}
                         />

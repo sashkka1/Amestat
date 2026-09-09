@@ -4,10 +4,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCwIcon } from "lucide-react";
 import { toast } from "sonner";
 import { LocalTime } from "@/components/local-time";
-import { PlatformSwitch } from "@/components/platform-switch";
+import { PlatformIcon } from "@/components/platform";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { SyncOptionsFields, useSyncOptions } from "@/components/sync-options";
+import { useSyncOptions } from "@/components/sync-options";
+import {
+  DEPTH_WORD,
+  SyncChoiceBlock,
+  SyncDepthGroup,
+  SyncGroup,
+  SyncLaunchButton,
+  SyncPickGroup,
+  SyncSummary,
+  pickWords,
+} from "@/components/sync-choice";
 import { createClient } from "@/lib/supabase/client";
 import { latestRun, openRequests, requestsByIds, requestSync, runsByIds } from "@/lib/api/sync";
 import {
@@ -23,19 +33,41 @@ import {
   POLL_MS,
   UNAVAILABLE_TEXT,
   allVideosTail,
+  progressText,
   runsResult,
   stage,
+  triggerText,
   type Phase,
 } from "@/lib/sync-phase";
-import type { Creator, SyncDepth, SyncRun } from "@/lib/types";
+import type { Creator, SyncDepth, SyncPick, SyncRun } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 // Столько ждём хоть какого-то ответа. Обычно за это время база сама пишет владельцу в
 // Telegram и ставит notified_at (миграция v8); таймер нужен, если бот не настроен.
 const NO_ANSWER_MS = 3 * 60_000;
 
-// Какую строку матрицы выбрали: всех креаторов или только тех, что на этой странице.
+// Кого обходить: всех креаторов или только тех, что на этой странице.
 type Target = "all" | "page";
+
+// Три блока площадки идут в том же порядке, что общий переключатель страниц.
+const PLATFORM_KEYS: PlatformFilter[] = ["all", "tiktok", "instagram"];
+
+// Подсказка внутри блока площадки: одной строкой, что именно он сузит.
+const PLATFORM_HINTS: Record<PlatformFilter, string> = {
+  all: "обе площадки",
+  tiktok: "только TikTok",
+  instagram: "только Instagram",
+};
+
+// «4 креатора на странице» — подсказка блока «Только эта страница».
+function creatorsWord(n: number): string {
+  const tens = n % 100;
+  if (tens >= 11 && tens <= 14) return "креаторов";
+  const ones = n % 10;
+  if (ones === 1) return "креатор";
+  if (ones >= 2 && ones <= 4) return "креатора";
+  return "креаторов";
+}
 
 // Хвост «· TikTok» к строке состояния и к тосту: у «Все» площадки нет — хвоста тоже.
 function platformTail(filter: PlatformFilter): string {
@@ -52,9 +84,10 @@ function newest(runs: SyncRun[]): SyncRun | null {
 
 // Кнопка «Обновить» и время последнего обхода.
 // scope — чей обход показывать в покое: null — любой последний, иначе id креатора.
-// pageCreatorIds — креаторы этой страницы для строки «Только эта страница»; null значит
-// «на странице все креаторы», и тогда этой строки в матрице нет.
-// Матрица трёхосная: кого обойти × на какую глубину × какую площадку.
+// pageCreatorIds — креаторы этой страницы для блока «Только эта страница»; null значит
+// «на странице все креаторы», и тогда группы «Кого» в попапе нет.
+// Попап — четыре группы блоков: кого обойти × какая площадка × на какую глубину × что снимать
+// (владелец, 2026-09-09). Блоки только выбирают; просьба уходит кнопкой внизу.
 export function SyncButton({
   scope,
   pageCreatorIds,
@@ -65,6 +98,9 @@ export function SyncButton({
   onDone: () => void;
 }) {
   const [run, setRun] = useState<SyncRun | null>(null);
+  // Обходы, которые идут прямо сейчас: из них строка хода — «Обновляем 3 из 10 · @…»
+  // (миграция v14). Их несколько, когда сборщик развёл площадки по полосам.
+  const [running, setRunning] = useState<SyncRun[]>([]);
   const [phase, setPhase] = useState<Phase>("idle");
   const [reqIds, setReqIds] = useState<number[]>([]);
   const [askedAt, setAskedAt] = useState<number | null>(null);
@@ -81,16 +117,16 @@ export function SyncButton({
   // запоминается: тяжёлый обход должен быть осознанным каждый раз, поэтому её состояние
   // живёт здесь и гаснет при каждом открытии попапа.
   const [allVideos, setAllVideos] = useState(false);
+  // Кого обходить и на какую глубину. Ничего не запоминают: попап открывается «все креаторы,
+  // последняя неделя» — неделя быстрее, а долгий обход должен выбираться руками.
+  const [target, setTarget] = useState<Target>("all");
+  const [depth, setDepth] = useState<SyncDepth>("week");
 
-  // Третья ось матрицы — площадка (владелец, 2026-09-08). Попап открывается в том же
-  // положении, что общий переключатель страниц, но своего выбора не запоминает и общий
-  // не двигает: это выбор на одну просьбу, а не настройка.
+  // Площадка (владелец, 2026-09-08). Попап открывается в том же положении, что общий
+  // переключатель страниц, но своего выбора не запоминает и общий не двигает: это выбор
+  // на одну просьбу, а не настройка.
   const { filter: pageFilter } = usePlatformFilter();
   const [platform, setPlatform] = useState<PlatformFilter>(pageFilter);
-  const platformState = useMemo(
-    () => ({ filter: platform, setFilter: setPlatform }),
-    [platform],
-  );
   // Площадка ушедшей просьбы: строке состояния и тосту нечего взять из базы — в sync_runs
   // площадки нет, а знать, чей обход ждём, надо.
   const [askedPlatform, setAskedPlatform] = useState<PlatformFilter>("all");
@@ -139,6 +175,7 @@ export function SyncButton({
     setSeenAny(false);
     setNotified(false);
     setPhase("idle");
+    setRunning([]);
     // Площадку просьбы забираем до сброса: тост про неё ещё расскажет.
     const tail = platformTail(askedPlatformRef.current);
     askedPlatformRef.current = "all";
@@ -197,8 +234,12 @@ export function SyncButton({
         return;
       }
       const runs = runRes.data;
-      // Готово, только когда завершились все: пока хоть один идёт — ждём.
-      if (runs.length < runIds.length || runs.some((r) => !r.finished_at)) return;
+      // Готово, только когда завершились все: пока хоть один идёт — ждём, а его счётчики
+      // показываем. Поколение уже сверено выше — закрытый обход сюда не дописывается.
+      if (runs.length < runIds.length || runs.some((r) => !r.finished_at)) {
+        setRunning(runs);
+        return;
+      }
       finish(runs);
       return;
     }
@@ -214,6 +255,8 @@ export function SyncButton({
     const last = runRes.data;
     if (last && !last.finished_at) {
       setPhase("running");
+      // Обход по расписанию или чужой просьбе — его ход показываем так же, как свой.
+      setRunning([last]);
       return;
     }
     if (phaseRef.current !== "idle" && last?.finished_at) {
@@ -232,7 +275,10 @@ export function SyncButton({
       if (!runRes.ok) setError(runRes.error);
       else {
         setRun(runRes.data);
-        if (runRes.data && !runRes.data.finished_at) setPhase("running");
+        if (runRes.data && !runRes.data.finished_at) {
+          setPhase("running");
+          setRunning([runRes.data]);
+        }
       }
       if (!openRes.ok) {
         setError(openRes.error);
@@ -308,15 +354,18 @@ export function SyncButton({
     return () => clearTimeout(timer);
   }, [phase, notified, seenAny, askedAt]);
 
-  // Открыли попап: чипы встают в положение общего переключателя, список креаторов читается
-  // один раз. Не прочитался — при следующем открытии пробуем снова.
+  // Открыли попап: блоки встают в умолчания (площадка — как общий переключатель), список
+  // креаторов читается один раз. Не прочитался — при следующем открытии пробуем снова.
   const openChange = useCallback(
     (next: boolean) => {
       setOpen(next);
       if (!next) return;
       setPlatform(pageFilter);
-      // Каждое открытие — с чистого листа: «все видео» не наследуется от прошлой просьбы.
+      // Каждое открытие — с чистого листа: ни «все видео», ни глубина, ни охват не
+      // наследуются от прошлой просьбы.
       setAllVideos(false);
+      setTarget("all");
+      setDepth("week");
       if (creators !== null || loadingCreators) return;
       setLoadingCreators(true);
       setCreatorsError(null);
@@ -359,12 +408,12 @@ export function SyncButton({
     });
   }, [pageIds, platform, platformById]);
 
-  // Выбрали ячейку матрицы: кого обойти (target), на какую глубину (depth) и что снимать
-  // (галочки попапа — они же уходят в просьбу). Площадка решает, чем окажется охват:
-  // «Все» шлёт null (все видимые), TikTok или Instagram — явным списком id.
-  async function ask(target: Target, depth: SyncDepth) {
+  // Нажали «Запустить обновление»: в просьбу уходит выбор блоков — кого обойти (target),
+  // на какую глубину (depth) и что снимать. Площадка решает, чем окажется охват: «Все» шлёт
+  // null (все видимые), TikTok или Instagram — явным списком id. Попап закрывается после
+  // ответа, а не до него: пока идёт вставка, кнопка внизу говорит «Отправляем…».
+  async function ask() {
     const creatorIds = target === "all" ? allIds : pageTargetIds;
-    setOpen(false);
     setSending(true);
     setError(null);
     askedPlatformRef.current = platform;
@@ -377,6 +426,7 @@ export function SyncButton({
       pick: { comments, replies, allVideos: comments && allVideos },
     });
     setSending(false);
+    setOpen(false);
     if (!res.ok) {
       // Просьба не завелась — ждать нечего, и площадка ушедшей просьбы больше не наша.
       askedPlatformRef.current = "all";
@@ -399,10 +449,10 @@ export function SyncButton({
   // Просьба жива, пока не кончился обход: ни молчание сборщика, ни письмо владельцу
   // кнопку не освобождают — иначе на одну и ту же работу накопится очередь просьб.
   const waiting = phase !== "idle";
-  // Строка «Только эта страница» нужна, лишь когда страница уже сузила список креаторов.
+  // Блок «Только эта страница» нужен, лишь когда страница уже сузила список креаторов.
   const hasPageRow = pageIds !== null && pageIds.length > 0;
 
-  // Площадка выбрана, а креаторов у неё нет — просить нечего: ячейки гаснут, под матрицей
+  // Площадка выбрана, а креаторов у неё нет — просить нечего: блоки гаснут, под ними
   // строка почему. «Нет креаторов TikTok» перекрывает страничную: пустая площадка целиком
   // пуста и на странице.
   const allEmpty = ready && allIds !== null && allIds.length === 0;
@@ -416,11 +466,22 @@ export function SyncButton({
   // Пока список креаторов не прочитан, площадку применить не к чему.
   const allBlocked = !ready || allEmpty;
   const pageBlocked = !ready || pageEmpty;
+  // Кнопка внизу гаснет по выбранному охвату: набор пуст или список не прочитан — просить
+  // нечего, и молча отправлять пустую просьбу нельзя.
+  const targetBlocked = target === "all" ? allBlocked : pageBlocked;
+  // Сколько креаторов на странице после площадки — и в подсказке блока, и в сводке.
+  const pageCount = (pageTargetIds ?? pageIds ?? []).length;
+  const pick: SyncPick = { comments, replies, allVideos: comments && allVideos };
 
-  // Слова ожидания: фаза плюс площадка просьбы, если она уже.
+  // Чей обход идёт — подпись серым над строкой хода. Нужна, когда владелец сам ничего не
+  // просил: обход мог завестись по расписанию, догоном или повтором.
+  const runTrigger = phase === "running" ? triggerText(running) : null;
+
+  // Слова ожидания: фаза плюс площадка просьбы, если она уже. В обходе — сколько сделано
+  // из скольких и кого собираем сейчас (миграция v14).
   const waitText =
     phase === "running"
-      ? PHASE_TEXT.running
+      ? progressText(running)
       : phase === "seen"
         ? PHASE_TEXT.seen
         : phase === "queued"
@@ -434,34 +495,38 @@ export function SyncButton({
 
   return (
     <div className="flex items-center gap-2">
-      <span className="text-xs text-muted-foreground">
-        {error ? (
-          <span className="text-destructive" title={error}>
-            Не удалось прочитать состояние
-          </span>
-        ) : waitText !== null ? (
-          waitText + platformTail(askedPlatform) + (askedAllVideos ? ALL_VIDEOS_TEXT : "")
-        ) : run ? (
-          <>
-            Обновлено <LocalTime iso={run.finished_at ?? run.started_at} />
-            {/* Повтор через час после неудачи по расписанию — его сборщик заводит сам. */}
-            {run.trigger === "retry" && " (повтор)"}
-            {/* Обход шёл без текстов комментариев — счётчики свежие, а тексты остались
-                от прошлого раза, и знать об этом надо до того, как их станут читать. */}
-            {run.comments === false && " · без комментариев"}
-            {/* Наоборот: обход шёл и по не нашим видео — тексты у них свежие, а это редкость. */}
-            {run.all_videos && ALL_VIDEOS_TEXT}
-            {run.ok === false && (
-              <span className="text-destructive" title={run.error ?? undefined}>
-                {" "}
-                · ошибка
-              </span>
-            )}
-          </>
-        ) : (
-          "ещё не обновлялось"
-        )}
-      </span>
+      <div className="flex min-w-0 flex-col items-end text-right text-xs leading-tight text-muted-foreground">
+        {/* Чей обход — строкой выше хода: «Обход по расписанию», «Повтор неудавшихся». */}
+        {runTrigger !== null && <span>{runTrigger}</span>}
+        <span>
+          {error ? (
+            <span className="text-destructive" title={error}>
+              Не удалось прочитать состояние
+            </span>
+          ) : waitText !== null ? (
+            waitText + platformTail(askedPlatform) + (askedAllVideos ? ALL_VIDEOS_TEXT : "")
+          ) : run ? (
+            <>
+              Обновлено <LocalTime iso={run.finished_at ?? run.started_at} />
+              {/* Повтор через час после неудачи по расписанию — его сборщик заводит сам. */}
+              {run.trigger === "retry" && " (повтор)"}
+              {/* Обход шёл без текстов комментариев — счётчики свежие, а тексты остались
+                  от прошлого раза, и знать об этом надо до того, как их станут читать. */}
+              {run.comments === false && " · без комментариев"}
+              {/* Наоборот: обход шёл и по не нашим видео — тексты у них свежие, а это редкость. */}
+              {run.all_videos && ALL_VIDEOS_TEXT}
+              {run.ok === false && (
+                <span className="text-destructive" title={run.error ?? undefined}>
+                  {" "}
+                  · ошибка
+                </span>
+              )}
+            </>
+          ) : (
+            "ещё не обновлялось"
+          )}
+        </span>
+      </div>
       <Popover open={open} onOpenChange={openChange}>
         <PopoverTrigger asChild>
           <Button variant="outline" size="sm" disabled={sending || waiting}>
@@ -469,58 +534,53 @@ export function SyncButton({
             Обновить
           </Button>
         </PopoverTrigger>
-        <PopoverContent align="end" className="w-[21rem]">
-          {/* Третья ось: какую площадку обходить. Общий переключатель страниц не двигает. */}
-          <PlatformSwitch state={platformState} className="justify-between" />
-          {hasPageRow ? (
-            // Матрица: строки — кого обойти, столбцы — на какую глубину.
-            <div className="grid grid-cols-[minmax(0,auto)_1fr_1fr] items-center gap-1.5">
-              <span />
-              <span className="text-center text-xs leading-tight text-muted-foreground">Всё</span>
-              <span className="text-center text-xs leading-tight text-muted-foreground">
-                Последняя неделя
-              </span>
-
-              <span className="pr-1 text-xs leading-tight text-muted-foreground">Все креаторы</span>
-              <MatrixCell
-                title="Все креаторы, всё"
+        <PopoverContent align="end" className="w-96 max-w-[calc(100vw-2rem)]">
+          {/* Кого обходить. Блока «Только эта страница» нет, когда страница и так показывает
+              всех: выбирать не из чего. */}
+          {hasPageRow && (
+            <SyncGroup title="Кого">
+              <SyncChoiceBlock
+                label="Все креаторы"
+                hint="все, кого видно"
+                selected={target === "all"}
                 disabled={allBlocked}
-                onClick={() => void ask("all", "all")}
+                title={allBlocked && emptyNote ? emptyNote : undefined}
+                onClick={() => setTarget("all")}
               />
-              <MatrixCell
-                title="Все креаторы, последняя неделя"
-                disabled={allBlocked}
-                onClick={() => void ask("all", "week")}
-              />
-
-              <span className="pr-1 text-xs leading-tight text-muted-foreground">Только эта страница</span>
-              <MatrixCell
-                title="Только эта страница, всё"
+              <SyncChoiceBlock
+                label="Только эта страница"
+                hint={`${pageCount} ${creatorsWord(pageCount)} на странице`}
+                selected={target === "page"}
                 disabled={pageBlocked}
-                onClick={() => void ask("page", "all")}
+                title={pageBlocked && emptyNote ? emptyNote : undefined}
+                onClick={() => setTarget("page")}
               />
-              <MatrixCell
-                title="Только эта страница, последняя неделя"
-                disabled={pageBlocked}
-                onClick={() => void ask("page", "week")}
-              />
-            </div>
-          ) : (
-            // На странице и так все креаторы — выбирать некого, остаётся глубина.
-            <div className="grid grid-cols-2 gap-1.5">
-              <Button variant="outline" size="sm" disabled={allBlocked} onClick={() => void ask("all", "all")}>
-                Всё
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={allBlocked}
-                onClick={() => void ask("all", "week")}
-              >
-                Последняя неделя
-              </Button>
-            </div>
+            </SyncGroup>
           )}
+          {/* Какую площадку обходить. Общий переключатель страниц попап не двигает. */}
+          <SyncGroup title="Площадка" cols={3}>
+            {PLATFORM_KEYS.map((key) => (
+              <SyncChoiceBlock
+                key={key}
+                label={PLATFORM_FILTER_LABELS[key]}
+                hint={PLATFORM_HINTS[key]}
+                icon={
+                  key === "all" ? undefined : (
+                    <PlatformIcon
+                      platform={key}
+                      className={platform === key ? "text-background/70" : undefined}
+                    />
+                  )
+                }
+                selected={platform === key}
+                onClick={() => setPlatform(key)}
+              />
+            ))}
+          </SyncGroup>
+          <SyncDepthGroup depth={depth} onDepth={setDepth} />
+          <SyncPickGroup allVideos={allVideos} onAllVideos={setAllVideos} />
+          {/* Единственная строка объяснений под блоками: список креаторов не прочитался или
+              у выбранной площадки некого обходить. */}
           {creatorsError ? (
             <p className="text-xs leading-snug text-destructive" title={creatorsError}>
               Не удалось прочитать список креаторов — площадку выбрать не из чего
@@ -530,41 +590,24 @@ export function SyncButton({
           ) : emptyNote ? (
             <p className="text-xs leading-snug text-muted-foreground">{emptyNote}</p>
           ) : null}
-          <SyncOptionsFields
-            idPrefix={`sync-${scope ?? "all"}`}
-            allVideos={allVideos}
-            onAllVideos={setAllVideos}
+          {/* Подтверждение: что именно уйдёт по нажатию — теми же словами, что в хвостах
+              строки состояния. */}
+          <SyncSummary
+            parts={[
+              target === "all" ? "Все креаторы" : `Эта страница (${pageCount})`,
+              platform === "all" ? null : PLATFORM_FILTER_LABELS[platform],
+              DEPTH_WORD[depth],
+              pickWords(pick),
+              pick.allVideos && "все видео",
+            ]}
           />
-          <p className="text-xs leading-snug text-muted-foreground">
-            Неделя — быстрее: только видео за 7 дней, старые не пересчитываются.
-          </p>
+          <SyncLaunchButton
+            disabled={targetBlocked || creatorsError !== null}
+            sending={sending}
+            onClick={() => void ask()}
+          />
         </PopoverContent>
       </Popover>
     </div>
-  );
-}
-
-// Ячейка матрицы: что она значит, говорят подписи строки, столбца и чипов площадки.
-function MatrixCell({
-  title,
-  disabled,
-  onClick,
-}: {
-  title: string;
-  disabled: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <Button
-      variant="outline"
-      size="sm"
-      className="w-full"
-      title={title}
-      aria-label={title}
-      disabled={disabled}
-      onClick={onClick}
-    >
-      Обновить
-    </Button>
   );
 }
