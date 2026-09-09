@@ -492,7 +492,10 @@ export async function collectInstagramWeb(creator, { depth = "all", bounds = nul
     }
     // Служебные поля наружу не отдаём: форма ответа общая для всех площадок.
     const videos = picked.map(({ code, productType, ...v }) => v);
-    return { profile, videos };
+    // `pages` — сколько прокруток стоил шаг: круги ленты и круги вкладки Reels вместе. Наружу
+    // оно нужно одной калибровке (`estimate.mjs`): без числа прокруток время шага не разложить
+    // на «запуск» и «страницу».
+    return { profile, videos, pages: feedPages + rounds };
   } finally {
     // Вкладку закрываем всегда и сами: браузер полосы живёт дальше, а незакрытая вкладка —
     // это свой renderer, своя память и хвост, всплывающий при следующем запуске профиля.

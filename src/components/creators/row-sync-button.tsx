@@ -78,9 +78,12 @@ export function RowSyncButton({
     // пропал бы и title. «Недоступно» не крутится: ждать нечего, пока сборщик не поднялся.
     // Идёт обход — говорим чей и сколько сделано: «Обход по расписанию · Обновляем 3 из 10
     // · @npodcast123» (миграция v14). Счётчиков ещё нет — остаются слова фазы.
+    // Насколько обход близок к концу — тем же счётом, что полоса во всплывашке кнопки
+    // «Обновить» (миграция v24). ⚠️ Полосы здесь нет: подсказка строки — это `title`
+    // браузера, и разметку он не покажет; доля и прогноз идут словами в ту же строку.
     const title = state.unavailable
       ? unavailableTitle()
-      : [state.trigger, state.progress ?? phaseText(state.phase)].filter(Boolean).join(" · ");
+      : [state.trigger, state.progress ?? phaseText(state.phase), state.work].filter(Boolean).join(" · ");
     return (
       <span className="inline-flex" title={title}>
         <Button variant="ghost" size="icon-sm" disabled aria-label={title}>

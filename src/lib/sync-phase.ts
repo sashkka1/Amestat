@@ -70,6 +70,64 @@ export function progressText(runs: SyncRun[]): string {
   return tr("sync.progress", { done: Math.min(done, total), total }) + who + bad;
 }
 
+// Насколько обход близок к концу (миграция v24). Владелец, 2026-09-09: «„6 из 10 креаторов“
+// ничего не говорит: может, прошли шесть самых быстрых» — поэтому доля считается не по головам,
+// а по секундам работы, которые сборщик оценил ДО первого браузера.
+// `etaMin` — сколько минут осталось; null — прогноза нет.
+export type Work = { percent: number; etaMin: number | null };
+
+// Оценки нет вовсе (обход шёл до миграции или объём не оценился) — null, и тогда полосы не
+// рисуем совсем: пустая шкала хуже её отсутствия. Пачка складывается, как и в progressText.
+// ⚠️ Прогноз — САМЫЙ ПОЗДНИЙ из пачки: обход кончится, когда закончит последний.
+export function workProgress(runs: SyncRun[]): Work | null {
+  let total = 0;
+  let done = 0;
+  let eta: number | null = null;
+  for (const r of runs) {
+    if (r.work_total === null || r.work_total <= 0) continue;
+    total += r.work_total;
+    done += r.work_done ?? 0;
+    if (r.eta_at) {
+      const at = new Date(r.eta_at).getTime();
+      if (!Number.isNaN(at) && (eta === null || at > eta)) eta = at;
+    }
+  }
+  if (total <= 0) return null;
+  const percent = Math.max(0, Math.min(100, Math.round((done / total) * 100)));
+  const left = eta === null ? null : Math.max(0, Math.round((eta - Date.now()) / 60_000));
+  return { percent, etaMin: left };
+}
+
+// Подпись под полосой: «42 % · ещё ≈ 12 мин». Прогноза нет или он меньше минуты — остаётся
+// доля и слова «меньше минуты».
+export function workText(work: Work): string {
+  const tail =
+    work.etaMin === null
+      ? ""
+      : work.etaMin < 1
+        ? ` · ${tr("sync.etaSoon")}`
+        : ` · ${tr("sync.eta", { min: work.etaMin })}`;
+  return tr("sync.percent", { percent: work.percent }) + tail;
+}
+
+// Во что обход оценили — строка для администратора: «оценка: список 6 мин, комментарии 20 мин».
+// Разбивки нет — null: менеджеру её и не показывают, а до миграции v24 её нет ни у кого.
+export function estimateText(runs: SyncRun[]): string | null {
+  let list = 0;
+  let comments = 0;
+  let any = false;
+  for (const r of runs) {
+    for (const e of r.estimate ?? []) {
+      list += e.list;
+      comments += e.comments + e.replies;
+      any = true;
+    }
+  }
+  if (!any) return null;
+  const mins = (seconds: number) => tr("sync.minutes", { n: Math.max(1, Math.round(seconds / 60)) });
+  return tr("sync.estimateLine", { list: mins(list), comments: mins(comments) });
+}
+
 // База сама написала владельцу в Telegram: просьбу никто не принял за три минуты.
 // Формулировки две, потому что места разные: у кнопки — целая строка рядом, места хватает;
 // в строке списка — короткая подсказка на иконке.

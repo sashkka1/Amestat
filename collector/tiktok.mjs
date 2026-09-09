@@ -181,7 +181,9 @@ async function attempt(handle, { browserChoice, log, since = null, until = null,
     if (since !== null || until !== null) {
       log?.(`  за ${depthWord(depth)}: ${videos.length} из ${all.length} пришедших${reachedOld && mode !== "ours" ? " (прокрутка остановлена: пошли видео старше границы)" : ""}${mode === "ours" && until === null ? " (с отслеживаемыми, они остаются при любой давности)" : ""}${until !== null ? " (видео свежее верхней границы не берём — даже отслеживаемые)" : ""}`);
     }
-    return { profile, videos, rawCount: all.length, stopScreen: stopAfter };
+    // `pages` — сколько прокруток успел сделать шаг. Наружу оно нужно одной калибровке
+    // (`estimate.mjs`): без числа прокруток время шага не разложить на «запуск» и «страницу».
+    return { profile, videos, rawCount: all.length, stopScreen: stopAfter, pages };
   } finally {
     await cleanup();
   }
@@ -246,7 +248,7 @@ export async function collectTikTok(creator, { browserChoice = "", depth = "all"
         throw new Error(`стоп-экран TikTok у @${handle}`);
       }
       pool?.good?.(address.id);
-      return { profile: res.profile, videos: res.videos };
+      return { profile: res.profile, videos: res.videos, pages: res.pages };
     }
     if (res.stopScreen) {
       notice("stop", `@${handle}: стоп-экран TikTok`);

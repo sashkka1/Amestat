@@ -14,6 +14,8 @@ import {
   stage,
   triggerText,
   videosTail,
+  workProgress,
+  workText,
   type Phase,
 } from "@/lib/sync-phase";
 import type { PeriodRange } from "@/lib/period";
@@ -32,6 +34,10 @@ export type RowSync = {
   unavailable: boolean;
   trigger: string | null;
   progress: string | null;
+  // Насколько обход близок к концу: «42 % · ещё ≈ 12 мин» (миграция v24). null — оценки нет,
+  // и подсказка строки остаётся прежней. ⚠️ Полосы здесь нет: подсказка строки — это `title`
+  // браузера, разметку он не показывает; доля и прогноз в ней идут словами.
+  work: string | null;
 };
 
 export type SyncQueue = {
@@ -256,17 +262,19 @@ export function useSyncQueue(creatorIds: string[], onDone: () => void): SyncQueu
           return run ? [run] : [];
         },
       );
+      const done = own.length > 0 ? workProgress(own) : null;
       out.set(creatorId, {
         phase: s.phase,
         unavailable: s.notified,
         trigger: own.length > 0 ? triggerText(own) : null,
         progress: own.length > 0 ? progressText(own) : null,
+        work: done === null ? null : workText(done),
       });
     }
     // Отправляем прямо сейчас — строки в базе ещё нет, но ждать её уже начали.
     for (const c of sending)
       if (!out.has(c))
-        out.set(c, { phase: "queued", unavailable: false, trigger: null, progress: null });
+        out.set(c, { phase: "queued", unavailable: false, trigger: null, progress: null, work: null });
     return out;
   }, [reqs, ids, sending, running]);
 

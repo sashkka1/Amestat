@@ -62,6 +62,13 @@
 //     смена адреса у вошедшего аккаунта ловит проверки безопасности.
 //   • Каждая строка лога уезжает в `sync_log` ПО ХОДУ дела (`synclog.mjs`, миграция v16) —
 //     сайт показывает администратору живой журнал. `sync_runs.log` (весь текст в конце) остался.
+//   • Объём работы оценивается ОДИН раз, до первого браузера (`estimate.mjs`, миграция v24;
+//     владелец, 2026-09-09: «„6 из 10 креаторов“ ничего не говорит: может, прошли шесть самых
+//     быстрых»). Единица — секунда по калибровке; `work_total` уходит в строку обхода, а
+//     `work_done` растёт ПОСЛЕ КАЖДОГО ШАГА (список собран, видео комментариев снято), а не
+//     после каждого креатора. ⚠️ Прогноз конца считается ПО ПОЛОСАМ: они идут одновременно, и
+//     обход кончается, когда закончит самая долгая. Колонок в базе нет (миграция не накачена) —
+//     обход идёт как прежде, просто без полосы прогресса.
 
 import { get, patch, insertMany, insertReturning, upsert } from "./db.mjs";
 import { loadEnv } from "./env.mjs";
@@ -77,6 +84,15 @@ import { takeLaunchSlot } from "./tiktok-gate.mjs";
 import { labelOf, rememberBad, rememberGood } from "./proxies.mjs";
 import { startSyncLog, pushSyncLog, stopSyncLog } from "./synclog.mjs";
 import { depthBounds, depthLabel, normalizeDepth, videoCap } from "./scope.mjs";
+import {
+  calibrateComments,
+  calibrateList,
+  commentsWindow,
+  estimateRun,
+  etaSeconds,
+  readTiming,
+  writeTiming,
+} from "./estimate.mjs";
 import { basename } from "node:path";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -188,6 +204,57 @@ async function trackedVideos(creatorId, log) {
     notice("db", `отслеживаемые видео не спросились: ${short(e)}`);
     return null;
   }
+}
+
+/**
+ * Объём обхода в секундах — ДО первого браузера (миграция v24). Всё, что для этого нужно, уже
+ * лежит в базе: сколько у креатора видео, какой они давности, какие из них наши и жёлтые и у
+ * каких есть комментарии. Правила счёта — в `estimate.mjs`, здесь только запросы.
+ *
+ * Запроса два: список видео нужных креаторов и счётчики комментариев у тех из них, что попадают
+ * в окно шага комментариев (у остальных счётчик на оценку не влияет вовсе).
+ * ⚠️ Ошибку наверх не глушим: её ловит вызывающий и просто идёт без оценки.
+ */
+async function estimateWork(creators, env, depth, bounds, flags, timing) {
+  const rows = [];
+  // Пачками по 20 креаторов: адрес запроса не резиновый. `limit` — на случай, если у проекта
+  // выставлен потолок строк: лучше недооценить, чем получить обрезанный ответ молча.
+  for (let i = 0; i < creators.length; i += 20) {
+    const list = creators.slice(i, i + 20).map((c) => `"${encodeURIComponent(c.id)}"`).join(",");
+    const part = await get(`videos?select=creator_id,id,published_at,ours,watch&creator_id=in.(${list})&limit=20000`);
+    rows.push(...part);
+  }
+
+  const counts = new Map();
+  if (flags.comments) {
+    const win = commentsWindow({ bounds, commentsDays: env.commentsDays });
+    const fresh = rows
+      .filter((r) => {
+        const at = r.published_at ? Date.parse(r.published_at) : NaN;
+        if (Number.isNaN(at)) return false;
+        if (win.since !== null && win.since !== undefined && at < win.since) return false;
+        if (win.until !== null && win.until !== undefined && at > win.until) return false;
+        return true;
+      })
+      .map((r) => String(r.id));
+    for (let i = 0; i < fresh.length; i += 100) {
+      const list = fresh.slice(i, i + 100).map((id) => `"${encodeURIComponent(id)}"`).join(",");
+      for (const row of await get(`video_latest?select=video_id,comments&video_id=in.(${list})`)) {
+        counts.set(String(row.video_id), row.comments ?? 0);
+      }
+    }
+  }
+
+  return estimateRun(creators, rows, counts, {
+    depth,
+    bounds,
+    videos: flags.videos,
+    maxVideos: flags.maxVideos,
+    comments: flags.comments,
+    replies: flags.replies,
+    allVideos: flags.allVideos,
+    commentsDays: env.commentsDays,
+  }, timing);
 }
 
 /**
@@ -399,13 +466,20 @@ export function pickComments(videos, known, sinceMs, { allVideos = false, untilM
  *   • вместе с корневыми снимаются и ответы под ними (`parent_id` = id корневого, не больше
  *     `AMESTAT_REPLIES_MAX` на ветку) — они ложатся в ту же таблицу тем же upsert'ом.
  *     `replies: false` отменяет только клики по веткам; даровые ответы приезжают всё равно.
+ *
+ * `work` — счётчик хода (`{ commentVideo() }`, миграция v24): зовётся после КАЖДОГО видео, а не
+ * в конце шага. Шаг стоит десятки минут, и полоса прогресса, стоящая всё это время, врала бы.
+ * Отдаёт `{ videos, ms }` — сколько видео шаг обошёл и сколько это заняло: из этой пары
+ * калибруется цена `comments.video` (`estimate.mjs`).
  */
-async function collectComments(creator, videos, env, lane, flags, bounds, log) {
+async function collectComments(creator, videos, env, lane, flags, bounds, log, work = null) {
+  const started = Date.now();
+  const nothing = () => ({ videos: 0, ms: Date.now() - started });
   const platform = creator.platform ?? "tiktok";
   const collect = platform === "tiktok" ? collectTikTokComments
     : platform === "instagram" ? collectInstagramComments
       : null;
-  if (!collect) return;
+  if (!collect) return nothing();
 
   // Обычно шаг берёт СВЕЖИЕ видео — за `AMESTAT_COMMENTS_DAYS` дней, как и раньше при любой
   // глубине. Исключение одно: просьба «за выбранный период» (v18) — там комментарии нужны у
@@ -425,7 +499,7 @@ async function collectComments(creator, videos, env, lane, flags, bounds, log) {
   const alien = skipped ? `, ${skipped}` : "";
   if (picked.length === 0) {
     log?.(`  комментарии: видео 0, собрано 0, не вышло 0 (свежих с новыми комментариями нет ${window}${same}${alien})`);
-    return;
+    return nothing();
   }
   if (ranged) log?.("  комментарии: глубина «период» — берём видео из периода, а не свежие");
   if (unchanged.length > 0) log?.(`  комментарии: без изменений: ${unchanged.length} видео — их не открываем`);
@@ -439,9 +513,12 @@ async function collectComments(creator, videos, env, lane, flags, bounds, log) {
     // Нет профиля или не поднялся браузер — снимки уже записаны, обход этим не портим.
     log?.(`  комментарии: ${short(e)}`);
     notice("comments", `@${creator.handle}: браузер для комментариев не поднялся — ${short(e)}`);
-    return;
+    return nothing();
   }
 
+  // Время меряется от ПЕРВОГО видео: подъём браузера полосы стоит своих секунд, и они уже
+  // сосчитаны в шаге списка — второй раз в цену видео они попадать не должны.
+  const startedVideos = Date.now();
   let rows = 0, answers = 0, failed = 0;
   for (let i = 0; i < picked.length; i++) {
     const video = picked[i];
@@ -480,12 +557,24 @@ async function collectComments(creator, videos, env, lane, flags, bounds, log) {
       log?.(`    видео ${video.id}: ${short(e)}`);
       notice("comments", `@${creator.handle} видео ${video.id}: ${short(e)}`);
     }
+    // Видео пройдено — двигаем полосу прогресса, чем бы оно ни кончилось: работа потрачена
+    // и на упавшем.
+    work?.commentVideo?.();
     if (i < picked.length - 1) await sleep(COMMENTS_PAUSE_MS);
   }
   log?.(`  комментарии: видео ${picked.length}, собрано ${rows} (ответов ${answers}${flags.replies ? "" : ", ветки не раскрывались"}), не вышло ${failed}${same}`);
+  return { videos: picked.length, ms: Date.now() - startedVideos };
 }
 
-async function collectOne(creator, env, depth, bounds, lane, flags, log, pool = null) {
+/**
+ * Один креатор целиком: список, снимки, картинки, комментарии.
+ * `work` — счётчик хода (миграция v24): `list()` зовётся, как только список собран, а
+ * `commentVideo()` — после каждого видео шага комментариев.
+ * Отдаёт, кроме итога, ЗАМЕРЫ для калибровки: сколько заняли шаги и на скольких единицах.
+ * `pages` — число прокруток; площадка могла его не сказать (Graph API прокруток не делает
+ * вовсе), и тогда шаг списка в калибровку не идёт.
+ */
+async function collectOne(creator, env, depth, bounds, lane, flags, log, pool = null, work = null) {
   // Instagram собирается браузером полосы — тем же, который потом пойдёт за комментариями.
   // TikTok свой список видео берёт чистым одноразовым профилем и браузера полосы не трогает.
   const instagramWeb = (creator.platform ?? "tiktok") === "instagram" && env.igSource !== "graph";
@@ -508,7 +597,12 @@ async function collectOne(creator, env, depth, bounds, lane, flags, log, pool = 
   }
 
   const collect = pickCollector(creator, env, depth, bounds, ctx, scope, pool);
-  const { profile, videos } = await collect(log);
+  const startedList = Date.now();
+  const { profile, videos, pages } = await collect(log);
+  const listMs = Date.now() - startedList;
+  // Список собран — это первый и самый крупный шаг: полоса прогресса двигается здесь, а не
+  // в конце креатора.
+  work?.list?.();
   const takenAt = new Date().toISOString();
   const instagram = (creator.platform ?? "tiktok") === "instagram";
 
@@ -524,6 +618,7 @@ async function collectOne(creator, env, depth, bounds, lane, flags, log, pool = 
   // Картинки Instagram — в свой бакет; у TikTok адреса площадки идут в базу как есть.
   const images = instagram ? await rehostInstagram(creator, profile, videos, log) : null;
 
+  let commentsRun = { videos: 0, ms: 0 };
   if (videos.length > 0) {
     await upsert("videos", videos.map((v) => ({
       id: v.id,
@@ -549,7 +644,7 @@ async function collectOne(creator, env, depth, bounds, lane, flags, log, pool = 
     // Тексты комментариев — после снимков и только по свежим видео: строки `video_comments`
     // ссылаются на `videos`, значит upsert выше должен пройти первым.
     // ⚠️ `comments: false` пропускает шаг целиком — вместе с запросом прежних чисел.
-    if (flags.comments) await collectComments(creator, videos, env, lane, flags, bounds, log);
+    if (flags.comments) commentsRun = await collectComments(creator, videos, env, lane, flags, bounds, log, work);
     else log?.("  комментарии: пропущены (просьба без комментариев)");
   }
 
@@ -568,7 +663,14 @@ async function collectOne(creator, env, depth, bounds, lane, flags, log, pool = 
     ...avatar,
   });
 
-  return { videos: videos.length, followers: profile.followers };
+  return {
+    videos: videos.length,
+    followers: profile.followers,
+    listMs,
+    pages: Number.isFinite(pages) ? pages : null,
+    commentsMs: commentsRun.ms,
+    commentVideos: commentsRun.videos,
+  };
 }
 
 async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthTo, videos, maxVideos, comments, replies, allVideos, requestedBy, requestIds, slotLabel, onLog }) {
@@ -651,6 +753,39 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
       log(failedOnly ? "ни у кого нет ошибки — повторять нечего" : creatorId ? "креатор не найден в базе" : "в базе нет ни одного креатора");
     }
 
+    // Полосы известны заранее: по ним считается и оценка, и остаток каждой в прогнозе.
+    const lanes = splitLanes(creators);
+
+    // --- Оценка объёма (миграция v24) --------------------------------------------------------
+    // Считается ОДИН раз, до первого браузера, по тому, что уже лежит в базе. Не вышло — обход
+    // идёт как прежде, просто без полосы прогресса: оценка это подсказка, а не результат.
+    let timing = readTiming();
+    let estimate = null;
+    // Правда ли в базе есть колонки v24. Нет — перестаём их слать в этом обходе целиком.
+    let estimateColumns = true;
+    let estimateDirty = false;
+    const estOf = new Map();
+    // Работа по полосам: они идут одновременно, и остаток у каждой свой.
+    const laneWork = { tt: { total: 0, done: 0, startedAt: null }, ig: { total: 0, done: 0, startedAt: null } };
+    if (creators.length > 0) {
+      try {
+        estimate = await estimateWork(creators, env, depth, bounds, flags, timing);
+        for (const e of estimate.byCreator) estOf.set(e.creatorId, e);
+        for (const kind of ["tt", "ig"]) {
+          laneWork[kind].total = lanes[kind].reduce((sum, c) => sum + (estOf.get(String(c.id))?.total ?? 0), 0);
+        }
+        estimateDirty = true;
+        const mins = (s) => Math.max(1, Math.round(s / 60));
+        const listSum = estimate.byCreator.reduce((s, e) => s + e.list, 0);
+        const commSum = estimate.byCreator.reduce((s, e) => s + e.comments + e.replies, 0);
+        log(`оценка объёма: ~${mins(estimate.total)} мин (список ~${mins(listSum)}, комментарии ~${mins(commSum)}); полосы: TikTok ~${mins(laneWork.tt.total)}, Instagram ~${mins(laneWork.ig.total)}`);
+      } catch (e) {
+        log(`объём обхода не оценился: ${short(e)} — идём без полосы прогресса`);
+      }
+    }
+    /** Похожа ли беда патча на «колонок v24 в базе ещё нет». */
+    const noColumns = (e) => /HTTP 400|PGRST204|PGRST102|column .* does not exist|не удалось найти столбец/i.test(String(e?.message ?? e));
+
     /**
      * Ход обхода для сайта (миграция v14; владелец, 2026-09-09: «что за обход, сколько
      * выполнено, на сколько ещё»). После каждого креатора в `sync_runs` уезжают счётчики и
@@ -662,17 +797,44 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
      */
     const current = new Map();
     let progressFailed = 0;
+    /** Секунды в базу — до десятых: numeric, а не целое, и читать её будет человек. */
+    const round1 = (n) => Math.round(n * 10) / 10;
     async function progress() {
       if (!runId) return;
-      try {
-        await patch(`sync_runs?id=eq.${runId}`, {
-          creators_total: creators.length,
-          creators_done: done,
-          creators_failed: failed,
-          current_handles: [...current.values()],
-          progress_at: new Date().toISOString(),
+      const body = {
+        creators_total: creators.length,
+        creators_done: done,
+        creators_failed: failed,
+        current_handles: [...current.values()],
+        progress_at: new Date().toISOString(),
+      };
+      // Оценка и прогноз (миграция v24). Прогноз — по полосам: они идут одновременно, значит
+      // обход кончится тогда, когда закончит самая долгая, а не когда сложится их работа.
+      if (estimate && estimateColumns) {
+        body.work_total = round1(estimate.total);
+        body.work_done = round1(laneWork.tt.done + laneWork.ig.done);
+        const at = Date.now();
+        const lane = (kind) => ({
+          total: laneWork[kind].total,
+          done: laneWork[kind].done,
+          elapsedMs: laneWork[kind].startedAt === null ? 0 : at - laneWork[kind].startedAt,
         });
+        body.eta_at = new Date(at + etaSeconds([lane("tt"), lane("ig")]) * 1000).toISOString();
+        // Разбивка уезжает не каждый раз: меняется она только когда креатор кончился.
+        if (estimateDirty) body.estimate = estimate.byCreator.map(({ creatorId, ...rest }) => rest);
+      }
+      try {
+        await patch(`sync_runs?id=eq.${runId}`, body);
+        if (body.estimate) estimateDirty = false;
       } catch (e) {
+        // Колонок v24 в базе ещё нет — перестаём их слать вовсе и повторяем патч без них:
+        // счётчики креаторов сайту нужны в любом случае.
+        if (estimate && estimateColumns && noColumns(e)) {
+          estimateColumns = false;
+          log(`оценка объёма в базу не пошла (${short(e)}) — миграции v24 ещё нет, обход идёт без полосы прогресса`);
+          await progress();
+          return;
+        }
         // Одна строка в лог на первый сбой, дальше молчим: база и так уже под вопросом.
         if (progressFailed++ === 0) log(`ход обхода не записался: ${short(e)}`);
       }
@@ -692,6 +854,8 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
       let who = null;
       const say = (text) => log(`${cfg.tag} ${text}`, { source: "browser", handle: who });
       const startedLane = Date.now();
+      // Отсчёт скорости полосы — отсюда: до первого креатора она ничего не делала.
+      laneWork[kind].startedAt = startedLane;
       let laneDone = 0;
       say(`полоса ${cfg.name}: креаторов ${list.length}`);
       try {
@@ -744,11 +908,44 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
           };
           const started = Date.now();
           let error = null;
+          // Ход этого креатора: сколько его секунд уже засчитано. Оценки нет — счётчика нет
+          // вовсе, и полоса прогресса просто не двигается.
+          const est = estOf.get(String(creator.id)) ?? null;
+          let creatorDone = 0;
+          const addWork = (seconds) => {
+            if (!(seconds > 0)) return;
+            creatorDone += seconds;
+            laneWork[kind].done += seconds;
+          };
+          const work = est === null ? null : {
+            list() {
+              addWork(est.list);
+              void progress();
+            },
+            commentVideo() {
+              // Цена одного видео берётся из ЖИВОЙ калибровки: она могла подвинуться на
+              // прошлых креаторах этого же обхода.
+              addWork(timing["comments.video"] + (flags.replies ? timing["replies.video"] : 0));
+              void progress();
+            },
+          };
           try {
-            const res = await collectOne(creator, env, depth, bounds, lane, flags, say, pool);
+            const res = await collectOne(creator, env, depth, bounds, lane, flags, say, pool, work);
             done++;
             laneDone++;
             say(`  готово: видео ${res.videos}, подписчиков ${res.followers ?? "?"}`);
+            // Калибровка по факту (миграция v24): шаг списка раскладывается на «запуск» и
+            // «прокрутку», шаг комментариев — на цену видео. Площадка не сказала числа
+            // прокруток (Graph API их не делает) — шаг списка в калибровку не идёт.
+            if (res.listMs > 0 && res.pages !== null) {
+              timing = calibrateList(timing, creator.platform, res.listMs / 1000, res.pages);
+            }
+            if (res.commentVideos > 0 && res.commentsMs > 0) {
+              timing = calibrateComments(timing, res.commentsMs / 1000, res.commentVideos, flags.replies);
+            }
+            const bad = writeTiming(timing);
+            if (bad) say(`  калибровка не записалась: ${bad}`);
+            say(`  время: список ${Math.round(res.listMs / 1000)} с${res.pages === null ? "" : ` (${res.pages} прокруток)`}${res.commentVideos > 0 ? `, комментарии ${Math.round(res.commentsMs / 1000)} с на ${res.commentVideos} видео` : ""}`);
           } catch (e) {
             failed++;
             error = short(e);
@@ -765,6 +962,13 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
           }
           current.delete(kind);
           who = null;
+          // Креатор кончился — чем бы ни кончился, его остаток засчитывается: иначе полоса
+          // прогресса застряла бы на упавшем и на том, кому оценка насчитала лишнего.
+          if (est !== null) {
+            addWork(est.total - creatorDone);
+            est.done = true;
+            estimateDirty = true;
+          }
           await progress();
           const spent = Date.now() - started;
           if (spent > SLOW_CREATOR_MS) notice("slow", `@${creator.handle}: собирался ${Math.round(spent / 60_000)} мин`);
@@ -784,7 +988,6 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
       return { kind, spent, done: laneDone };
     }
 
-    const lanes = splitLanes(creators);
     // Полосы идут разом: одна водит чистые профили TikTok, вторая — Instagram в своём
     // постоянном профиле. Общего у них только база, счётчики и лог.
     await Promise.all([runLane("tt", lanes.tt), runLane("ig", lanes.ig)]);

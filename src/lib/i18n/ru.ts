@@ -545,6 +545,14 @@ export const ru = {
     triggerManual: "Обновление по просьбе",
     progress: "Обновляем {done} из {total}",
     progressErrors: ", ошибок {n}",
+    // Полоса 0–100 % и прогноз конца (миграция v24): доля считается по секундам работы, а не
+    // по числу пройденных креаторов.
+    percent: "{percent} %",
+    eta: "ещё ≈ {min} мин",
+    etaSoon: "меньше минуты",
+    workAria: "Готово {percent} %",
+    minutes: "{n} мин",
+    estimateLine: "оценка: список {list}, комментарии {comments}",
     retryTail: "(повтор)",
     noCommentsTail: "без комментариев",
     errorTail: "ошибка",
