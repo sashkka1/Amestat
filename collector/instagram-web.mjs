@@ -33,6 +33,10 @@
 // чистые функции в `scope.mjs`. ⚠️ Главная экономия здесь не в ленте, а во вкладке Reels: она
 // открывается только ради просмотров, и при «только наши» — лишь если среди отслеживаемых есть
 // клипы. У чужих видео просмотры не спрашиваются вовсе.
+//
+// Потолок (`scope.maxVideos`, миграция v19): набрали столько публикаций в пределах глубины —
+// лента дальше не листается, а в базу идут первые столько самых новых. Пусто — потолка нет;
+// отслеживаемых он не режет (`scope.mjs`).
 
 // Браузер поднимается общим `launchProfile()` из `browser.mjs` — тем же, которым ходят за
 // комментариями: там уже живут проверка профиля, свой срок на запуск и вторая попытка (Opera
@@ -45,7 +49,7 @@
 // Свой браузер модуль поднимает только когда его зовут в одиночку (разовая проверка, тест).
 import { launchProfile, PROFILE_OPERA, trimTraffic } from "./browser.mjs";
 import { notice, sessionHint } from "./notices.mjs";
-import { listStop, listRounds, missingTracked, filterDepth, depthBounds, depthWord } from "./scope.mjs";
+import { listStop, listRounds, missingTracked, filterDepth, depthBounds, depthWord, videoCap } from "./scope.mjs";
 
 // Куда странице профиля вообще можно ходить. Всё остальное отсекается (`trimTraffic`), плюс
 // независимо от хоста — видео (`media`) и шрифты.
@@ -232,7 +236,8 @@ async function scrollRound(page) {
  * `bounds` — готовые границы `{ since, until }` от `depthBounds` (`scope.mjs`). Не переданы —
  * считаются здесь из одной глубины: так модуль зовут в одиночку.
  * `ctx` — уже открытый браузер полосы; нет его — модуль поднимает свой и сам же закрывает.
- * `scope` — охват: `{ videos: 'all'|'ours', trackedIds, maxPages }`.
+ * `scope` — охват: `{ videos: 'all'|'ours', trackedIds, maxPages, maxVideos }`; `maxVideos`
+ * (null — без потолка) обрывает прокрутку ленты, как только набрано столько публикаций.
  * Отдаёт ту же форму, что и TikTok: `{ profile, videos }`; при беде — Error с русским текстом.
  */
 export async function collectInstagramWeb(creator, { depth = "all", bounds = null, browserChoice = "", ctx: shared = null, scope = null, proxy = null, log } = {}) {
@@ -243,6 +248,8 @@ export async function collectInstagramWeb(creator, { depth = "all", bounds = nul
   const trackedIds = mode === "ours" ? scope?.trackedIds ?? [] : [];
   const tracked = new Set(trackedIds.map((id) => String(id)));
   const feedRounds = listRounds(mode, scope?.maxPages, FEED_ROUNDS);
+  // Потолок числа видео (v19): null — без потолка, как было всегда.
+  const maxVideos = videoCap(scope?.maxVideos);
 
   // Нет профиля, не поднялся браузер — оба текста приходят из `launchProfile`; своих слов
   // добавляем ровно одно, чтобы в `sync_error` было видно площадку.
@@ -376,9 +383,15 @@ export async function collectInstagramWeb(creator, { depth = "all", bounds = nul
     // Лента: листаем до конца, до потолка или до первой публикации старше недели; при охвате
     // «только наши» — пока не встретились все отслеживаемые (`listStop` в `scope.mjs`).
     // Пустые круги и потолок публикаций обрывают прокрутку при любом охвате.
-    let stale = 0, feedPages = 0;
+    // Сколько публикаций в пределах глубины уже набрано — считает та же `filterDepth`, что решает,
+    // кто уйдёт в базу (как в `tiktok.mjs`). Потолка нет — не считаем вовсе.
+    const inDepth = () => (maxVideos === null ? 0
+      : filterDepth([...posts.values()].map((n) => ({ id: String(n.pk), publishedAt: n.taken_at ? new Date(Number(n.taken_at) * 1000).toISOString() : null })), since, trackedIds, until).length);
+
+    let stale = 0, feedPages = 0, stopReason = null;
     for (; feedPages < feedRounds; feedPages++) {
-      if (listStop({ mode, trackedIds, seenIds: [...posts.keys()], reachedOld, hasMore: hasNext }).stop) break;
+      const step = listStop({ mode, trackedIds, seenIds: [...posts.keys()], reachedOld, hasMore: hasNext, maxVideos, inDepth: inDepth() });
+      if (step.stop) { stopReason = step.reason; break; }
       if (stale >= STALE_ROUNDS || posts.size >= MAX_POSTS) break;
       const before = posts.size;
       await scrollRound(page);
@@ -428,8 +441,11 @@ export async function collectInstagramWeb(creator, { depth = "all", bounds = nul
     // Глубина: в базу идёт только попавшее в границы, но «пришедшими» считаем всё, что отдал
     // Instagram. ⚠️ Нижнюю границу отслеживаемые публикации переживают (за старыми нашими охват
     // и листал), верхнюю — нет: период есть период.
-    const picked = filterDepth(all, since, trackedIds, until);
+    const picked = filterDepth(all, since, trackedIds, until, maxVideos);
     log?.(`  публикаций пришло ${all.length}${hasNext ? "" : " (список кончился)"}${reachedOld && mode !== "ours" ? " (прокрутка остановлена: пошли публикации старше границы)" : ""}`);
+    if (maxVideos !== null) {
+      log?.(`  потолок: не больше ${maxVideos} самых новых видео — взято ${picked.length} за ${feedPages} прокруток${stopReason === "max" ? " (прокрутка остановлена: потолок набран)" : ""}`);
+    }
     if (mode === "ours") {
       const missing = missingTracked(trackedIds, [...posts.keys()]);
       log?.(`  охват: только наши — отслеживаемых видео ${trackedIds.length}, найдено ${trackedIds.length - missing.length} за ${feedPages} прокруток`);

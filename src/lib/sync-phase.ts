@@ -163,6 +163,25 @@ export function depthTail(rows: DepthRow[]): string {
   return ` · ${depthWord(first.depth, first.depth_from, first.depth_to)}`;
 }
 
+// 🔴 Слово потолка видео живёт здесь по одному разу — рядом с depthTail и по той же причине
+// (миграция v19): его зовут сводка попапа, строка состояния кнопки, строка «Обновлено» и
+// тосты очереди строк. null — потолка нет, и слова тоже нет: обычный обход не должен
+// обрастать хвостами.
+export function maxVideosWord(max: number | null): string | null {
+  return max === null ? null : `до ${max} видео`;
+}
+
+// Строка и просьбы, и обхода: обе несут max_videos (миграция v19).
+type MaxVideosRow = { max_videos: number | null };
+
+// Хвост «· до 50 видео» к строке состояния, к «Обновлено» и к тостам. Пачка сведена
+// сборщиком из одной просьбы — берём первую строку, как depthTail и triggerText.
+export function maxVideosTail(rows: MaxVideosRow[]): string {
+  const first = rows[0];
+  const word = first ? maxVideosWord(first.max_videos) : null;
+  return word ? ` · ${word}` : "";
+}
+
 // Чем кончилась пачка обходов — одной строкой для тоста. Не удался хоть один — показываем
 // первую же ошибку: разбираться, какой именно креатор упал, идут в карточку.
 export function runsResult(runs: SyncRun[]): { ok: boolean; text: string } {

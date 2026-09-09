@@ -32,6 +32,10 @@
 //     ровно до тех пор, пока все они не встретятся (правила — `scope.mjs`). Расписание, догон
 //     и повтор ходят с 'all' всегда. ⚠️ Тексты комментариев охват не меняет: они и так только
 //     у наших, жёлтые получают одни счётчики.
+//   • Потолок числа видео (`maxVideos`, миграция v19): не больше стольких самых новых видео на
+//     креатора в пределах глубины — прокрутка обрывается, лишнее в базу не идёт. Пусто (null) —
+//     потолка нет; расписание, догон и повтор после слота ходят без него всегда. Правила —
+//     `scope.mjs`; отслеживаемые видео потолок не режет.
 //   • Повтор после неудачи (`failedOnly`) берёт только тех, у кого в `creators.sync_error`
 //     что-то есть: успевшие собраться второй раз за час не тревожатся.
 //   • Тексты комментариев — отдельный шаг ПОСЛЕ снимков видео и только по свежим роликам
@@ -72,7 +76,7 @@ import { notice, startRun, reportRun, takeSessionHints } from "./notices.mjs";
 import { takeLaunchSlot } from "./tiktok-gate.mjs";
 import { labelOf, rememberBad, rememberGood } from "./proxies.mjs";
 import { startSyncLog, pushSyncLog, stopSyncLog } from "./synclog.mjs";
-import { depthBounds, depthLabel, normalizeDepth } from "./scope.mjs";
+import { depthBounds, depthLabel, normalizeDepth, videoCap } from "./scope.mjs";
 import { basename } from "node:path";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -489,7 +493,7 @@ async function collectOne(creator, env, depth, bounds, lane, flags, log, pool = 
 
   // Охват «только наши»: список отслеживаемых видео спрашивается ДО браузера — по нему решается,
   // докуда листать. Не спросился — опускаемся до охвата «всё» на этого креатора.
-  const scope = { videos: "all", trackedIds: [], maxPages: env.oursMaxPages };
+  const scope = { videos: "all", trackedIds: [], maxPages: env.oursMaxPages, maxVideos: flags.maxVideos ?? null };
   if (flags.videos === "ours") {
     const tracked = await trackedVideos(creator.id, log);
     if (tracked === null) {
@@ -567,7 +571,7 @@ async function collectOne(creator, env, depth, bounds, lane, flags, log, pool = 
   return { videos: videos.length, followers: profile.followers };
 }
 
-async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthTo, videos, comments, replies, allVideos, requestedBy, requestIds, slotLabel, onLog }) {
+async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthTo, videos, maxVideos, comments, replies, allVideos, requestedBy, requestIds, slotLabel, onLog }) {
   const env = loadEnv();
   const lines = [];
   // Границы отбора считаются РАЗ на обход и уходят площадкам готовыми: «сейчас» у полос иначе
@@ -601,6 +605,8 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
       depth_to: depthTo,
       // Охват видео этого обхода (v17): 'all' или 'ours'. Сайт читает его из строки обхода.
       videos,
+      // Потолок числа видео (v19): число или null («без потолка»).
+      max_videos: maxVideos,
       comments,
       replies,
       all_videos: allVideos,
@@ -622,7 +628,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
     return { runId: null, ok: false, done: 0, failed: 0, error: text, failures, depth, log: lines.join("\n") };
   }
   const who = failedOnly ? "только неудавшиеся" : creatorId ? `креатор ${creatorId}` : "все";
-  log(`обход #${runId} (${trigger}, ${who}, глубина ${label}, комментарии ${comments ? "да" : "нет"}, ветки ${replies ? "да" : "нет"}${allVideos ? ", и не наши видео" : ""}${videos === "ours" ? " · только наши" : ""})`);
+  log(`обход #${runId} (${trigger}, ${who}, глубина ${label}, комментарии ${comments ? "да" : "нет"}, ветки ${replies ? "да" : "нет"}${allVideos ? ", и не наши видео" : ""}${videos === "ours" ? " · только наши" : ""}${maxVideos !== null ? ` · до ${maxVideos} видео` : ""})`);
 
   // Просьбы забраны этим обходом — сайт перестаёт показывать «в очереди».
   if (requestIds?.length && runId) {
@@ -637,7 +643,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
   }
 
   let done = 0, failed = 0, firstError = null;
-  const flags = { comments, replies, allVideos, videos };
+  const flags = { comments, replies, allVideos, videos, maxVideos };
   try {
     const where = `${creatorId ? `&id=eq.${creatorId}` : ""}${failedOnly ? "&sync_error=not.is.null" : ""}`;
     const creators = await get(`creators?select=${CREATOR_FIELDS}${where}&order=sort_order.asc,added_at.asc`);
@@ -826,13 +832,16 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
 /**
  * Один обход. Пока идёт предыдущий — ждёт его в очереди.
  * `{ trigger: 'schedule'|'catchup'|'manual'|'retry', creatorId?, failedOnly?, depth?, depthFrom?,
- *    depthTo?, videos?, comments?, replies?, allVideos?, requestedBy?, requestIds?, slotLabel?,
- *    onLog? }`
+ *    depthTo?, videos?, maxVideos?, comments?, replies?, allVideos?, requestedBy?, requestIds?,
+ *    slotLabel?, onLog? }`
  * `depth` — 'all' (по умолчанию) | 'week' | 'month' | 'range' (миграция v18); у 'range'
  * обязательны обе границы `depthFrom` / `depthTo` (ISO или Date) — без них глубина опускается
  * до 'all' (`normalizeDepth` в `scope.mjs`), и это видно строкой в логе обхода;
  * `videos` — охват списка: `'all'` (по умолчанию, как ходят расписание, догон и повтор) или
  * `'ours'` — листать лишь до тех пор, пока не встретились все наши и жёлтые видео креатора;
+ * `maxVideos` — потолок: не больше стольких самых новых видео на креатора в пределах глубины
+ * (миграция v19). Пусто, ноль и мусор — `null`, потолка нет; расписание, догон и повтор после
+ * слота ходят без него всегда. Отслеживаемые видео потолок не режет (`scope.mjs`);
  * `comments` — снимать ли тексты комментариев (`false` — шага нет вовсе);
  * `allVideos` — снимать ли тексты и у НЕ наших видео (по умолчанию `false`: только наши,
  * `videos.ours`; расписание, догон и повтор его не ставят никогда);
@@ -845,7 +854,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
  * `failures` — `[{ handle, error }]` по каждому неудавшемуся креатору: из них резидент
  * собирает сообщение владельцу в Telegram.
  */
-export function runSync({ trigger = "manual", creatorId = null, failedOnly = false, depth = "all", depthFrom = null, depthTo = null, videos = "all", comments = true, replies = true, allVideos = false, requestedBy = null, requestIds = [], slotLabel = null, onLog } = {}) {
+export function runSync({ trigger = "manual", creatorId = null, failedOnly = false, depth = "all", depthFrom = null, depthTo = null, videos = "all", maxVideos = null, comments = true, replies = true, allVideos = false, requestedBy = null, requestIds = [], slotLabel = null, onLog } = {}) {
   // Глубина приводится к одному из четырёх видов ЗДЕСЬ и один раз: дальше по обходу ходит уже
   // разобранная пара «глубина + границы», и в базу ложится ровно она.
   const norm = normalizeDepth(depth, depthFrom, depthTo);
@@ -857,6 +866,9 @@ export function runSync({ trigger = "manual", creatorId = null, failedOnly = fal
     depthTo: norm.to,
     // Всё, кроме прямого «только наши», — полный охват: у колонки в базе тоже default 'all'.
     videos: videos === "ours" ? "ours" : "all",
+    // Потолок приводится к виду «целое больше нуля или null» ЗДЕСЬ и один раз — дальше по
+    // обходу и в базу ходит уже разобранное число (`scope.mjs`).
+    maxVideos: videoCap(maxVideos),
     comments: comments !== false,
     replies: replies !== false,
     allVideos: allVideos === true,

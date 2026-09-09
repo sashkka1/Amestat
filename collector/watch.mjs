@@ -28,6 +28,10 @@
 // ⚠️ Так же складывается охват видео (`videos`, миграция v17): хоть одна просьба «всё» — обход
 // идёт по всему списку. Расписание, догон и повтор после слота ходят с «всё» всегда; охват
 // «только наши» наследует лишь повтор ручной просьбы — у той, которую он повторяет.
+// ⚠️ Тем же путём ходит потолок числа видео (`max_videos`, миграция v19): в склейке побеждает
+// тот, что делает больше (`null` — «без потолка» — сильнее любого числа), расписание, догон и
+// повтор после слота ходят без потолка всегда, а повтор ручной просьбы берёт её потолок — иначе
+// второй заход молча стоил бы тех минут, ради которых потолок и просили.
 //
 // Цепочка при неудаче: неудачный `schedule`/`catchup` → через час `retry` только по
 // неудавшимся → если и он неудачен, одно сообщение владельцу в Telegram. Повтор ровно один:
@@ -71,7 +75,7 @@ import {
 } from "./schedule.mjs";
 import { logSystem } from "./synclog.mjs";
 import { groupRequests } from "./requests.mjs";
-import { depthLabel, normalizeDepth } from "./scope.mjs";
+import { depthLabel, normalizeDepth, videoCap } from "./scope.mjs";
 import { resolveBrowser, killLeftoverBrowsers } from "./browser.mjs";
 import { sendTelegram } from "./telegram.mjs";
 import {
@@ -150,8 +154,11 @@ function remember(row, source) {
   const allVideos = row.all_videos === true;
   // Охват списка (v17): `default 'all'` в базе; нет поля вовсе (старая просьба) — тоже «всё».
   const videos = row.videos === "ours" ? "ours" : "all";
-  pending.set(id, { id, creator_id: row.creator_id ?? null, requested_by: row.requested_by ?? null, depth, depth_from: depthFrom, depth_to: depthTo, videos, comments, replies, allVideos });
-  log(`просьба #${id} (${row.creator_id ? `креатор ${row.creator_id}` : "все"}, глубина ${depthLabel(depth, depthFrom, depthTo)}, комментарии ${comments ? "да" : "нет"}, ветки ${replies ? "да" : "нет"}${allVideos ? ", и не наши видео" : ""}${videos === "ours" ? " · только наши" : ""}) — ${source}`);
+  // Потолок числа видео (v19): целое или null («без потолка»). Нет поля, ноль, мусор — null,
+  // то есть как было до v19.
+  const maxVideos = videoCap(row.max_videos);
+  pending.set(id, { id, creator_id: row.creator_id ?? null, requested_by: row.requested_by ?? null, depth, depth_from: depthFrom, depth_to: depthTo, videos, max_videos: maxVideos, comments, replies, allVideos });
+  log(`просьба #${id} (${row.creator_id ? `креатор ${row.creator_id}` : "все"}, глубина ${depthLabel(depth, depthFrom, depthTo)}, комментарии ${comments ? "да" : "нет"}, ветки ${replies ? "да" : "нет"}${allVideos ? ", и не наши видео" : ""}${videos === "ours" ? " · только наши" : ""}${maxVideos !== null ? ` · до ${maxVideos} видео` : ""}) — ${source}`);
   return id;
 }
 
@@ -194,7 +201,7 @@ let retryAt = null;
  * просроченный, который пойдёт сразу), — строка в лог: это письмо владелец уже получал в тот
  * раз, когда повтор назначался впервые, а результат обхода придёт своим письмом.
  */
-function planRetry(due, slotLabel, { fresh = false, kind = "schedule", handles = [], videos = "all" } = {}) {
+function planRetry(due, slotLabel, { fresh = false, kind = "schedule", handles = [], videos = "all", maxVideos = null } = {}) {
   if (retryTimer) {
     log(`повтор уже назначен на ${retryAt.toLocaleString()} — второй не завожу`);
     return;
@@ -204,7 +211,7 @@ function planRetry(due, slotLabel, { fresh = false, kind = "schedule", handles =
   retryTimer = setTimeout(() => {
     retryTimer = null;
     retryAt = null;
-    runRetry(slotLabel, { handles, videos }).catch((e) => {
+    runRetry(slotLabel, { handles, videos, maxVideos }).catch((e) => {
       const text = String(e?.message ?? e).split("\n")[0];
       log(`повтор сорвался: ${text}`);
       residentNotice("run", `повтор сорвался: ${text}`);
@@ -238,7 +245,7 @@ async function callOwner({ slotLabel, retryLabel, error }) {
   if (sent) log("владельцу отправлено сообщение в Telegram");
 }
 
-async function runRetry(slotLabel, { handles = [], videos = "all" } = {}) {
+async function runRetry(slotLabel, { handles = [], videos = "all", maxVideos = null } = {}) {
   if (stopping) return;
   const retryLabel = hhmm(new Date());
 
@@ -272,9 +279,10 @@ async function runRetry(slotLabel, { handles = [], videos = "all" } = {}) {
   // а второго письма (прежний `callOwner`) больше нет.
   // Расписание, догон и повтор всегда снимают всё: комментарии и ветки. Галочки бывают только
   // у просьбы с сайта — там их ставит человек.
-  // ⚠️ Охват — исключение: повтор ПОСЛЕ РУЧНОЙ просьбы наследует её охват («только наши»),
-  // а повтор после слота идёт с полным, как и сам слот.
-  const res = await launch({ trigger: "retry", failedOnly: true, depth: env.slotDepth, videos, comments: true, replies: true, slotLabel });
+  // ⚠️ Охват и потолок — исключение: повтор ПОСЛЕ РУЧНОЙ просьбы наследует её охват («только
+  // наши») и её потолок («до N видео»), а повтор после слота идёт с полным охватом и без
+  // потолка, как и сам слот.
+  const res = await launch({ trigger: "retry", failedOnly: true, depth: env.slotDepth, videos, maxVideos, comments: true, replies: true, slotLabel });
   if (!res.ok) log(`вторая неудача подряд после слота ${slotLabel} — сказано письмом обхода #${res.runId ?? "?"}`);
 }
 
@@ -318,12 +326,12 @@ async function runScheduled(trigger, slot) {
  * `AMESTAT_MANUAL_RETRY_MIN` минут. Письма при назначении нет; если и повтор не удастся,
  * замечание придёт письмом самого обхода, как у обычного повтора.
  */
-function planManualRetry(res, videos = "all") {
+function planManualRetry(res, videos = "all", maxVideos = null) {
   if (stopping) return;
   const handles = addressProtectionHandles(res?.failures);
   if (handles.length === 0) return;
   const label = `${hhmm(new Date())} (ручная просьба)`;
-  planRetry(manualRetryAt(new Date(), env.manualRetryMin), label, { kind: "manual", handles, videos });
+  planRetry(manualRetryAt(new Date(), env.manualRetryMin), label, { kind: "manual", handles, videos, maxVideos });
 }
 
 async function drain() {
@@ -342,6 +350,7 @@ async function drain() {
           depthFrom: group.depthFrom,
           depthTo: group.depthTo,
           videos: group.videos,
+          maxVideos: group.maxVideos,
           comments: group.comments,
           replies: group.replies,
           allVideos: group.allVideos,
@@ -351,7 +360,8 @@ async function drain() {
         // Свалила защита TikTok по адресу — через 25 минут попробуем сами, один раз.
         // Повтор идёт с охватом ИСХОДНОЙ просьбы: человек просил «только наши» — второй заход
         // не должен молча стать полным и стоить тех же минут, ради которых охват и заведён.
-        planManualRetry(res, group.videos);
+        // По той же причине наследуется и потолок числа видео (v19).
+        planManualRetry(res, group.videos, group.maxVideos);
         if (stopping) break;
       }
     }
@@ -484,7 +494,7 @@ const channel = supabase
 let firstPoll = true;
 async function poll() {
   try {
-    const rows = await get("sync_requests?select=id,creator_id,requested_by,depth,depth_from,depth_to,videos,comments,replies,all_videos,seen_at,taken_at&taken_at=is.null&order=id.asc");
+    const rows = await get("sync_requests?select=id,creator_id,requested_by,depth,depth_from,depth_to,videos,max_videos,comments,replies,all_videos,seen_at,taken_at&taken_at=is.null&order=id.asc");
     const fresh = [];
     for (const row of rows) {
       const id = remember(row, "опрос");

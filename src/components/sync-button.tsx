@@ -14,6 +14,7 @@ import {
   SyncDepthGroup,
   SyncGroup,
   SyncLaunchButton,
+  SyncMaxVideosGroup,
   SyncPickGroup,
   SyncSummary,
   SyncVideosGroup,
@@ -39,6 +40,8 @@ import {
   allVideosTail,
   depthTail,
   depthWord,
+  maxVideosTail,
+  maxVideosWord,
   progressText,
   runsResult,
   stage,
@@ -93,8 +96,9 @@ function newest(runs: SyncRun[]): SyncRun | null {
 // scope — чей обход показывать в покое: null — любой последний, иначе id креатора.
 // pageCreatorIds — креаторы этой страницы для блока «Только эта страница»; null значит
 // «на странице все креаторы», и тогда группы «Кого» в попапе нет.
-// Попап — четыре группы блоков: кого обойти × какая площадка × на какую глубину × что снимать
-// (владелец, 2026-09-09). Блоки только выбирают; просьба уходит кнопкой внизу.
+// Попап — группы блоков: кого обойти × какая площадка × на какую глубину × сколько видео ×
+// охват списка × что снимать (владелец, 2026-09-09). Блоки только выбирают; просьба уходит
+// кнопкой внизу.
 export function SyncButton({
   scope,
   pageCreatorIds,
@@ -134,6 +138,9 @@ export function SyncButton({
   // Охват списка видео (миграция v17). Умолчание — «только наши»: ради экономии времени
   // охват и вводился; ежедневный обход всё равно ходит с 'all'. Тоже не запоминается.
   const [videos, setVideos] = useState<SyncVideos>("ours");
+  // Потолок числа видео на креатора (миграция v19). Умолчание — null («Все»): потолок режет
+  // историю, и выбираться он должен руками. Тоже не запоминается.
+  const [maxVideos, setMaxVideos] = useState<number | null>(null);
 
   // Площадка (владелец, 2026-09-08). Попап открывается в том же положении, что общий
   // переключатель страниц, но своего выбора не запоминает и общий не двигает: это выбор
@@ -156,6 +163,9 @@ export function SyncButton({
   // Хвост глубины ушедшей просьбы: «· месяц», «· 01.09–09.09» или пусто у 'all' и 'week'.
   // Готовой строкой, а не тремя полями: считать его умеет одно место — depthTail.
   const [askedDepth, setAskedDepth] = useState("");
+  // Хвост потолка ушедшей просьбы: «· до 50 видео» или пусто (миграция v19). Тоже готовой
+  // строкой и по той же причине — слово живёт в одном месте, maxVideosTail.
+  const [askedMaxVideos, setAskedMaxVideos] = useState("");
 
   // Список креаторов нужен, чтобы отобрать id по площадке: просьба уходит явным списком.
   // Читается один раз при открытии попапа — RLS уже отдаёт только видимых.
@@ -205,13 +215,18 @@ export function SyncButton({
     setAskedAllVideos(false);
     setAskedVideos("all");
     setAskedDepth("");
+    setAskedMaxVideos("");
     const last = finished ? newest(finished) : null;
     if (last) {
       setRun(last);
       const res = runsResult(finished ?? []);
       // Хвосты берём у самих обходов: там записано, чем они шли, а не угадано попапом.
       const full =
-        tail + depthTail(finished ?? []) + allVideosTail(finished ?? []) + videosTail(finished ?? []);
+        tail +
+        depthTail(finished ?? []) +
+        maxVideosTail(finished ?? []) +
+        allVideosTail(finished ?? []) +
+        videosTail(finished ?? []);
       if (res.ok) toast.success(res.text + full);
       else toast.error(res.text + full);
     }
@@ -243,6 +258,7 @@ export function SyncButton({
       setAskedAllVideos(reqs.some((r) => r.all_videos));
       setAskedVideos(reqs.every((r) => r.videos === "ours") ? "ours" : "all");
       setAskedDepth(depthTail(reqs));
+      setAskedMaxVideos(maxVideosTail(reqs));
       // Забрали не всех — обхода ещё нет: либо очередь, либо резидент уже принял просьбу.
       if (now.phase !== "running") {
         setPhase(now.phase);
@@ -324,6 +340,7 @@ export function SyncButton({
         setAskedAllVideos(waitingReqs.some((r) => r.all_videos));
         setAskedVideos(waitingReqs.every((r) => r.videos === "ours") ? "ours" : "all");
         setAskedDepth(depthTail(waitingReqs));
+        setAskedMaxVideos(maxVideosTail(waitingReqs));
         setPhase(now.phase);
       }
     })();
@@ -390,12 +407,13 @@ export function SyncButton({
       setOpen(next);
       if (!next) return;
       setPlatform(startPlatform);
-      // Каждое открытие — с чистого листа: ни «все видео», ни глубина, ни охват не
-      // наследуются от прошлой просьбы.
+      // Каждое открытие — с чистого листа: ни «все видео», ни глубина, ни охват, ни потолок
+      // видео не наследуются от прошлой просьбы.
       setAllVideos(false);
       setTarget("all");
       setDepth("week");
       setVideos("ours");
+      setMaxVideos(null);
       // Даты периода — тоже с чистого листа: последние 30 дней.
       resetRange();
       if (creators !== null || loadingCreators) return;
@@ -467,12 +485,15 @@ export function SyncButton({
         },
       ]),
     );
+    // Хвост потолка — тем же maxVideosTail, что читает строки базы, и по той же причине.
+    setAskedMaxVideos(maxVideosTail([{ max_videos: maxVideos }]));
     const res = await requestSync({
       creatorIds,
       depth,
       range: asked,
       // Без comments «и у не наших» не значит ничего — гасим на всякий случай и здесь.
       pick: { comments, replies, allVideos: comments && videos !== "ours" && allVideos, videos },
+      maxVideos,
     });
     setSending(false);
     setOpen(false);
@@ -483,6 +504,7 @@ export function SyncButton({
       setAskedAllVideos(false);
       setAskedVideos("all");
       setAskedDepth("");
+      setAskedMaxVideos("");
       setError(res.error);
       toast.error(res.error);
       return;
@@ -561,6 +583,7 @@ export function SyncButton({
             waitText +
             platformTail(askedPlatform) +
             askedDepth +
+            askedMaxVideos +
             (askedAllVideos ? ALL_VIDEOS_TEXT : "") +
             (askedVideos === "ours" ? OURS_ONLY_TEXT : "")
           ) : run ? (
@@ -571,6 +594,9 @@ export function SyncButton({
               {/* Обход шёл не по всему списку и не по неделе: «· месяц», «· 01.09–09.09».
                   Свежи только видео этого срока, остальные остались от прошлого раза. */}
               {depthTail([run])}
+              {/* Обход шёл с потолком видео: «· до 50 видео». Свежи только столько самых
+                  новых видео, остальные остались от прошлого раза (миграция v19). */}
+              {maxVideosTail([run])}
               {/* Обход шёл без текстов комментариев — счётчики свежие, а тексты остались
                   от прошлого раза, и знать об этом надо до того, как их станут читать. */}
               {run.comments === false && " · без комментариев"}
@@ -645,6 +671,8 @@ export function SyncButton({
           </SyncGroup>
           )}
           <SyncDepthGroup depth={depth} onDepth={setDepth} range={range} />
+          {/* Сколько видео на креатора — потолок поверх глубины (миграция v19). */}
+          <SyncMaxVideosGroup maxVideos={maxVideos} onMaxVideos={setMaxVideos} />
           {/* Охват списка видео: тот же блок, что в попапе строки списка (миграция v17). */}
           <SyncVideosGroup videos={videos} onVideos={setVideos} />
           <SyncPickGroup allVideos={allVideos} onAllVideos={setAllVideos} oursOnly={videos === "ours"} />
@@ -666,6 +694,7 @@ export function SyncButton({
               target === "all" ? "Все креаторы" : `Эта страница (${pageCount})`,
               platform === "all" ? null : PLATFORM_FILTER_LABELS[platform],
               depthWord(depth, range.range?.from, range.range?.to),
+              maxVideosWord(maxVideos),
               VIDEOS_WORD[pick.videos],
               pickWords(pick),
               pick.allVideos && ALL_VIDEOS_WORD,

@@ -16,22 +16,25 @@ import { fail, type ActionResult } from "./result";
 // month (30 дней) или range (выбранный период, границы в depth_from/depth_to).
 // Что снимать — pick (миграции v12, v13 и v17): тексты комментариев, ветки ответов, надо ли
 // брать тексты у не наших видео и с каким охватом листать список (все видео или только наши
-// и жёлтые).
+// и жёлтые). Сколько видео на креатора — maxVideos (миграция v19): 20/50/100 самых новых в
+// пределах глубины; null — без потолка.
 
 // Попросить обход: creatorIds — по строке на каждого креатора, null — одна строка на всех.
 // Строк может быть несколько, поэтому возвращаются все id: кнопка следит за ними разом.
-// pick идёт в каждую строку пачки: выбор в попапе один на всю просьбу.
+// pick и maxVideos идут в каждую строку пачки: выбор в попапе один на всю просьбу.
 // range — границы выбранного периода; нужны и пишутся только при depth === 'range'.
 export async function requestSync({
   creatorIds,
   depth,
   range,
   pick,
+  maxVideos,
 }: {
   creatorIds: string[] | null;
   depth: SyncDepth;
   range?: { from: Date; to: Date };
   pick: SyncPick;
+  maxVideos: number | null;
 }): Promise<ActionResult<{ ids: number[] }>> {
   if (creatorIds !== null && creatorIds.length === 0) return fail("На этой странице нет креаторов");
   // Без границ просьбу отобьёт проверка базы (миграция v18) — говорим это словами человека,
@@ -47,11 +50,14 @@ export async function requestSync({
   const requestedBy = auth.user.id;
   // Имена колонок базы, а не полей попапа: all_videos — тот же флаг, что pick.allVideos,
   // videos — охват списка ('all' | 'ours', миграция v17).
+  // max_videos — потолок числа видео на креатора (миграция v19); null уходит явно: «без
+  // потолка» — такой же осознанный выбор попапа, как и число.
   const flags = {
     comments: pick.comments,
     replies: pick.replies,
     all_videos: pick.allVideos,
     videos: pick.videos,
+    max_videos: maxVideos,
   };
   // Границы периода — в каждую строку пачки, как и всё остальное: выбор в попапе один на
   // всю просьбу. У прочих глубин колонки остаются пустыми — этого требует база.

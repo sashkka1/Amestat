@@ -20,10 +20,14 @@
 // все отслеживаемые видео креатора (наши и жёлтые), но не дольше `scope.maxPages` прокруток.
 // ⚠️ Всё, что пришло в пролистанной части, кладётся в базу как обычно: снимок счётчиков достаётся
 // даром вместе со списком. Правила остановки — чистые функции в `scope.mjs`.
+//
+// Потолок (`scope.maxVideos`, миграция v19): набрали столько видео в пределах глубины — прокрутка
+// обрывается, а в базу идут первые столько самых новых. Пусто — потолка нет. Отслеживаемые он не
+// режет, и при охвате «только наши» прокрутку не обрывает вовсе (`scope.mjs`).
 
 import { launchFresh } from "./browser.mjs";
 import { notice } from "./notices.mjs";
-import { listStop, listRounds, missingTracked, filterDepth, depthBounds, depthWord } from "./scope.mjs";
+import { listStop, listRounds, missingTracked, filterDepth, depthBounds, depthWord, videoCap } from "./scope.mjs";
 import { HOME, looksLikeProxyTrouble } from "./proxies.mjs";
 
 const PROFILE_TIMEOUT_MS = 45_000;
@@ -32,6 +36,8 @@ const STALE_ROUNDS = 8;        // столько пустых кругов по�
 const STOP_SCREEN = /Drag the slider|puzzle|captcha|Something went wrong|Verify to continue/i;
 
 const num = (x) => (x === null || x === undefined || x === "" ? null : Number(x));
+/** Момент публикации из сырого элемента ленты. Одно место: по нему считают и потолок, и отбор. */
+const publishedAt = (v) => (v.createTime ? new Date(Number(v.createTime) * 1000).toISOString() : null);
 
 /**
  * Один заход браузером: свежий профиль, прокрутка до конца (или до первого видео старше
@@ -43,6 +49,8 @@ async function attempt(handle, { browserChoice, log, since = null, until = null,
   const mode = scope?.videos === "ours" ? "ours" : "all";
   const trackedIds = mode === "ours" ? scope?.trackedIds ?? [] : [];
   const rounds = listRounds(mode, scope?.maxPages, SCROLL_ROUNDS);
+  // Потолок числа видео (v19): null — без потолка, как было всегда.
+  const maxVideos = videoCap(scope?.maxVideos);
   const { ctx, cleanup, describe } = await launchFresh(browserChoice, { proxy, log });
   log?.(`  браузер: ${describe}`);
   try {
@@ -110,9 +118,15 @@ async function attempt(handle, { browserChoice, log, since = null, until = null,
     // прежнее правило (конец списка или видео старше недели), при «только наши» — «все
     // отслеживаемые встретились». Пустые круги (`stale`) обрывают прокрутку при любом охвате:
     // если список перестал расти, дальше его всё равно не будет.
-    let stale = 0, pages = 0;
+    // Сколько видео в пределах глубины уже набрано — считает та же `filterDepth`, что решает,
+    // кто уйдёт в базу: два разных счёта разошлись бы молча. Потолка нет — не считаем вовсе.
+    const inDepth = () => (maxVideos === null ? 0
+      : filterDepth([...seen.values()].map((v) => ({ id: v.id, publishedAt: publishedAt(v) })), since, trackedIds, until).length);
+
+    let stale = 0, pages = 0, stopReason = null;
     for (; pages < rounds; pages++) {
-      if (listStop({ mode, trackedIds, seenIds: [...seen.keys()], reachedOld, hasMore }).stop) break;
+      const step = listStop({ mode, trackedIds, seenIds: [...seen.keys()], reachedOld, hasMore, maxVideos, inDepth: inDepth() });
+      if (step.stop) { stopReason = step.reason; break; }
       if (stale >= STALE_ROUNDS) break;
       const before = seen.size;
       await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
@@ -134,7 +148,7 @@ async function attempt(handle, { browserChoice, log, since = null, until = null,
       const isPhoto = !!v.imagePost;
       return {
         id: v.id,
-        publishedAt: v.createTime ? new Date(Number(v.createTime) * 1000).toISOString() : null,
+        publishedAt: publishedAt(v),
         caption: v.desc || "",
         coverUrl: v.video?.cover ?? v.imagePost?.images?.[0]?.imageURL?.urlList?.[0] ?? null,
         url: `https://www.tiktok.com/@${handle}/${isPhoto ? "photo" : "video"}/${v.id}`,
@@ -150,9 +164,12 @@ async function attempt(handle, { browserChoice, log, since = null, until = null,
     // TikTok — ноль видео за срок у активного профиля повтором не лечится, а пустой ответ лечится.
     // ⚠️ Нижнюю границу отслеживаемые видео переживают (за старыми нашими охват «только наши» и
     // листал), верхнюю — нет: период есть период.
-    const videos = filterDepth(all, since, trackedIds, until);
+    const videos = filterDepth(all, since, trackedIds, until, maxVideos);
 
     log?.(`  ответов item_list ${responses} (пустых ${empty}), видео ${all.length}, hasMore=${hasMore}, стоп-экран=${stopAfter}`);
+    if (maxVideos !== null) {
+      log?.(`  потолок: не больше ${maxVideos} самых новых видео — взято ${videos.length} за ${pages} прокруток${stopReason === "max" ? " (прокрутка остановлена: потолок набран)" : ""}`);
+    }
     if (mode === "ours") {
       const missing = missingTracked(trackedIds, [...seen.keys()]);
       log?.(`  охват: только наши — отслеживаемых видео ${trackedIds.length}, найдено ${trackedIds.length - missing.length} за ${pages} прокруток`);
@@ -176,8 +193,9 @@ async function attempt(handle, { browserChoice, log, since = null, until = null,
  * `depth` — 'all' | 'week' | 'month' | 'range'; нужен на слово в логе.
  * `bounds` — готовые границы `{ since, until }` от `depthBounds` (`scope.mjs`). Не переданы —
  * считаются здесь же из одной только глубины: так зовут разовые проверки (`proxy-check.mjs`).
- * `scope` — охват: `{ videos: 'all'|'ours', trackedIds, maxPages }`; при 'ours' прокрутка идёт
- * до тех пор, пока не встретятся все отслеживаемые видео креатора.
+ * `scope` — охват: `{ videos: 'all'|'ours', trackedIds, maxPages, maxVideos }`; при 'ours'
+ * прокрутка идёт до тех пор, пока не встретятся все отслеживаемые видео креатора, а `maxVideos`
+ * (null — без потолка) обрывает её, как только набрано столько видео в пределах глубины.
  * `pool` — пул адресов от `sync.mjs`: `{ take({ exclude }), bad(id, why), good(id) }`. Пусто —
  * идём с домашнего адреса без всякого лимита (так его зовут разовые проверки).
  *

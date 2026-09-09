@@ -20,7 +20,12 @@
 // разные просьбы, и склеить их нечем. Иначе «с 1 по 5» и «с 10 по 20» слились бы в один обход,
 // который не отдал бы правильно ни того ни другого.
 
-import { normalizeDepth } from "./scope.mjs";
+// ⚠️ Потолок числа видео (`max_videos`, миграция v19) ключом группы тоже НЕ является: он
+// складывается как охват — берётся тот, что делает больше. `null` («без потолка») побеждает любое
+// число, из двух чисел побеждает большее. Иначе просьба «до 50 видео» отняла бы у соседней
+// просьбы «всё» те видео, за которыми та и шла.
+
+import { normalizeDepth, videoCap, widerCap } from "./scope.mjs";
 
 /** Насколько глубина «широка»: чем больше, тем больше чужих просьб она может забрать. */
 const DEPTH_RANK = { all: 3, month: 2, week: 1, range: 0 };
@@ -54,7 +59,9 @@ export function covers(big, small) {
  * и своего обхода не получают.
  * ⚠️ «Все креаторы, неделя» НЕ покрывает «этот креатор, всё»: глубина мельче, и просьба
  * человека про полный список осталась бы невыполненной.
- * Отдаёт `[{ creatorId, depth, depthFrom, depthTo, videos, comments, replies, allVideos, requestedBy, ids }]`.
+ * Отдаёт `[{ creatorId, depth, depthFrom, depthTo, videos, maxVideos, comments, replies, allVideos, requestedBy, ids }]`.
+ * `maxVideos` — потолок числа видео (v19): `null` («без потолка») от любой просьбы побеждает,
+ * из двух чисел остаётся большее.
  * `depth` — 'all' | 'week' | 'month' | 'range' (v18); у `range` заполнены `depthFrom`/`depthTo`,
  * у остальных они null. Кривая глубина опускается до 'all' (`normalizeDepth` в `scope.mjs`) —
  * резидент про это уже сказал в лог, когда клал просьбу в очередь.
@@ -70,8 +77,14 @@ export function groupRequests(rows) {
     // резидента, где просьба уже разобрана (`depthFrom`). Та же беда, что была с `all_videos`.
     const { depth, from, to } = normalizeDepth(r.depth, r.depth_from ?? r.depthFrom ?? null, r.depth_to ?? r.depthTo ?? null);
     const key = `${creatorId ?? "все"}|${depth}|${from ?? ""}|${to ?? ""}`;
-    const g = groups.get(key) ?? { creatorId, depth, depthFrom: from, depthTo: to, requestedBy: r.requested_by ?? null, videos: "ours", comments: false, replies: false, allVideos: false, ids: [] };
+    const fresh = !groups.has(key);
+    const g = groups.get(key) ?? { creatorId, depth, depthFrom: from, depthTo: to, requestedBy: r.requested_by ?? null, videos: "ours", maxVideos: null, comments: false, replies: false, allVideos: false, ids: [] };
     g.ids.push(r.id);
+    // Потолок (v19): у первой просьбы группы берётся как есть, дальше побеждает тот, что шире.
+    // ⚠️ Оба написания, как и у прочих полей: прямо из базы (`max_videos`) и из очереди
+    // резидента, где просьба уже разобрана (`maxVideos`).
+    const cap = videoCap(r.max_videos ?? r.maxVideos);
+    g.maxVideos = fresh ? cap : widerCap(g.maxVideos, cap);
     // Нет поля вовсе (старая просьба, обрезанный select) — считаем «да», как было до флагов.
     g.comments = g.comments || r.comments !== false;
     g.replies = g.replies || r.replies !== false;
@@ -96,6 +109,7 @@ export function groupRequests(rows) {
       big.replies = big.replies || g.replies;
       big.allVideos = big.allVideos || g.allVideos;
       big.videos = big.videos === "all" || g.videos === "all" ? "all" : "ours";
+      big.maxVideos = widerCap(big.maxVideos, g.maxVideos);
     } else {
       kept.push(g);
     }

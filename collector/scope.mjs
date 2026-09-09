@@ -35,6 +35,16 @@
 //
 // ⚠️ Всё, что пришло в пролистанной части, кладётся в базу как обычно — снимок счётчиков
 // достаётся даром вместе со списком, и резать его незачем.
+//
+// Потолок числа видео (`max_videos`, миграция v19): не больше стольких САМЫХ НОВЫХ видео на
+// креатора — в пределах уже выбранной глубины. Пусто (null) — потолка нет вовсе, как было
+// всегда. Смысл: у креатора с 500 видео и глубиной «всё» это единственный способ обойти его
+// быстро.
+//   • прокрутка ОБРЫВАЕТСЯ, как только в пределах глубины набралось столько видео (`listStop`);
+//   • в базу идут первые `maxVideos` самых новых из отобранных (`filterDepth`).
+// ⚠️ Отслеживаемые (`ours`, `watch`) потолок НЕ режет — по той же причине, по которой их не
+// режет нижняя граница: за ними охват «только наши» и листает. Поэтому при 'ours' потолок
+// прокрутку не обрывает вовсе: сначала находим всех своих.
 
 export const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 export const MONTH_MS = 30 * 24 * 60 * 60 * 1000;
@@ -167,6 +177,31 @@ export function dayRange(fromText, toText) {
   return { from: new Date(from).toISOString(), to: new Date(to).toISOString() };
 }
 
+/**
+ * Потолок числа видео к одному виду — ОДИН на весь сборщик: так его читают просьба с сайта
+ * (`watch.mjs`), склейка (`requests.mjs`), командная строка (`run.mjs`) и `runSync`.
+ * Целое больше нуля — оно само; пустота, ноль, отрицательное и мусор — `null` («без потолка»).
+ * ⚠️ Ноль тоже `null`, а не «ноль видео»: обход, который сознательно не берёт ни одного видео,
+ * никому не нужен, а вот случайный ноль из формы стоил бы пустого среза.
+ * Чистая функция: её проверяют тесты.
+ */
+export function videoCap(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+}
+
+/**
+ * Потолок пошире из двух: `null` («без потолка») побеждает любое число, иначе большее число.
+ * Так склеиваются просьбы: обход, который делает больше, забирает просьбу того, кто делает
+ * меньше. Чистая функция.
+ */
+export function widerCap(a, b) {
+  const x = videoCap(a), y = videoCap(b);
+  if (x === null || y === null) return null;
+  return Math.max(x, y);
+}
+
 /** Множество строковых id из чего угодно (массив, Set, Map-ключи). */
 function idSet(ids) {
   const out = new Set();
@@ -192,14 +227,17 @@ export function missingTracked(trackedIds, seenIds) {
  * Пора ли перестать листать список.
  * `mode` — 'all' или 'ours'; `trackedIds` — id наших и жёлтых видео креатора; `seenIds` — id
  * всего, что уже пришло; `reachedOld` — в пачке было видео старше границы недели;
- * `hasMore` — площадка сказала, что список ещё не кончился.
+ * `hasMore` — площадка сказала, что список ещё не кончился;
+ * `maxVideos` — потолок числа видео (null — потолка нет), `inDepth` — сколько видео в пределах
+ * глубины уже набралось.
  * Отдаёт `{ stop, reason }`, где `reason` — 'end' (список кончился), 'old' (пошли видео старше
- * недели), 'tracked' (все отслеживаемые нашлись), 'no-tracked' (при 'ours' отслеживаемых нет
- * вовсе — хватит первой страницы) или null, если листать дальше.
+ * недели), 'max' (набрали потолок), 'tracked' (все отслеживаемые нашлись), 'no-tracked' (при
+ * 'ours' отслеживаемых нет вовсе — хватит первой страницы) или null, если листать дальше.
  * Чистая функция: её проверяют тесты.
  */
-export function listStop({ mode = "all", trackedIds = [], seenIds = [], reachedOld = false, hasMore = true } = {}) {
+export function listStop({ mode = "all", trackedIds = [], seenIds = [], reachedOld = false, hasMore = true, maxVideos = null, inDepth = 0 } = {}) {
   if (mode === "ours") {
+    // Потолок здесь не при чём вовсе: за отслеживаемыми мы как раз и листаем, а их он не режет.
     // ⚠️ «Все отслеживаемые нашлись» проверяется ПЕРЕД концом списка: причина остановки для
     // лога тогда честнее — мы не долистали до дна, а нашли всё, за чем шли.
     const tracked = idSet(trackedIds);
@@ -211,6 +249,9 @@ export function listStop({ mode = "all", trackedIds = [], seenIds = [], reachedO
   }
   if (!hasMore) return { stop: true, reason: "end" };
   if (reachedOld) return { stop: true, reason: "old" };
+  // Потолок: столько самых новых видео уже набрано — дальше в прошлое незачем.
+  const cap = videoCap(maxVideos);
+  if (cap !== null && Number(inDepth) >= cap) return { stop: true, reason: "max" };
   return { stop: false, reason: null };
 }
 
@@ -232,20 +273,33 @@ export function listRounds(mode, oursMaxPages, defaultRounds) {
  * ⚠️ А вот верхнюю границу не переживает никто: «за выбранный период» значит период, и видео
  * свежее `until` не идёт ни в `videos`, ни в снимок — даже наше. Иначе просьба «покажи первую
  * неделю сентября» тихо приносила бы вчерашние цифры.
+ * `maxVideos` (v19) — потолок: из отобранного остаются только столько САМЫХ НОВЫХ видео.
+ * ⚠️ Отслеживаемые потолок переживают так же, как нижнюю границу, и сверх него: их и так
+ * немного, а обход ради них и затевался. Видео без даты при потолке считается самым старым.
+ * Порядок пришедшего списка не меняется — потолок только выбрасывает лишнее.
  * Чистая функция.
  */
-export function filterDepth(videos, since, trackedIds = [], until = null) {
+export function filterDepth(videos, since, trackedIds = [], until = null, maxVideos = null) {
   const hasSince = since !== null && since !== undefined;
   const hasUntil = until !== null && until !== undefined;
-  if (!hasSince && !hasUntil) return [...(videos ?? [])];
+  const cap = videoCap(maxVideos);
   const tracked = idSet(trackedIds);
-  return (videos ?? []).filter((v) => {
-    const at = v.publishedAt === null || v.publishedAt === undefined ? null : Date.parse(v.publishedAt);
-    const known = at !== null && !Number.isNaN(at);
-    // Верхняя граница первой: она сильнее пометки «наше». Дата неизвестна — в период не берём:
-    // положить видео неизвестной давности в срез за конкретные дни нельзя.
-    if (hasUntil && (!known || at > until)) return false;
-    if (tracked.has(String(v.id))) return true;
-    return hasSince ? known && at >= since : true;
-  });
+  const kept = !hasSince && !hasUntil
+    ? [...(videos ?? [])]
+    : (videos ?? []).filter((v) => {
+      const at = v.publishedAt === null || v.publishedAt === undefined ? null : Date.parse(v.publishedAt);
+      const known = at !== null && !Number.isNaN(at);
+      // Верхняя граница первой: она сильнее пометки «наше». Дата неизвестна — в период не берём:
+      // положить видео неизвестной давности в срез за конкретные дни нельзя.
+      if (hasUntil && (!known || at > until)) return false;
+      if (tracked.has(String(v.id))) return true;
+      return hasSince ? known && at >= since : true;
+    });
+  if (cap === null || kept.length <= cap) return kept;
+  const at = (v) => {
+    const ms = v.publishedAt === null || v.publishedAt === undefined ? NaN : Date.parse(v.publishedAt);
+    return Number.isNaN(ms) ? -Infinity : ms;
+  };
+  const newest = idSet([...kept].sort((a, b) => at(b) - at(a)).slice(0, cap).map((v) => v.id));
+  return kept.filter((v) => newest.has(String(v.id)) || tracked.has(String(v.id)));
 }

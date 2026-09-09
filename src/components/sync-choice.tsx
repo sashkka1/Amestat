@@ -245,6 +245,37 @@ export function SyncDepthGroup({
   );
 }
 
+// Сколько видео на креатора (владелец, 2026-09-09; миграция v19): «у креатора с 500 видео и
+// без свежих публикаций „неделя“ пуста, а „всё“ листает всю историю». Потолок ложится поверх
+// глубины по времени: берутся столько самых новых видео, сколько выбрано. «Все» — без
+// потолка, как было всегда, поэтому и умолчание попапа.
+//
+// 🔴 Слово потолка живёт в `lib/sync-phase.ts` (maxVideosWord, maxVideosTail) по одному
+// разу — его зовут и сводки обоих попапов, и строки состояния, и тосты очереди.
+export const MAX_VIDEOS_CHOICES: (number | null)[] = [20, 50, 100, null];
+
+export function SyncMaxVideosGroup({
+  maxVideos,
+  onMaxVideos,
+}: {
+  maxVideos: number | null;
+  onMaxVideos: (next: number | null) => void;
+}) {
+  return (
+    <SyncGroup title="Сколько видео">
+      {MAX_VIDEOS_CHOICES.map((n) => (
+        <SyncChoiceBlock
+          key={n ?? "all"}
+          label={n === null ? "Все" : String(n)}
+          hint={n === null ? "без потолка" : "самых новых в пределах глубины"}
+          selected={maxVideos === n}
+          onClick={() => onMaxVideos(n)}
+        />
+      ))}
+    </SyncGroup>
+  );
+}
+
 // Охват списка видео (владелец, 2026-09-09; миграция v17): «всё» — весь список, как в
 // ежедневном обходе; «только наши» — наши и жёлтые, остальные не смотрим и экономим время.
 // Ради этого охват и вводился, поэтому попап открывается на «только наши»; ежедневные обходы
@@ -336,8 +367,9 @@ export function SyncPickGroup({
 
 // Слова сводки. Собираются из того же выбора, что уходит в просьбу, — чтобы под кнопкой
 // стояло ровно то, что случится по нажатию.
-// ⚠️ Слова глубины сюда не переезжают: они живут в `lib/sync-phase.ts` (DEPTH_WORD,
-// depthWord, depthTail) — их зовут и попапы, и строки состояния, и тосты очереди.
+// ⚠️ Слова глубины и потолка видео сюда не переезжают: они живут в `lib/sync-phase.ts`
+// (DEPTH_WORD, depthWord, depthTail, maxVideosWord, maxVideosTail) — их зовут и попапы,
+// и строки состояния, и тосты очереди.
 
 export function pickWords(pick: SyncPick): string {
   if (!pick.comments) return "без комментариев";

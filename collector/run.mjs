@@ -13,12 +13,15 @@
 //   node run.mjs --only-ours                            — охват «только наши»: листать список лишь
 //                                                         до тех пор, пока не встретятся все наши
 //                                                         и жёлтые видео креатора
+//   node run.mjs --max-videos 50                        — не больше 50 самых новых видео на
+//                                                         креатора (в пределах глубины); пусто —
+//                                                         потолка нет
 //   node run.mjs --trigger schedule|catchup|manual|retry — чем помечен обход (по умолчанию manual)
 //
 // Печатает ход дела построчно и завершается кодом 0 (все собрались) или 1 (кто-то нет).
 
 import { runSync } from "./sync.mjs";
-import { dayRange } from "./scope.mjs";
+import { dayRange, videoCap } from "./scope.mjs";
 
 const argv = process.argv.slice(2);
 const opt = (name, fallback = null) => {
@@ -28,7 +31,7 @@ const opt = (name, fallback = null) => {
 const has = (name) => argv.includes(name);
 
 if (has("--help") || has("-h")) {
-  console.log("node run.mjs [--creator <uuid>] [--depth all|week|month|range] [--from ГГГГ-ММ-ДД --to ГГГГ-ММ-ДД] [--only-ours] [--failed-only] [--no-comments] [--no-replies] [--all-videos] [--trigger manual|schedule|catchup|retry]");
+  console.log("node run.mjs [--creator <uuid>] [--depth all|week|month|range] [--from ГГГГ-ММ-ДД --to ГГГГ-ММ-ДД] [--only-ours] [--max-videos N] [--failed-only] [--no-comments] [--no-replies] [--all-videos] [--trigger manual|schedule|catchup|retry]");
   process.exit(0);
 }
 
@@ -42,6 +45,14 @@ const replies = !has("--no-replies");
 const allVideos = has("--all-videos");
 // `--only-ours` — охват из матрицы обновления: 'ours' вместо 'all' (миграция v17).
 const videos = has("--only-ours") ? "ours" : "all";
+// `--max-videos N` — потолок числа видео (миграция v19): не больше N самых новых на креатора.
+// ⚠️ Ругаемся, а не молча идём без потолка: человек в командной строке просил потолок, и
+// подменённое «без потолка» выглядело бы как исправная работа (то же правило, что у периода).
+const maxVideos = videoCap(opt("--max-videos"));
+if (has("--max-videos") && maxVideos === null) {
+  console.error(`✗ --max-videos требует целое число больше нуля, а не «${opt("--max-videos") ?? ""}»`);
+  process.exit(2);
+}
 const trigger = opt("--trigger", "manual");
 if (!["manual", "schedule", "catchup", "retry"].includes(trigger)) {
   console.error(`✗ --trigger бывает только manual, schedule, catchup или retry, а не «${trigger}»`);
@@ -73,7 +84,7 @@ if (depth === "range") {
 const started = Date.now();
 let result;
 try {
-  result = await runSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthTo, videos, comments, replies, allVideos, onLog: (line) => console.log(line) });
+  result = await runSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthTo, videos, maxVideos, comments, replies, allVideos, onLog: (line) => console.log(line) });
 } catch (e) {
   // Сюда попадает только то, что случилось до первой строки в базе (например, нет .env.local).
   console.error(`✗ ${String(e?.message ?? e).split("\n")[0]}`);

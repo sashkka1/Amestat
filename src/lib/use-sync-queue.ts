@@ -8,6 +8,7 @@ import {
   POLL_MS,
   allVideosTail,
   depthTail,
+  maxVideosTail,
   progressText,
   runsResult,
   stage,
@@ -36,9 +37,16 @@ export type RowSync = {
 export type SyncQueue = {
   // Только креаторы с открытой просьбой; у остальных строк кнопка в покое.
   rows: Map<string, RowSync>;
-  // Попросить обход одного креатора: охват задан строкой, выбираются глубина и что снимать.
-  // range — границы глубины «Период» (миграция v18); у остальных глубин его нет.
-  ask: (creatorId: string, depth: SyncDepth, pick: SyncPick, range?: PeriodRange) => Promise<void>;
+  // Попросить обход одного креатора: охват задан строкой, выбираются глубина, потолок видео
+  // и что снимать. maxVideos — потолок числа видео на креатора (миграция v19); null — без
+  // потолка. range — границы глубины «Период» (миграция v18); у остальных глубин его нет.
+  ask: (
+    creatorId: string,
+    depth: SyncDepth,
+    pick: SyncPick,
+    maxVideos: number | null,
+    range?: PeriodRange,
+  ) => Promise<void>;
   error: string | null;
 };
 
@@ -138,9 +146,9 @@ export function useSyncQueue(creatorIds: string[], onDone: () => void): SyncQueu
     });
     if (done.length > 0) {
       const res = runsResult(done);
-      // Те же хвосты, что у кнопки «Обновить»: на какую глубину шёл обход, брал ли тексты
-      // у не наших видео и шёл ли сокращённым охватом списка.
-      const tail = depthTail(done) + allVideosTail(done) + videosTail(done);
+      // Те же хвосты, что у кнопки «Обновить»: на какую глубину шёл обход, с каким потолком
+      // видео, брал ли тексты у не наших видео и шёл ли сокращённым охватом списка.
+      const tail = depthTail(done) + maxVideosTail(done) + allVideosTail(done) + videosTail(done);
       if (res.ok) toast.success(res.text + tail);
       else toast.error(res.text + tail);
     }
@@ -180,9 +188,15 @@ export function useSyncQueue(creatorIds: string[], onDone: () => void): SyncQueu
   }, [waiting, check]);
 
   const ask = useCallback(
-    async (creatorId: string, depth: SyncDepth, pick: SyncPick, range?: PeriodRange) => {
+    async (
+      creatorId: string,
+      depth: SyncDepth,
+      pick: SyncPick,
+      maxVideos: number | null,
+      range?: PeriodRange,
+    ) => {
       setSending((prev) => (prev.includes(creatorId) ? prev : [...prev, creatorId]));
-      const res = await requestSync({ creatorIds: [creatorId], depth, range, pick });
+      const res = await requestSync({ creatorIds: [creatorId], depth, range, pick, maxVideos });
       setSending((prev) => prev.filter((c) => c !== creatorId));
       if (!res.ok) {
         setError(res.error);
@@ -210,6 +224,8 @@ export function useSyncQueue(creatorIds: string[], onDone: () => void): SyncQueu
         replies: pick.replies,
         all_videos: pick.allVideos,
         videos: pick.videos,
+        // Тот же потолок, что ушёл в базу (миграция v19): из него хвост «· до 50 видео».
+        max_videos: maxVideos,
         notified_at: null,
       }));
       setReqs((prev) => [...prev, ...fresh]);

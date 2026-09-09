@@ -9,6 +9,7 @@ import {
   ALL_VIDEOS_WORD,
   SyncDepthGroup,
   SyncLaunchButton,
+  SyncMaxVideosGroup,
   SyncPickGroup,
   SyncSummary,
   SyncVideosGroup,
@@ -16,7 +17,7 @@ import {
   pickWords,
   useSyncRange,
 } from "@/components/sync-choice";
-import { PHASE_TEXT, UNAVAILABLE_TITLE, depthWord } from "@/lib/sync-phase";
+import { PHASE_TEXT, UNAVAILABLE_TITLE, depthWord, maxVideosWord } from "@/lib/sync-phase";
 import type { PeriodRange } from "@/lib/period";
 import type { RowSync } from "@/lib/use-sync-queue";
 import type { SyncDepth, SyncPick, SyncVideos } from "@/lib/types";
@@ -24,8 +25,8 @@ import { cn } from "@/lib/utils";
 
 // Кнопка обновления в строке списка креаторов. Блоков «Кого» и «Площадка» здесь нет: охват
 // задан строкой, а площадка у одного креатора одна — выбирать не из чего. Остальное такое
-// же, как у кнопки над страницей: блоки «Глубина» и «Что снимать», сводка и одна кнопка
-// внизу (владелец, 2026-09-09). Общий вид — `components/sync-choice.tsx`.
+// же, как у кнопки над страницей: блоки «Глубина», «Сколько видео», «Видео» и «Что снимать»,
+// сводка и одна кнопка внизу (владелец, 2026-09-09). Общий вид — `components/sync-choice.tsx`.
 //
 // state — из useSyncQueue: состояние на всю таблицу, а не своё у каждой строки.
 export function RowSyncButton({
@@ -34,7 +35,8 @@ export function RowSyncButton({
 }: {
   state: RowSync | undefined;
   // range — границы глубины «Период»; у остальных глубин его нет вовсе (миграция v18).
-  onAsk: (depth: SyncDepth, pick: SyncPick, range?: PeriodRange) => void;
+  // maxVideos — потолок числа видео на креатора; null — без потолка (миграция v19).
+  onAsk: (depth: SyncDepth, pick: SyncPick, maxVideos: number | null, range?: PeriodRange) => void;
 }) {
   const [open, setOpen] = useState(false);
   // «Что снимать» — то же, что в попапе кнопки над страницей: выбор общий и запоминается.
@@ -47,6 +49,9 @@ export function RowSyncButton({
   // Охват списка видео (миграция v17). Умолчание — «только наши»: ради экономии времени
   // охват и вводился. Как и глубина, не запоминается и сбрасывается при каждом открытии.
   const [videos, setVideos] = useState<SyncVideos>("ours");
+  // Потолок числа видео на креатора (миграция v19). Умолчание — null («Все»), и, как всё
+  // остальное здесь, он не запоминается: потолок режет историю, выбирается руками.
+  const [maxVideos, setMaxVideos] = useState<number | null>(null);
   // Даты глубины «Период» — своё состояние этого попапа, как и всё остальное в нём.
   const range = useSyncRange();
   const resetRange = range.reset;
@@ -58,6 +63,7 @@ export function RowSyncButton({
       setAllVideos(false);
       setDepth("week");
       setVideos("ours");
+      setMaxVideos(null);
       // Умолчание периода — последние 30 дней, при каждом открытии заново.
       resetRange();
     },
@@ -91,7 +97,7 @@ export function RowSyncButton({
 
   function ask() {
     setOpen(false);
-    onAsk(depth, pick, asked);
+    onAsk(depth, pick, maxVideos, asked);
   }
 
   return (
@@ -103,12 +109,15 @@ export function RowSyncButton({
       </PopoverTrigger>
       <PopoverContent align="end" className="w-96 max-w-[calc(100vw-2rem)]">
         <SyncDepthGroup depth={depth} onDepth={setDepth} range={range} />
+        {/* Сколько видео на креатора — потолок поверх глубины (миграция v19). */}
+        <SyncMaxVideosGroup maxVideos={maxVideos} onMaxVideos={setMaxVideos} />
         <SyncVideosGroup videos={videos} onVideos={setVideos} />
         <SyncPickGroup allVideos={allVideos} onAllVideos={setAllVideos} oursOnly={videos === "ours"} />
         <SyncSummary
           parts={[
             "Этот креатор",
             depthWord(depth, range.range?.from, range.range?.to),
+            maxVideosWord(maxVideos),
             VIDEOS_WORD[pick.videos],
             pickWords(pick),
             pick.allVideos && ALL_VIDEOS_WORD,

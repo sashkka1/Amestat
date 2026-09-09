@@ -226,6 +226,9 @@ export type SyncRun = {
   all_videos: boolean;
   // С каким охватом видео шёл обход (миграция v17). Расписание всегда 'all'.
   videos: SyncVideos;
+  // Потолок числа видео на креатора (миграция v19): не больше стольких самых новых видео
+  // в пределах глубины. null — без потолка; расписание ходит без него.
+  max_videos: number | null;
   // Ход обхода, видимый с сайта (миграция v14). creators_done и creators_failed сборщик
   // теперь двигает после каждого креатора, а не пишет один раз в конце.
   // creators_total — сколько всего в этом обходе; null — список ещё не отобран.
@@ -292,12 +295,16 @@ export type SyncRequest = {
   all_videos: boolean;
   // Охват списка видео (миграция v17): 'all' — весь список; 'ours' — только наши и жёлтые.
   videos: SyncVideos;
+  // Потолок числа видео на креатора (миграция v19): не больше стольких самых новых видео
+  // в пределах глубины. null — без потолка. Нужен там, где у креатора вся история длинная,
+  // а «неделя» пуста: 20/50/100 самых новых поверх глубины по времени.
+  max_videos: number | null;
   // База сама (pg_cron) написала владельцу в Telegram: просьбу никто не принял за 3 минуты.
   notified_at: string | null;
 };
 
-// Остальное ставит база: requested_at, depth, comments, replies, all_videos и videos —
-// по умолчанию, taken_at и run_id — сборщик.
+// Остальное ставит база: requested_at, depth, comments, replies, all_videos, videos и
+// max_videos — по умолчанию, taken_at и run_id — сборщик.
 export type SyncRequestInsert = {
   requested_by: string;
   creator_id?: string | null;
@@ -309,6 +316,8 @@ export type SyncRequestInsert = {
   replies?: boolean;
   all_videos?: boolean;
   videos?: SyncVideos;
+  // Потолок видео на креатора (миграция v19); null — без потолка, как и по умолчанию.
+  max_videos?: number | null;
 };
 
 export type CreatorLatest = {

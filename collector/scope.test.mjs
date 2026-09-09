@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import {
   listStop, listRounds, missingTracked, filterDepth,
   depthBounds, depthWord, depthLabel, normalizeDepth, dayRange,
+  videoCap, widerCap,
   WEEK_MS, MONTH_MS,
 } from "./scope.mjs";
 
@@ -165,6 +166,41 @@ test("видео без даты в период не берётся вовсе 
 test("границ нет вовсе — список отдаётся как есть", () => {
   const all = [v("a", 1), v("b", 900)];
   assert.deepEqual(filterDepth(all, null, [], null).map((x) => x.id), ["a", "b"]);
+});
+
+// --- потолок числа видео (миграция v19) -------------------------------------------------------
+
+test("потолок обрывает прокрутку, как только набрано столько видео в пределах глубины", () => {
+  assert.deepEqual(listStop({ mode: "all", hasMore: true, maxVideos: 50, inDepth: 49 }), { stop: false, reason: null });
+  assert.deepEqual(listStop({ mode: "all", hasMore: true, maxVideos: 50, inDepth: 50 }), { stop: true, reason: "max" });
+  assert.deepEqual(listStop({ mode: "all", hasMore: true, maxVideos: null, inDepth: 900 }), { stop: false, reason: null }, "без потолка листаем как раньше");
+});
+
+test("при охвате «только наши» потолок прокрутку не обрывает — отслеживаемых он не режет", () => {
+  const step = listStop({ mode: "ours", trackedIds: ["a", "b"], seenIds: ["a"], hasMore: true, maxVideos: 1, inDepth: 99 });
+  assert.deepEqual(step, { stop: false, reason: null });
+});
+
+test("в базу идут только первые maxVideos самых новых — порядок списка не меняется", () => {
+  const all = [v("new", 1), v("old", 5), v("mid", 3)];
+  assert.deepEqual(filterDepth(all, null, [], null, 2).map((x) => x.id), ["new", "mid"], "самое старое отсечено, порядок прежний");
+  assert.deepEqual(filterDepth(all, null, [], null, 9).map((x) => x.id), ["new", "old", "mid"], "потолок выше числа видео — не режет");
+  assert.deepEqual(filterDepth([v("a", 1), { id: "nodate", publishedAt: null }], null, [], null, 1).map((x) => x.id), ["a"], "без даты считается самым старым");
+});
+
+test("отслеживаемое видео потолок переживает, даже если оно не в самых новых", () => {
+  const all = [v("new", 1), v("mid", 3), v("ourOld", 300)];
+  assert.deepEqual(filterDepth(all, SINCE, ["ourOld"], null, 1).map((x) => x.id), ["new", "ourOld"]);
+});
+
+test("потолок приводится к одному виду, а склейка берёт пошире (null побеждает)", () => {
+  assert.equal(videoCap("50"), 50);
+  assert.equal(videoCap(null), null);
+  assert.equal(videoCap(0), null, "ноль — это «без потолка», а не «ноль видео»");
+  assert.equal(videoCap("чепуха"), null);
+  assert.equal(widerCap(20, 50), 50);
+  assert.equal(widerCap(20, null), null);
+  assert.equal(widerCap(null, null), null);
 });
 
 // --- приведение глубины ---------------------------------------------------------------------
