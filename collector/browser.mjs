@@ -7,6 +7,10 @@
 //     профиле и любой повторный запуск получают ответы 200 с пустым телом и ноль видео.
 //     Поэтому профиль одноразовый: свой временный каталог на каждого креатора, после —
 //     удаляется. Вход в TikTok не нужен, страницы публичные.
+//  3а. Прокси (2026-09-09) передаётся Playwright полем `proxy`, а не ключом `--proxy-server`:
+//     логин и пароль идут отдельными полями и в командную строку процесса не попадают. Прочее
+//     от прокси не зависит: `trimTraffic` работает поверх (`route.abort()`/`continue()` — это
+//     решение браузера о своём же запросе), `--process-per-site` и потолок renderer'ов тоже.
 //  3. Постоянных профилей с входом фейка ДВА и это не дубль по недосмотру: на одной папке
 //     живёт ровно один процесс браузера, а обход идёт двумя полосами разом (`sync.mjs`), и
 //     профиль нужен обеим — Instagram'у и комментариям TikTok. `profile-tiktok` заводится
@@ -55,6 +59,32 @@ const LEAN_ARGS = ["--process-per-site", "--renderer-process-limit=8"];
 // пусть запускается тихо». Размер тоже задан: окно во всю ширину владелец видит краем даже
 // уведённым, если оно шире экрана.
 const OFFSCREEN = { left: -2400, top: -2400, width: 1100, height: 800 };
+
+/**
+ * Прокси для запуска браузера — как его понимает Playwright.
+ * `address` — адрес пула (`proxies.mjs`): `{ id, label, server, username, password }`. Домашний
+ * адрес прокси не имеет вовсе (`server` пуст) — тогда здесь пусто и браузер идёт как раньше.
+ *
+ * ⚠️ Ключ `--proxy-server` в аргументах Chromium НЕ НУЖЕН: Playwright передаёт адрес сам, а
+ * логин и пароль — отдельными полями (только так они не попадут ни в командную строку процесса,
+ * ни в логи). Ключ рядом с `proxy` дал бы два разных источника правды.
+ * 🔴 Логин и пароль отсюда никуда больше не уходят: в лог пишется только `label`.
+ */
+function proxyOption(address) {
+  if (!address?.server) return {};
+  return {
+    proxy: {
+      server: address.server,
+      ...(address.username ? { username: address.username } : {}),
+      ...(address.password ? { password: address.password } : {}),
+    },
+  };
+}
+
+/** Подпись адреса для лога: «домашний» или «прокси #2 host:port». Без учётных данных. */
+export function addressLabel(address) {
+  return address?.label ?? "домашний";
+}
 
 /** Самый свежий версионный opera.exe или null, если Opera не установлена. */
 export function findOpera() {
@@ -383,9 +413,11 @@ export async function killLeftoverBrowsers() {
 
 /**
  * Свежий одноразовый профиль и запущенный в нём браузер.
- * Отдаёт `{ ctx, cleanup, profileDir, describe }`; `cleanup()` закрывает браузер и стирает профиль.
+ * `proxy` — адрес пула (`proxies.mjs`) или null/домашний адрес: тогда браузер идёт с домашнего
+ * адреса, как ходил всегда. Отдаёт `{ ctx, cleanup, profileDir, describe, address }`;
+ * `cleanup()` закрывает браузер и стирает профиль.
  */
-export async function launchFresh(choice = "", { headless = true } = {}) {
+export async function launchFresh(choice = "", { headless = true, proxy = null, log } = {}) {
   const browser = resolveBrowser(choice);
   const profileDir = mkdtempSync(join(tmpdir(), "amestat-"));
   let ctx = null;
@@ -409,6 +441,7 @@ export async function launchFresh(choice = "", { headless = true } = {}) {
   try {
     ctx = await chromium.launchPersistentContext(profileDir, {
       ...(browser.executablePath ? { executablePath: browser.executablePath } : { channel: "chrome" }),
+      ...proxyOption(proxy),
       headless,
       viewport: { width: 1280, height: 900 },
       args: ["--disable-blink-features=AutomationControlled", "--no-first-run", ...LEAN_ARGS],
@@ -417,10 +450,11 @@ export async function launchFresh(choice = "", { headless = true } = {}) {
   } catch (e) {
     rmSync(profileDir, { recursive: true, force: true });
     const text = String(e.message ?? e).split("\n")[0];
-    notice("browser", `свежий профиль не поднялся: ${text}`);
-    throw new Error(`браузер не запустился (${browser.describe}): ${text}`);
+    notice("browser", `свежий профиль не поднялся (адрес: ${addressLabel(proxy)}): ${text}`);
+    throw new Error(`браузер не запустился (${browser.describe}, адрес: ${addressLabel(proxy)}): ${text}`);
   }
-  return { ctx, cleanup, profileDir, describe: browser.describe };
+  log?.(`  адрес: ${addressLabel(proxy)}`);
+  return { ctx, cleanup, profileDir, describe: browser.describe, address: addressLabel(proxy) };
 }
 
 /**
@@ -439,9 +473,12 @@ export async function launchFresh(choice = "", { headless = true } = {}) {
  * одноразовый профиль со списком видео), Opera поднимается через раз: процесс стартует, пишет
  * в профиль и виснет, не отдав канал управления, — 2026-09-08 это стоило целого шага
  * комментариев. Ждать по три минуты незачем: свой срок в минуту, пауза и вторая попытка.
+ * ⚠️ `proxy` здесь ставится ТОЛЬКО при `AMESTAT_PROXY_SCOPE=all` и всегда один и тот же адрес
+ * (`sync.mjs`, `laneProxy`): в этом профиле живут ВОШЕДШИЕ аккаунты, а смена адреса у вошедшего
+ * аккаунта ловит проверки безопасности площадки. Чередовать адреса тут нельзя.
  * Отдаёт `{ ctx, cleanup, describe, profile }`; `cleanup()` закрывает браузер, профиль НЕ трогает.
  */
-export async function launchProfile(choice = "", { headless = true, profile = PROFILE_OPERA, log } = {}) {
+export async function launchProfile(choice = "", { headless = true, profile = PROFILE_OPERA, proxy = null, log } = {}) {
   const browser = resolveBrowser(choice);
   const PROFILE_DIR = profile;
   if (!existsSync(PROFILE_DIR)) {
@@ -460,6 +497,7 @@ export async function launchProfile(choice = "", { headless = true, profile = PR
   if (stale) notice("browser", `профиль ${basename(PROFILE_DIR)} может восстановить старые вкладки: ${stale}`);
   const options = {
     ...(browser.executablePath ? { executablePath: browser.executablePath } : { channel: "chrome" }),
+    ...proxyOption(proxy),
     headless,
     timeout: LAUNCH_TIMEOUT_MS,
     viewport: { width: 1280, height: 900 },
@@ -478,14 +516,15 @@ export async function launchProfile(choice = "", { headless = true, profile = PR
     } catch (e) {
       const text = String(e?.message ?? e).split("\n")[0];
       if (attempt === 2) {
-        notice("browser", `браузер не запустился дважды на ${basename(PROFILE_DIR)}: ${first}; потом ${text}`);
-        throw new Error(`браузер не запустился дважды (${browser.describe}, ${basename(PROFILE_DIR)}): ${first}; потом ${text}`);
+        notice("browser", `браузер не запустился дважды на ${basename(PROFILE_DIR)} (адрес: ${addressLabel(proxy)}): ${first}; потом ${text}`);
+        throw new Error(`браузер не запустился дважды (${browser.describe}, ${basename(PROFILE_DIR)}, адрес: ${addressLabel(proxy)}): ${first}; потом ${text}`);
       }
       first = text;
       notice("browser", `браузер не встал с первого раза на ${basename(PROFILE_DIR)}, пробую ещё: ${text}`);
       await new Promise((r) => setTimeout(r, LAUNCH_RETRY_MS));
     }
   }
+  log?.(`  адрес: ${addressLabel(proxy)}`);
   // Если вкладки всё же восстановились (Opera не послушала Preferences) — закрываем всё,
   // кроме первой: каждая лишняя вкладка — свой renderer и своя память.
   const restored = ctx.pages().slice(1);

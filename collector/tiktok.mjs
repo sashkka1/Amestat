@@ -7,10 +7,14 @@
 // ⚠️ Счётчики: `statsV2` — строки и они верные; в старом `stats.heartCount` у крупных
 // креаторов переполнение (лайки приезжают отрицательными). Поэтому statsV2 первым.
 //
-// Глубина (`depth`): 'all' — весь список профиля, 'week' — только видео за последние 7 дней.
-// Список TikTok отдаёт от новых к старым, поэтому «неделя» — не фильтр в конце, а ранний
-// выход: как только в пришедшей пачке оказалось видео старше недели, дальше листать незачем.
+// Глубина (`depth`, миграция v18): 'all' — весь список профиля, 'week' — 7 дней, 'month' — 30,
+// 'range' — выбранный период. Границы приходят готовыми (`bounds` от `depthBounds` в
+// `scope.mjs`) — здесь дат не считают вовсе.
+// Список TikTok отдаёт от новых к старым, поэтому нижняя граница — не фильтр в конце, а ранний
+// выход: как только в пришедшей пачке оказалось видео старше её, дальше листать незачем.
 // Отфильтровать всё равно надо: в последней пачке приезжают и старые соседи по странице.
+// ⚠️ Верхняя граница (`until`, только у периода) прокрутку НЕ обрывает: свежие видео лежат в
+// начале ленты, и сквозь них надо пройти. Но в базу они не идут.
 //
 // Охват (`scope.videos`, миграция v17): 'all' — как выше; 'ours' — листаем, пока не встретились
 // все отслеживаемые видео креатора (наши и жёлтые), но не дольше `scope.maxPages` прокруток.
@@ -19,26 +23,27 @@
 
 import { launchFresh } from "./browser.mjs";
 import { notice } from "./notices.mjs";
-import { listStop, listRounds, missingTracked, filterDepth } from "./scope.mjs";
+import { listStop, listRounds, missingTracked, filterDepth, depthBounds, depthWord } from "./scope.mjs";
+import { HOME, looksLikeProxyTrouble } from "./proxies.mjs";
 
 const PROFILE_TIMEOUT_MS = 45_000;
 const SCROLL_ROUNDS = 80;      // потолок кругов прокрутки
 const STALE_ROUNDS = 8;        // столько пустых кругов подряд — значит список кончился
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const STOP_SCREEN = /Drag the slider|puzzle|captcha|Something went wrong|Verify to continue/i;
 
 const num = (x) => (x === null || x === undefined || x === "" ? null : Number(x));
 
 /**
  * Один заход браузером: свежий профиль, прокрутка до конца (или до первого видео старше
- * `since`), всё закрыть. `since` — граница в мс эпохи или null, если глубина 'all'.
+ * `since`), всё закрыть. `since`/`until` — границы в мс эпохи или null, если границы нет.
+ * `depth` нужен только на слово в строке лога («за неделю» / «за месяц» / «за период»).
  * `scope` — охват: `{ videos: 'all'|'ours', trackedIds, maxPages }`.
  */
-async function attempt(handle, { browserChoice, log, since = null, scope = null }) {
+async function attempt(handle, { browserChoice, log, since = null, until = null, depth = "all", scope = null, proxy = null }) {
   const mode = scope?.videos === "ours" ? "ours" : "all";
   const trackedIds = mode === "ours" ? scope?.trackedIds ?? [] : [];
   const rounds = listRounds(mode, scope?.maxPages, SCROLL_ROUNDS);
-  const { ctx, cleanup, describe } = await launchFresh(browserChoice);
+  const { ctx, cleanup, describe } = await launchFresh(browserChoice, { proxy, log });
   log?.(`  браузер: ${describe}`);
   try {
     const page = await ctx.newPage();
@@ -59,7 +64,7 @@ async function attempt(handle, { browserChoice, log, since = null, scope = null 
         const batch = json.itemList ?? [];
         for (const item of batch) seen.set(item.id, item);
         if (json.hasMore === false) hasMore = false;
-        // Глубина «неделя»: самое старое видео пачки старше границы — дальше в прошлое не идём.
+        // Нижняя граница глубины: самое старое видео пачки старше её — дальше в прошлое не идём.
         if (since !== null && batch.length > 0) {
           const oldest = Math.min(...batch.map((i) => Number(i.createTime ?? 0) * 1000));
           if (Number.isFinite(oldest) && oldest < since) reachedOld = true;
@@ -141,10 +146,11 @@ async function attempt(handle, { browserChoice, log, since = null, scope = null 
         saves: num(vs2.collectCount ?? vs1.collectCount),
       };
     });
-    // Неделя: в базу идёт только свежее, но «пришедшими» считаем всё, что отдал TikTok —
-    // ноль видео за неделю у активного профиля повтором не лечится, а пустой ответ лечится.
-    // ⚠️ Отслеживаемые видео неделя не отсекает: за старыми нашими охват «только наши» и листал.
-    const videos = filterDepth(all, since, trackedIds);
+    // Глубина: в базу идёт только то, что в неё попало, но «пришедшими» считаем всё, что отдал
+    // TikTok — ноль видео за срок у активного профиля повтором не лечится, а пустой ответ лечится.
+    // ⚠️ Нижнюю границу отслеживаемые видео переживают (за старыми нашими охват «только наши» и
+    // листал), верхнюю — нет: период есть период.
+    const videos = filterDepth(all, since, trackedIds, until);
 
     log?.(`  ответов item_list ${responses} (пустых ${empty}), видео ${all.length}, hasMore=${hasMore}, стоп-экран=${stopAfter}`);
     if (mode === "ours") {
@@ -155,7 +161,9 @@ async function attempt(handle, { browserChoice, log, since = null, scope = null 
         notice("list", `@${handle}: не найдено ${missing.length} наших/жёлтых видео за ${pages} прокруток (охват «только наши»)`);
       }
     }
-    if (since !== null) log?.(`  за неделю: ${videos.length} из ${all.length} пришедших${reachedOld && mode !== "ours" ? " (прокрутка остановлена: пошли видео старше недели)" : ""}${mode === "ours" ? " (с отслеживаемыми, они остаются при любой давности)" : ""}`);
+    if (since !== null || until !== null) {
+      log?.(`  за ${depthWord(depth)}: ${videos.length} из ${all.length} пришедших${reachedOld && mode !== "ours" ? " (прокрутка остановлена: пошли видео старше границы)" : ""}${mode === "ours" && until === null ? " (с отслеживаемыми, они остаются при любой давности)" : ""}${until !== null ? " (видео свежее верхней границы не берём — даже отслеживаемые)" : ""}`);
+    }
     return { profile, videos, rawCount: all.length, stopScreen: stopAfter };
   } finally {
     await cleanup();
@@ -165,36 +173,75 @@ async function attempt(handle, { browserChoice, log, since = null, scope = null 
 /**
  * Сбор креатора TikTok.
  * `creator` — строка из `creators` (нужен `handle`).
- * `depth` — 'all' (весь список) или 'week' (только последние 7 дней).
+ * `depth` — 'all' | 'week' | 'month' | 'range'; нужен на слово в логе.
+ * `bounds` — готовые границы `{ since, until }` от `depthBounds` (`scope.mjs`). Не переданы —
+ * считаются здесь же из одной только глубины: так зовут разовые проверки (`proxy-check.mjs`).
  * `scope` — охват: `{ videos: 'all'|'ours', trackedIds, maxPages }`; при 'ours' прокрутка идёт
  * до тех пор, пока не встретятся все отслеживаемые видео креатора.
+ * `pool` — пул адресов от `sync.mjs`: `{ take({ exclude }), bad(id, why), good(id) }`. Пусто —
+ * идём с домашнего адреса без всякого лимита (так его зовут разовые проверки).
+ *
+ * ⚠️ Правило «без мгновенной второй попытки» (владелец, 2026-09-09) относится к ОДНОМУ И ТОМУ ЖЕ
+ * адресу и никуда не делось: придержанному адресу и новый профиль ответит той же пустотой.
+ * Адресов больше одного — беда другая: пустой список говорит про этот адрес, а не про весь
+ * обход. Тогда адрес уходит в паузу (`pool.bad`) и делается ОДНА попытка со следующим здоровым —
+ * не больше двух адресов на креатора, чтобы один недоступный креатор не сжёг весь пул.
  * Отдаёт `{ profile, videos }`; при беде бросает Error с русским текстом.
  */
-export async function collectTikTok(creator, { browserChoice = "", depth = "all", scope = null, log } = {}) {
+export async function collectTikTok(creator, { browserChoice = "", depth = "all", bounds = null, scope = null, pool = null, log } = {}) {
   const handle = String(creator.handle || "").replace(/^@/, "");
   if (!handle) throw new Error("у креатора пустой handle");
-  const since = depth === "week" ? Date.now() - WEEK_MS : null;
+  const { since, until } = bounds ?? depthBounds(depth);
+  // Пула нет — адрес один, домашний, и второго круга не будет: `exclude` его же и исключает.
+  const take = pool?.take ?? (async ({ exclude = [] } = {}) => (exclude.includes(HOME.id) ? null : { ...HOME }));
 
-  const first = await attempt(handle, { browserChoice, log, since, scope });
-  // Решение — по пришедшим видео, а не по оставшимся после фильтра недели: «за неделю ноль»
-  // бывает у живого профиля, который просто молчал.
-  if (first.rawCount > 0 || !first.profile.videosCount) {
-    if (first.rawCount === 0 && first.stopScreen) {
+  const tried = [];
+  let last = null;
+  for (let round = 0; round < 2; round++) {
+    const address = await take({ exclude: tried.map((a) => a.id) });
+    // Годных адресов не осталось: на первом круге это отмена обхода, на втором — просто конец
+    // попыток, и ниже сработает обычная ошибка «защита по адресу».
+    if (!address) {
+      if (tried.length === 0) throw new Error(`обход @${handle} отменён: свободного адреса нет`);
+      break;
+    }
+    tried.push(address);
+
+    let res = null;
+    try {
+      res = await attempt(handle, { browserChoice, log, since, until, depth, scope, proxy: address });
+    } catch (e) {
+      const text = String(e?.message ?? e).split("\n")[0];
+      // Адрес не отозвался (прокси лежит, не пустил, оборвал) — это беда адреса, а не площадки:
+      // в паузу его, чтобы следующий креатор не встал на те же грабли. Повтора здесь нет:
+      // отличить «прокси лежит» от «интернета нет» мы не можем, и второй заход стоил бы запуска.
+      if (looksLikeProxyTrouble(text)) pool?.bad?.(address.id, `ошибка соединения: ${text}`);
+      throw e;
+    }
+    last = res;
+
+    // Решение — по пришедшим видео, а не по оставшимся после фильтра недели: «за неделю ноль»
+    // бывает у живого профиля, который просто молчал.
+    if (res.rawCount > 0 || !res.profile.videosCount) {
+      if (res.rawCount === 0 && res.stopScreen) {
+        notice("stop", `@${handle}: стоп-экран TikTok`);
+        throw new Error(`стоп-экран TikTok у @${handle}`);
+      }
+      pool?.good?.(address.id);
+      return { profile: res.profile, videos: res.videos };
+    }
+    if (res.stopScreen) {
       notice("stop", `@${handle}: стоп-экран TikTok`);
       throw new Error(`стоп-экран TikTok у @${handle}`);
     }
-    return { profile: first.profile, videos: first.videos };
+    // Пустой список при непустом профиле — этот адрес придержан.
+    pool?.bad?.(address.id, "TikTok не отдал список");
   }
 
-  if (first.stopScreen) {
-    notice("stop", `@${handle}: стоп-экран TikTok`);
-    throw new Error(`стоп-экран TikTok у @${handle}`);
-  }
-  // ⚠️ Второй попытки в новом профиле здесь БОЛЬШЕ НЕТ (владелец, 2026-09-09). Пустой
-  // `item_list` при непустом профиле значит, что TikTok придержал наш домашний адрес, — а
-  // придержанному адресу и новый профиль ответит той же пустотой. Прежний повтор стоил ещё
-  // одного запуска браузера и полутора минут, и он же сжигал лимит запусков (`tiktok-gate.mjs`),
-  // из-за которого следующие креаторы получали то же самое. Ждать надо не профиль, а паузу.
-  notice("list", `@${handle}: TikTok не отдал список (защита по адресу; по профилю ${first.profile.videosCount} видео)`);
-  throw new Error(`TikTok не отдал список (защита по адресу; по профилю ${first.profile.videosCount} видео): @${handle}`);
+  // Адрес был один — текст ошибки прежний, слово в слово. Пробовали несколько — перечисляем их:
+  // владельцу важно видеть, что пусто пришло не с одного адреса.
+  const where = tried.length > 1 ? `защита по адресу: ${tried.map((a) => a.label).join(", ")}` : "защита по адресу";
+  const text = `TikTok не отдал список (${where}; по профилю ${last?.profile?.videosCount ?? "?"} видео)`;
+  notice("list", `@${handle}: ${text}`);
+  throw new Error(`${text}: @${handle}`);
 }

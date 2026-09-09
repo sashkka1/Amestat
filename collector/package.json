@@ -7,6 +7,7 @@
   "scripts": {
     "run": "node run.mjs",
     "watch": "node watch.mjs",
+    "proxy-check": "node proxy-check.mjs",
     "test": "node --test"
   },
   "dependencies": {

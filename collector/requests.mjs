@@ -15,12 +15,38 @@
 // ⚠️ Так же складывается и охват видео (`videos`, миграция v17): хоть одна просьба «всё» —
 // обход идёт по всему списку, и просьба «только наши» получает больше, чем просила. Обратное
 // было бы потерей: попросивший полный список остался бы без чужих видео.
+//
+// ⚠️ Глубина (миграция v18) в ключ группы входит ВМЕСТЕ С ГРАНИЦАМИ: два разных периода — две
+// разные просьбы, и склеить их нечем. Иначе «с 1 по 5» и «с 10 по 20» слились бы в один обход,
+// который не отдал бы правильно ни того ни другого.
+
+import { normalizeDepth } from "./scope.mjs";
+
+/** Насколько глубина «широка»: чем больше, тем больше чужих просьб она может забрать. */
+const DEPTH_RANK = { all: 3, month: 2, week: 1, range: 0 };
+
+/**
+ * Покрывает ли глубина `big` глубину `small`.
+ *   • `all` покрывает всё;
+ *   • `month` покрывает `week` и себя: 30 дней включают 7;
+ *   • `week` покрывает только `week`;
+ *   • `range` покрывает ТОЛЬКО ровно такой же период. Даже период пошире не берёт чужой
+ *     поуже: у него своя верхняя граница, и чужие свежие видео он отсечёт.
+ * Чистая функция: её проверяют тесты.
+ */
+function depthCovers(big, small) {
+  if (big.depth === "all") return true;
+  if (big.depth === "range" || small.depth === "range") {
+    return big.depth === "range" && small.depth === "range"
+      && big.depthFrom === small.depthFrom && big.depthTo === small.depthTo;
+  }
+  return (DEPTH_RANK[big.depth] ?? 0) >= (DEPTH_RANK[small.depth] ?? 0);
+}
 
 /** Покрывает ли обход группы `big` просьбы группы `small`: охват шире или тот же, глубина не мельче. */
 export function covers(big, small) {
   const scopeOk = big.creatorId === null || big.creatorId === small.creatorId;
-  const depthOk = big.depth === "all" || small.depth === "week";
-  return scopeOk && depthOk;
+  return scopeOk && depthCovers(big, small);
 }
 
 /**
@@ -28,7 +54,10 @@ export function covers(big, small) {
  * и своего обхода не получают.
  * ⚠️ «Все креаторы, неделя» НЕ покрывает «этот креатор, всё»: глубина мельче, и просьба
  * человека про полный список осталась бы невыполненной.
- * Отдаёт `[{ creatorId, depth, videos, comments, replies, allVideos, requestedBy, ids }]`.
+ * Отдаёт `[{ creatorId, depth, depthFrom, depthTo, videos, comments, replies, allVideos, requestedBy, ids }]`.
+ * `depth` — 'all' | 'week' | 'month' | 'range' (v18); у `range` заполнены `depthFrom`/`depthTo`,
+ * у остальных они null. Кривая глубина опускается до 'all' (`normalizeDepth` в `scope.mjs`) —
+ * резидент про это уже сказал в лог, когда клал просьбу в очередь.
  * `allVideos` склеивается по «или» так же: хоть одна просьба «и не наши видео» — обход снимает у всех.
  * `videos` — охват списка: хоть одна просьба `'all'` (в том числе просьба без поля вовсе) —
  * обход идёт по всему списку; «только наши» получается лишь тогда, когда его просили все.
@@ -37,9 +66,11 @@ export function groupRequests(rows) {
   const groups = new Map();
   for (const r of rows ?? []) {
     const creatorId = r.creator_id ?? null;
-    const depth = r.depth === "week" ? "week" : "all";
-    const key = `${creatorId ?? "все"}|${depth}`;
-    const g = groups.get(key) ?? { creatorId, depth, requestedBy: r.requested_by ?? null, videos: "ours", comments: false, replies: false, allVideos: false, ids: [] };
+    // ⚠️ Границы читаются в обоих написаниях: прямо из базы (`depth_from`) и из очереди
+    // резидента, где просьба уже разобрана (`depthFrom`). Та же беда, что была с `all_videos`.
+    const { depth, from, to } = normalizeDepth(r.depth, r.depth_from ?? r.depthFrom ?? null, r.depth_to ?? r.depthTo ?? null);
+    const key = `${creatorId ?? "все"}|${depth}|${from ?? ""}|${to ?? ""}`;
+    const g = groups.get(key) ?? { creatorId, depth, depthFrom: from, depthTo: to, requestedBy: r.requested_by ?? null, videos: "ours", comments: false, replies: false, allVideos: false, ids: [] };
     g.ids.push(r.id);
     // Нет поля вовсе (старая просьба, обрезанный select) — считаем «да», как было до флагов.
     g.comments = g.comments || r.comments !== false;
@@ -55,7 +86,7 @@ export function groupRequests(rows) {
   }
   // От самого широкого обхода к самому узкому: тогда покрывающий уже отобран, когда до
   // покрытого доходит очередь.
-  const power = (g) => (g.creatorId === null ? 2 : 0) + (g.depth === "all" ? 1 : 0);
+  const power = (g) => (g.creatorId === null ? 8 : 0) + (DEPTH_RANK[g.depth] ?? 0);
   const kept = [];
   for (const g of [...groups.values()].sort((a, b) => power(b) - power(a))) {
     const big = kept.find((k) => covers(k, g));

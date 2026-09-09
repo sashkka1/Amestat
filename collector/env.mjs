@@ -9,6 +9,9 @@ import { fileURLToPath } from "node:url";
 // Разбор часов расписания живёт среди чистых функций расписания — там его и проверяют тесты.
 // ⚠️ `schedule.mjs` сюда НЕ импортируется обратно: часы уходят к нему параметром, и кольца нет.
 import { parseSlots } from "./schedule.mjs";
+// Разбор списка прокси — там же, где живёт весь пул. ⚠️ `proxies.mjs` сюда не импортируется
+// обратно (свою папку он считает от `import.meta.url`), поэтому кольца нет и здесь.
+import { parseProxies, addressList } from "./proxies.mjs";
 
 export const collectorDir = dirname(fileURLToPath(import.meta.url));
 export const envPath = resolve(collectorDir, "..", ".env.local");
@@ -64,11 +67,21 @@ export function loadEnv() {
   // `10,13,17`. Разбор — чистая функция `parseSlots` в `schedule.mjs`, чтобы её проверяли тесты.
   const slotHours = parseSlots(raw.AMESTAT_SLOTS);
 
-  // Глубина автоматического обхода: 'all' (по умолчанию) — весь список видео, 'week' — только
-  // за последние 7 дней. Владелец, 2026-09-09: «в ежедневном обновлении пусть всё обновляется».
-  // ⚠️ Именно этой переменной ставится «неделя», если обход по всему списку окажется долгим.
+  // Глубина автоматического обхода: 'all' (по умолчанию) — весь список видео, 'week' — 7 дней,
+  // 'month' — 30 (миграция v18). Владелец, 2026-09-09: «в ежедневном обновлении пусть всё
+  // обновляется». ⚠️ Именно этой переменной глубина уменьшается, если обход по всему списку
+  // окажется долгим.
+  // 🔴 'range' слоту НЕ разрешается: расписание идёт каждый день, а период — это срез за
+  // конкретные числа, и завтра он был бы тем же самым. Написали — опускаем до 'all' и говорим
+  // об этом строкой в лог резидента (`slotDepthNote`), а не молча.
   const slotDepthRaw = (raw.AMESTAT_SLOT_DEPTH || "").trim().toLowerCase();
-  const slotDepth = slotDepthRaw === "week" ? "week" : "all";
+  const slotDepthOk = ["all", "week", "month"].includes(slotDepthRaw);
+  const slotDepth = slotDepthOk ? slotDepthRaw : "all";
+  const slotDepthNote = slotDepthRaw === "" || slotDepthOk
+    ? null
+    : slotDepthRaw === "range"
+      ? "«период» расписанию не годится (он про конкретные числа) — слот, догон и повтор идут с «всё»"
+      : `неизвестная глубина «${slotDepthRaw}» — слот, догон и повтор идут с «всё»`;
 
   // Защита TikTok по адресу: сколько запусков ЧИСТОГО профиля разрешено за скользящее окно.
   // Пусто — 6 запусков за 15 минут. Счёт общий на все процессы (файл `logs/tiktok-launches.json`).
@@ -79,6 +92,32 @@ export function loadEnv() {
   const ttWindowRaw = (raw.AMESTAT_TT_WINDOW_MIN || "").trim();
   const ttWindowNum = ttWindowRaw === "" ? NaN : Number(ttWindowRaw);
   const ttWindowMs = Number.isFinite(ttWindowNum) && ttWindowNum > 0 ? Math.round(ttWindowNum * 60_000) : 15 * 60_000;
+
+  // Пул адресов (владелец, 2026-09-09: «если можешь реализовать прокси — прекрасно»). Пусто —
+  // прокси нет вовсе и всё как раньше: ходим с домашнего адреса.
+  //   AMESTAT_PROXIES            — через запятую: http://user:pass@host:port, https://…, socks5://…
+  //   AMESTAT_PROXY_SCOPE        — 'tiktok-list' (пусто — так): прокси только у чистых профилей
+  //                                списка TikTok; 'all' — ещё и у браузеров полос.
+  //     ⚠️ По умолчанию сессии фейковых аккаунтов остаются на домашнем адресе: смена адреса у
+  //     вошедшего аккаунта ловит проверки безопасности площадки.
+  //   AMESTAT_PROXY_HOME         — 'on' (пусто — так): домашний адрес идёт в круг как «адрес #0»;
+  //                                'off' — только прокси.
+  //   AMESTAT_PROXY_COOLDOWN_MIN — пауза адресу, давшему пустой список или ошибку соединения.
+  // 🔴 Логин и пароль остаются здесь и в объекте адреса: в логи и в сообщения уходит только
+  // подпись вида «прокси #2 host:port».
+  const proxies = parseProxies(raw.AMESTAT_PROXIES);
+  const proxyScopeRaw = (raw.AMESTAT_PROXY_SCOPE || "").trim().toLowerCase();
+  const proxyScope = proxyScopeRaw === "all" ? "all" : "tiktok-list";
+  const proxyHome = (raw.AMESTAT_PROXY_HOME || "").trim().toLowerCase() !== "off";
+  const proxyAddresses = addressList(proxies, { home: proxyHome });
+
+  const cooldownRaw = (raw.AMESTAT_PROXY_COOLDOWN_MIN || "").trim();
+  const cooldownNum = cooldownRaw === "" ? NaN : Number(cooldownRaw);
+  const proxyCooldownMs = Number.isFinite(cooldownNum) && cooldownNum > 0 ? Math.round(cooldownNum * 60_000) : 30 * 60_000;
+
+  // У кого проверять список видео командой `npm run proxy-check -- --tiktok`. Пусто — креатор,
+  // на котором проверялись все прежние пробы TikTok.
+  const proxyCheckHandle = (raw.AMESTAT_PROXY_CHECK_HANDLE || "").trim().replace(/^@/, "") || "toplombard_warszaw";
 
   // Через сколько минут сам собой повторяется РУЧНОЙ обход, который свалила защита TikTok по
   // адресу. Пусто — 25 минут. Повтор один, письма при назначении нет.
@@ -131,8 +170,16 @@ export function loadEnv() {
     retryMs,
     slotHours,
     slotDepth,
+    slotDepthNote,
     ttLaunchLimit,
     ttWindowMs,
+    // Пул адресов: `proxyAddresses` — готовый список `[{ id, label, server, username, password }]`,
+    // id 0 — домашний. Пароли внутри: в лог идёт только `label`.
+    proxyAddresses,
+    proxyScope,
+    proxyHome,
+    proxyCooldownMs,
+    proxyCheckHandle,
     manualRetryMin,
     commentsDays,
     commentsMax,

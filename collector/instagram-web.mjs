@@ -20,9 +20,13 @@
 //     значение лежит в `title` («686 452 333»), видимый текст сокращён («686 млн»).
 //     Запасной источник — meta-описание страницы; там подписчики тоже сокращены.
 //
-// Глубина (`depth`): 'all' — весь список до потолка, 'week' — только последние 7 дней.
-// Список идёт от новых к старым, поэтому «неделя» — ранний выход, а не фильтр в конце;
+// Глубина (`depth`, миграция v18): 'all' — весь список до потолка, 'week' — 7 дней, 'month' —
+// 30, 'range' — выбранный период. Границы приходят готовыми (`bounds` от `depthBounds` в
+// `scope.mjs`), дат этот модуль не считает.
+// Список идёт от новых к старым, поэтому нижняя граница — ранний выход, а не фильтр в конце;
 // отфильтровать всё равно надо: в последней пачке приезжают старые соседи по странице.
+// ⚠️ Верхняя граница периода (`until`) прокрутку не обрывает — свежее лежит в начале ленты, —
+// но в базу такие публикации не идут.
 //
 // Охват (`scope.videos`, миграция v17): 'ours' — лента листается, пока не встретятся все
 // отслеживаемые видео креатора (наши и жёлтые), но не дольше `scope.maxPages` кругов; правила —
@@ -41,7 +45,7 @@
 // Свой браузер модуль поднимает только когда его зовут в одиночку (разовая проверка, тест).
 import { launchProfile, PROFILE_OPERA, trimTraffic } from "./browser.mjs";
 import { notice, sessionHint } from "./notices.mjs";
-import { listStop, listRounds, missingTracked, filterDepth } from "./scope.mjs";
+import { listStop, listRounds, missingTracked, filterDepth, depthBounds, depthWord } from "./scope.mjs";
 
 // Куда странице профиля вообще можно ходить. Всё остальное отсекается (`trimTraffic`), плюс
 // независимо от хоста — видео (`media`) и шрифты.
@@ -57,7 +61,6 @@ const FEED_ROUNDS = 40;        // потолок кругов прокрутки
 const REELS_ROUNDS = 10;       // потолок кругов на вкладке Reels
 const STALE_ROUNDS = 8;        // столько кругов без прироста — значит список кончился
 const MAX_POSTS = 200;         // дальше в прошлое не ходим
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 // Экраны и ответы, после которых собирать нечего. Проверяются в этом же порядке:
 // ограничение и потерянный вход маскируются под «профиль не найден», если спутать очередь.
@@ -225,15 +228,17 @@ async function scrollRound(page) {
 /**
  * Сбор креатора Instagram через браузер.
  * `creator` — строка из `creators` (нужен `handle`).
- * `depth` — 'all' (весь список до потолка) или 'week' (только последние 7 дней).
+ * `depth` — 'all' | 'week' | 'month' | 'range'; нужен на слово в строке лога.
+ * `bounds` — готовые границы `{ since, until }` от `depthBounds` (`scope.mjs`). Не переданы —
+ * считаются здесь из одной глубины: так модуль зовут в одиночку.
  * `ctx` — уже открытый браузер полосы; нет его — модуль поднимает свой и сам же закрывает.
  * `scope` — охват: `{ videos: 'all'|'ours', trackedIds, maxPages }`.
  * Отдаёт ту же форму, что и TikTok: `{ profile, videos }`; при беде — Error с русским текстом.
  */
-export async function collectInstagramWeb(creator, { depth = "all", browserChoice = "", ctx: shared = null, scope = null, log } = {}) {
+export async function collectInstagramWeb(creator, { depth = "all", bounds = null, browserChoice = "", ctx: shared = null, scope = null, proxy = null, log } = {}) {
   const handle = String(creator?.handle ?? "").replace(/^@/, "");
   if (!handle) throw new Error("у креатора пустой handle");
-  const since = depth === "week" ? Date.now() - WEEK_MS : null;
+  const { since, until } = bounds ?? depthBounds(depth);
   const mode = scope?.videos === "ours" ? "ours" : "all";
   const trackedIds = mode === "ours" ? scope?.trackedIds ?? [] : [];
   const tracked = new Set(trackedIds.map((id) => String(id)));
@@ -244,7 +249,10 @@ export async function collectInstagramWeb(creator, { depth = "all", browserChoic
   let browser = null;
   if (!shared) {
     try {
-      browser = await launchProfile(browserChoice, { headless: true, profile: PROFILE_OPERA });
+      // `proxy` приходит только при `AMESTAT_PROXY_SCOPE=all` и там всегда один и тот же адрес
+      // (`sync.mjs`, `laneProxy`): в этом профиле вошедший фейковый аккаунт, и гулять адресом
+      // ему нельзя. В обходе сюда не заходят вовсе — браузер даёт полоса; это запасной путь.
+      browser = await launchProfile(browserChoice, { headless: true, profile: PROFILE_OPERA, proxy });
     } catch (e) {
       throw new Error(`Instagram: ${String(e?.message ?? e).split("\n")[0]}`);
     }
@@ -305,7 +313,7 @@ export async function collectInstagramWeb(creator, { depth = "all", browserChoic
         posts.set(String(node.pk), node);
       }
       if (feed?.page_info?.has_next_page === false) hasNext = false;
-      // Глубина «неделя»: самая старая незакреплённая публикация пачки старше границы —
+      // Нижняя граница глубины: самая старая незакреплённая публикация пачки старше неё —
       // дальше не листаем. Закреплённые считаются отдельно и остановку не вызывают.
       if (since !== null && (feed?.edges?.length ?? 0) > 0) {
         const oldest = oldestUnpinned(feed.edges, pinned);
@@ -417,10 +425,11 @@ export async function collectInstagramWeb(creator, { depth = "all", browserChoic
       .sort((a, b) => at(b) - at(a))
       .slice(0, MAX_POSTS);
 
-    // Неделя: в базу идёт только свежее, но «пришедшими» считаем всё, что отдал Instagram.
-    // ⚠️ Отслеживаемые публикации неделя не отсекает: за старыми нашими охват и листал.
-    const picked = filterDepth(all, since, trackedIds);
-    log?.(`  публикаций пришло ${all.length}${hasNext ? "" : " (список кончился)"}${reachedOld && mode !== "ours" ? " (прокрутка остановлена: пошли публикации старше недели)" : ""}`);
+    // Глубина: в базу идёт только попавшее в границы, но «пришедшими» считаем всё, что отдал
+    // Instagram. ⚠️ Нижнюю границу отслеживаемые публикации переживают (за старыми нашими охват
+    // и листал), верхнюю — нет: период есть период.
+    const picked = filterDepth(all, since, trackedIds, until);
+    log?.(`  публикаций пришло ${all.length}${hasNext ? "" : " (список кончился)"}${reachedOld && mode !== "ours" ? " (прокрутка остановлена: пошли публикации старше границы)" : ""}`);
     if (mode === "ours") {
       const missing = missingTracked(trackedIds, [...posts.keys()]);
       log?.(`  охват: только наши — отслеживаемых видео ${trackedIds.length}, найдено ${trackedIds.length - missing.length} за ${feedPages} прокруток`);
@@ -429,8 +438,10 @@ export async function collectInstagramWeb(creator, { depth = "all", browserChoic
         notice("list", `@${handle}: не найдено ${missing.length} наших/жёлтых видео за ${feedPages} прокруток (охват «только наши»)`);
       }
     }
-    if (since !== null) log?.(`  за неделю: ${picked.length} из ${all.length} пришедших${mode === "ours" ? " (с отслеживаемыми, они остаются при любой давности)" : ""}`);
-    if (since !== null) log?.(`  закреплённых пропущено: ${pinned.size}`);
+    if (since !== null || until !== null) {
+      log?.(`  за ${depthWord(depth)}: ${picked.length} из ${all.length} пришедших${mode === "ours" && until === null ? " (с отслеживаемыми, они остаются при любой давности)" : ""}${until !== null ? " (публикации свежее верхней границы не берём — даже отслеживаемые)" : ""}`);
+      log?.(`  закреплённых пропущено: ${pinned.size}`);
+    }
 
     // Просмотры живут только на вкладке Reels — и только у клипов.
     // ⚠️ При охвате «только наши» просмотры спрашиваются ТОЛЬКО у отслеживаемых клипов: вкладка

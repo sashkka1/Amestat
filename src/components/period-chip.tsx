@@ -54,14 +54,14 @@ export function PeriodChip({ period, className }: { period: PeriodState; classNa
               type="date"
               value={period.customFrom}
               onChange={(e) => period.setCustom(e.target.value, period.customTo)}
-              className="h-8"
+              className="h-8 dark:[color-scheme:dark]"
               aria-label="С какого дня"
             />
             <Input
               type="date"
               value={period.customTo}
               onChange={(e) => period.setCustom(period.customFrom, e.target.value)}
-              className="h-8"
+              className="h-8 dark:[color-scheme:dark]"
               aria-label="По какой день"
             />
             {!period.range && (

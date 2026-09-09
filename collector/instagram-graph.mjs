@@ -9,10 +9,11 @@
 //
 // ⚠️ Токен в тексты ошибок не попадает: он лежит в адресе, поэтому наружу отдаём только путь.
 
+import { depthBounds, depthWord, filterDepth } from "./scope.mjs";
+
 const API = "https://graph.facebook.com/v21.0";
 const PAGE = 50;         // публикаций за один запрос
 const MAX_MEDIA = 200;   // потолок: дальше в прошлое не ходим
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 const num = (x) => (x === null || x === undefined || x === "" ? null : Number(x));
 
@@ -51,17 +52,22 @@ const looksLikeUnknownViewCount = (err) => /view_count/i.test(err.message ?? "")
 
 /**
  * Сбор креатора Instagram через Graph API.
- * `depth` — 'all' (до потолка MAX_MEDIA) или 'week' (только последние 7 дней).
+ * `depth` — 'all' (до потолка MAX_MEDIA), 'week', 'month' или 'range' (миграция v18).
+ * `bounds` — готовые границы `{ since, until }` от `depthBounds` (`scope.mjs`); не переданы —
+ * считаются из одной глубины.
+ * ⚠️ Охват «только наши» сюда не приходит вовсе: страницы Graph API дешёвые, и правило
+ * прокрутки здесь ни при чём (`pickCollector` в `sync.mjs`).
  * Отдаёт ту же форму, что и TikTok: `{ profile, videos }`.
  */
-export async function collectInstagramGraph(creator, { token = "", userId = "", depth = "all", log } = {}) {
+export async function collectInstagramGraph(creator, { token = "", userId = "", depth = "all", bounds = null, log } = {}) {
   if (!token) throw new Error("Instagram: нет IG_ACCESS_TOKEN — впиши токен в .env.local или переключи IG_SOURCE на web");
   if (!userId) throw new Error("Instagram: нет IG_USER_ID — нужен id нашего бизнес-аккаунта в .env.local");
   const handle = String(creator.handle || "").replace(/^@/, "");
   if (!handle) throw new Error("у креатора пустой handle");
-  // Публикации приходят от новых к старым, поэтому «неделя» — ранний выход из пагинации:
-  // страница кончилась публикацией старше границы — следующую не просим.
-  const since = depth === "week" ? Date.now() - WEEK_MS : null;
+  // Публикации приходят от новых к старым, поэтому нижняя граница — ранний выход из пагинации:
+  // страница кончилась публикацией старше неё — следующую не просим. Верхняя (только у периода)
+  // пагинацию не обрывает: свежее лежит в начале, сквозь него надо пройти.
+  const { since, until } = bounds ?? depthBounds(depth);
 
   let withViews = true;
   let after = null;
@@ -101,10 +107,13 @@ export async function collectInstagramGraph(creator, { token = "", userId = "", 
   };
 
   const taken = items.slice(0, MAX_MEDIA);
-  // Последняя страница приезжает целиком, и в ней есть соседи старше границы — отсекаем их.
-  const fresh = since === null
-    ? taken
-    : taken.filter((m) => m.timestamp && !Number.isNaN(Date.parse(m.timestamp)) && Date.parse(m.timestamp) >= since);
+  // Последняя страница приезжает целиком, и в ней есть соседи за границами — отсекаем их.
+  // Правило одно на весь сборщик (`filterDepth`), отслеживаемых здесь нет вовсе: охват «только
+  // наши» к Graph API не приходит.
+  const fresh = filterDepth(
+    taken.map((m) => ({ ...m, id: String(m.id), publishedAt: m.timestamp ?? null })),
+    since, [], until,
+  );
 
   const videos = fresh.map((m) => ({
     id: String(m.id),
@@ -122,6 +131,6 @@ export async function collectInstagramGraph(creator, { token = "", userId = "", 
   }));
 
   log?.(`  Instagram Graph: подписчиков ${profile.followers}, публикаций по профилю ${profile.videosCount}, собрано ${taken.length}${withViews ? "" : " (без просмотров)"}`);
-  if (since !== null) log?.(`  за неделю: ${videos.length} из ${taken.length} пришедших`);
+  if (since !== null || until !== null) log?.(`  за ${depthWord(depth)}: ${videos.length} из ${taken.length} пришедших`);
   return { profile, videos };
 }

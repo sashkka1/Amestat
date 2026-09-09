@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 import {
   POLL_MS,
   allVideosTail,
+  depthTail,
   progressText,
   runsResult,
   stage,
@@ -14,6 +15,7 @@ import {
   videosTail,
   type Phase,
 } from "@/lib/sync-phase";
+import type { PeriodRange } from "@/lib/period";
 import type { SyncDepth, SyncPick, SyncRequest, SyncRun } from "@/lib/types";
 
 // Очередь обновления для целого списка креаторов: одно состояние на всю таблицу, а не по
@@ -35,7 +37,8 @@ export type SyncQueue = {
   // Только креаторы с открытой просьбой; у остальных строк кнопка в покое.
   rows: Map<string, RowSync>;
   // Попросить обход одного креатора: охват задан строкой, выбираются глубина и что снимать.
-  ask: (creatorId: string, depth: SyncDepth, pick: SyncPick) => Promise<void>;
+  // range — границы глубины «Период» (миграция v18); у остальных глубин его нет.
+  ask: (creatorId: string, depth: SyncDepth, pick: SyncPick, range?: PeriodRange) => Promise<void>;
   error: string | null;
 };
 
@@ -135,9 +138,9 @@ export function useSyncQueue(creatorIds: string[], onDone: () => void): SyncQueu
     });
     if (done.length > 0) {
       const res = runsResult(done);
-      // Те же хвосты, что у кнопки «Обновить»: обход брал тексты и у не наших видео и шёл
-      // сокращённым охватом списка.
-      const tail = allVideosTail(done) + videosTail(done);
+      // Те же хвосты, что у кнопки «Обновить»: на какую глубину шёл обход, брал ли тексты
+      // у не наших видео и шёл ли сокращённым охватом списка.
+      const tail = depthTail(done) + allVideosTail(done) + videosTail(done);
       if (res.ok) toast.success(res.text + tail);
       else toast.error(res.text + tail);
     }
@@ -177,9 +180,9 @@ export function useSyncQueue(creatorIds: string[], onDone: () => void): SyncQueu
   }, [waiting, check]);
 
   const ask = useCallback(
-    async (creatorId: string, depth: SyncDepth, pick: SyncPick) => {
+    async (creatorId: string, depth: SyncDepth, pick: SyncPick, range?: PeriodRange) => {
       setSending((prev) => (prev.includes(creatorId) ? prev : [...prev, creatorId]));
-      const res = await requestSync({ creatorIds: [creatorId], depth, pick });
+      const res = await requestSync({ creatorIds: [creatorId], depth, range, pick });
       setSending((prev) => prev.filter((c) => c !== creatorId));
       if (!res.ok) {
         setError(res.error);
@@ -200,6 +203,9 @@ export function useSyncQueue(creatorIds: string[], onDone: () => void): SyncQueu
         taken_at: null,
         run_id: null,
         depth,
+        // Те же границы, что ушли в базу: строка нужна и подсказке, и хвостам глубины.
+        depth_from: range ? range.from.toISOString() : null,
+        depth_to: range ? range.to.toISOString() : null,
         comments: pick.comments,
         replies: pick.replies,
         all_videos: pick.allVideos,

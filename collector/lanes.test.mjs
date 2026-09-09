@@ -96,6 +96,70 @@ test("покрытие: шире по охвату и не мельче по г�
   assert.equal(covers({ creatorId: "c1", depth: "all" }, { creatorId: "c2", depth: "all" }), false);
 });
 
+// --- глубина «месяц» и «период» (миграция v18) ---------------------------------------------
+
+const RANGE = { from: "2026-09-01T00:00:00.000Z", to: "2026-09-09T00:00:00.000Z" };
+const other = { from: "2026-08-01T00:00:00.000Z", to: "2026-08-09T00:00:00.000Z" };
+const grp = (depth, extra = {}) => ({ creatorId: null, depth, depthFrom: null, depthTo: null, ...extra });
+
+test("«месяц» покрывает «неделю» и себя, но не «всё»", () => {
+  assert.equal(covers(grp("month"), grp("week")), true, "30 дней включают 7");
+  assert.equal(covers(grp("month"), grp("month")), true);
+  assert.equal(covers(grp("month"), grp("all")), false);
+  assert.equal(covers(grp("week"), grp("month")), false, "неделя мельче месяца");
+  assert.equal(covers(grp("all"), grp("month")), true);
+});
+
+test("«период» покрывает ТОЛЬКО ровно такой же период", () => {
+  const a = grp("range", { depthFrom: RANGE.from, depthTo: RANGE.to });
+  const b = grp("range", { depthFrom: other.from, depthTo: other.to });
+  assert.equal(covers(a, { ...a }), true);
+  assert.equal(covers(a, b), false, "у чужого периода своя верхняя граница");
+  assert.equal(covers(a, grp("week")), false, "период не глубже недели — у него свой верх");
+  assert.equal(covers(grp("month"), a), false);
+  assert.equal(covers(grp("all"), a), true, "«всё» забирает и период: оно принесёт больше, чем просили");
+});
+
+test("два разных периода — два обхода, одинаковые — один", () => {
+  const two = groupRequests([
+    req(1, { depth: "range", depth_from: RANGE.from, depth_to: RANGE.to }),
+    req(2, { depth: "range", depth_from: other.from, depth_to: other.to }),
+  ]);
+  assert.equal(two.length, 2, "склеить «с 1 по 9» и «с 1 по 9 августа» нечем");
+  const one = groupRequests([
+    req(3, { depth: "range", depth_from: RANGE.from, depth_to: RANGE.to, comments: false }),
+    req(4, { depth: "range", depth_from: RANGE.from, depth_to: RANGE.to, comments: true }),
+  ]);
+  assert.equal(one.length, 1);
+  assert.deepEqual(one[0].ids, [3, 4]);
+  assert.equal(one[0].comments, true, "галочки складываются по «или» и внутри периода");
+  assert.equal(one[0].depthFrom, RANGE.from);
+  assert.equal(one[0].depthTo, RANGE.to);
+});
+
+test("«период» без границ приезжает как «всё» — база такого не пустит, но просьба может быть старой", () => {
+  const [group] = groupRequests([req(1, { depth: "range" })]);
+  assert.equal(group.depth, "all");
+  assert.equal(group.depthFrom, null);
+  assert.equal(group.depthTo, null);
+});
+
+test("границы понимаются и в разобранном виде: резидент кладёт в очередь depthFrom", () => {
+  const [group] = groupRequests([req(1, { depth: "range", depthFrom: RANGE.from, depthTo: RANGE.to })]);
+  assert.equal(group.depth, "range", "период с сайта не должен теряться по дороге через резидент");
+  assert.equal(group.depthFrom, RANGE.from);
+});
+
+test("обход «месяц» забирает просьбу «неделя», а не наоборот", () => {
+  const groups = groupRequests([
+    req(1, { creator_id: "c1", depth: "week" }),
+    req(2, { creator_id: null, depth: "month" }),
+  ]);
+  assert.equal(groups.length, 1, "месяц шире недели — частная просьба покрыта");
+  assert.deepEqual(groups[0].ids.sort(), [1, 2]);
+  assert.equal(groups[0].depth, "month");
+});
+
 // --- «комментарии не менялись» ------------------------------------------------------------
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -238,6 +302,29 @@ test("просьба «и не наши видео» снимает тексты
   assert.deepEqual(picked.map((v) => v.id), ["yellow"]);
   assert.equal(watched.length, 0);
   assert.equal(foreign.length, 0);
+});
+
+// --- Комментарии при глубине «период» (миграция v18) ---
+
+test("при периоде тексты снимаются у видео ИЗ периода, а не у вчерашних", () => {
+  const videos = [video("today", 5, 0), video("inRange", 5, 15), video("tooOld", 5, 40)];
+  const since = NOW - 20 * DAY, until = NOW - 10 * DAY;
+  const { picked } = pickComments(videos, new Map(), since, { untilMs: until });
+  assert.deepEqual(picked.map((v) => v.id), ["inRange"], "срез за прошлый месяц не про вчерашние обсуждения");
+});
+
+test("верхней границы нет — шаг работает как раньше, по свежим", () => {
+  const videos = [video("today", 5, 0), video("old", 5, 30)];
+  const { picked } = pickComments(videos, new Map(), SINCE, { untilMs: null });
+  assert.deepEqual(picked.map((v) => v.id), ["today"]);
+});
+
+test("отсечённое верхней границей не идёт ни в «без изменений», ни в чужие", () => {
+  const known = new Map([["today", { count: 5, ours: false }]]);
+  const { picked, unchanged, foreign } = pickComments([video("today", 5, 0)], known, NOW - 20 * DAY, { untilMs: NOW - 10 * DAY });
+  assert.equal(picked.length, 0);
+  assert.equal(unchanged.length, 0);
+  assert.equal(foreign.length, 0, "видео вне периода шага не касается вовсе");
 });
 
 test("строки без поля watch (старый вид) считаются просто чужими", () => {

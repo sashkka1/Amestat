@@ -7,7 +7,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useSyncOptions } from "@/components/sync-options";
 import {
   ALL_VIDEOS_WORD,
-  DEPTH_WORD,
   SyncDepthGroup,
   SyncLaunchButton,
   SyncPickGroup,
@@ -15,8 +14,10 @@ import {
   SyncVideosGroup,
   VIDEOS_WORD,
   pickWords,
+  useSyncRange,
 } from "@/components/sync-choice";
-import { PHASE_TEXT, UNAVAILABLE_TITLE } from "@/lib/sync-phase";
+import { PHASE_TEXT, UNAVAILABLE_TITLE, depthWord } from "@/lib/sync-phase";
+import type { PeriodRange } from "@/lib/period";
 import type { RowSync } from "@/lib/use-sync-queue";
 import type { SyncDepth, SyncPick, SyncVideos } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -32,7 +33,8 @@ export function RowSyncButton({
   onAsk,
 }: {
   state: RowSync | undefined;
-  onAsk: (depth: SyncDepth, pick: SyncPick) => void;
+  // range — границы глубины «Период»; у остальных глубин его нет вовсе (миграция v18).
+  onAsk: (depth: SyncDepth, pick: SyncPick, range?: PeriodRange) => void;
 }) {
   const [open, setOpen] = useState(false);
   // «Что снимать» — то же, что в попапе кнопки над страницей: выбор общий и запоминается.
@@ -45,14 +47,23 @@ export function RowSyncButton({
   // Охват списка видео (миграция v17). Умолчание — «только наши»: ради экономии времени
   // охват и вводился. Как и глубина, не запоминается и сбрасывается при каждом открытии.
   const [videos, setVideos] = useState<SyncVideos>("ours");
+  // Даты глубины «Период» — своё состояние этого попапа, как и всё остальное в нём.
+  const range = useSyncRange();
+  const resetRange = range.reset;
 
-  const openChange = useCallback((next: boolean) => {
-    setOpen(next);
-    if (!next) return;
-    setAllVideos(false);
-    setDepth("week");
-    setVideos("ours");
-  }, []);
+  const openChange = useCallback(
+    (next: boolean) => {
+      setOpen(next);
+      if (!next) return;
+      setAllVideos(false);
+      setDepth("week");
+      setVideos("ours");
+      // Умолчание периода — последние 30 дней, при каждом открытии заново.
+      resetRange();
+    },
+    // Держимся за сам reset: объект состояния пересобирается на каждый набранный символ.
+    [resetRange],
+  );
 
   if (state) {
     // Пока просьба открыта, кнопка выключена: иначе на одну и ту же работу копится очередь.
@@ -75,9 +86,12 @@ export function RowSyncButton({
   // Без comments «и у не наших» не значит ничего — гасим и здесь, как у кнопки над страницей.
   const pick: SyncPick = { comments, replies, allVideos: comments && videos !== "ours" && allVideos, videos };
 
+  // Границы уходят только у глубины «Период»: у остальных база требует пустых колонок.
+  const asked = depth === "range" ? (range.range ?? undefined) : undefined;
+
   function ask() {
     setOpen(false);
-    onAsk(depth, pick);
+    onAsk(depth, pick, asked);
   }
 
   return (
@@ -88,19 +102,24 @@ export function RowSyncButton({
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-96 max-w-[calc(100vw-2rem)]">
-        <SyncDepthGroup depth={depth} onDepth={setDepth} />
+        <SyncDepthGroup depth={depth} onDepth={setDepth} range={range} />
         <SyncVideosGroup videos={videos} onVideos={setVideos} />
         <SyncPickGroup allVideos={allVideos} onAllVideos={setAllVideos} oursOnly={videos === "ours"} />
         <SyncSummary
           parts={[
             "Этот креатор",
-            DEPTH_WORD[depth],
+            depthWord(depth, range.range?.from, range.range?.to),
             VIDEOS_WORD[pick.videos],
             pickWords(pick),
             pick.allVideos && ALL_VIDEOS_WORD,
           ]}
         />
-        <SyncLaunchButton disabled={false} sending={false} onClick={ask} />
+        {/* Выбран «Период», а даты не годятся — просить нечего; почему, сказано под полями. */}
+        <SyncLaunchButton
+          disabled={depth === "range" && range.range === null}
+          sending={false}
+          onClick={ask}
+        />
       </PopoverContent>
     </Popover>
   );

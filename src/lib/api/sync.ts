@@ -7,11 +7,13 @@ import type {
   SyncRequestInsert,
   SyncRun,
 } from "@/lib/types";
+import { RANGE_REQUIRED } from "@/lib/sync-phase";
 import { fail, type ActionResult } from "./result";
 
 // Мост «сайт → сборщик дома». Сервера нет: сайт кладёт просьбу в sync_requests, сборщик
 // слушает вставки через Realtime, ставит taken_at и пишет обход в sync_runs (миграция v6).
-// Глубина обхода — depth: all (весь список видео) или week (только за 7 дней), миграция v7.
+// Глубина обхода — depth (миграции v7 и v18): all (весь список видео), week (7 дней),
+// month (30 дней) или range (выбранный период, границы в depth_from/depth_to).
 // Что снимать — pick (миграции v12, v13 и v17): тексты комментариев, ветки ответов, надо ли
 // брать тексты у не наших видео и с каким охватом листать список (все видео или только наши
 // и жёлтые).
@@ -19,16 +21,22 @@ import { fail, type ActionResult } from "./result";
 // Попросить обход: creatorIds — по строке на каждого креатора, null — одна строка на всех.
 // Строк может быть несколько, поэтому возвращаются все id: кнопка следит за ними разом.
 // pick идёт в каждую строку пачки: выбор в попапе один на всю просьбу.
+// range — границы выбранного периода; нужны и пишутся только при depth === 'range'.
 export async function requestSync({
   creatorIds,
   depth,
+  range,
   pick,
 }: {
   creatorIds: string[] | null;
   depth: SyncDepth;
+  range?: { from: Date; to: Date };
   pick: SyncPick;
 }): Promise<ActionResult<{ ids: number[] }>> {
   if (creatorIds !== null && creatorIds.length === 0) return fail("На этой странице нет креаторов");
+  // Без границ просьбу отобьёт проверка базы (миграция v18) — говорим это словами человека,
+  // а не текстом ошибки Postgres.
+  if (depth === "range" && (!range || range.from >= range.to)) return fail(RANGE_REQUIRED);
   const supabase = createClient();
 
   // requested_by обязателен и должен совпадать с вошедшим — RLS иначе откажет.
@@ -45,13 +53,20 @@ export async function requestSync({
     all_videos: pick.allVideos,
     videos: pick.videos,
   };
+  // Границы периода — в каждую строку пачки, как и всё остальное: выбор в попапе один на
+  // всю просьбу. У прочих глубин колонки остаются пустыми — этого требует база.
+  const bounds =
+    depth === "range" && range
+      ? { depth_from: range.from.toISOString(), depth_to: range.to.toISOString() }
+      : {};
   const rows: SyncRequestInsert[] =
     creatorIds === null
-      ? [{ requested_by: requestedBy, creator_id: null, depth, ...flags }]
+      ? [{ requested_by: requestedBy, creator_id: null, depth, ...bounds, ...flags }]
       : creatorIds.map((creator_id) => ({
           requested_by: requestedBy,
           creator_id,
           depth,
+          ...bounds,
           ...flags,
         }));
 

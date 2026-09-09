@@ -53,6 +53,8 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { loadEnv, collectorDir } from "./env.mjs";
 import { sendTelegram } from "./telegram.mjs";
+// ⚠️ `scope.mjs` ни от кого не зависит вовсе — кольца импортов отсюда не будет.
+import { depthLabel } from "./scope.mjs";
 
 const MAX_CHARS = 3500;       // потолок сообщения: у Telegram 4096, остальное — запас
 const TAIL_ROOM = 24;         // место под хвост «… и ещё K»
@@ -299,7 +301,7 @@ export function notice(code, text) {
  * Конец обхода: одно сообщение владельцу, если замечания были. Отдаёт, ушло ли оно.
  * Исключений не бросает: звонок владельцу не имеет права свалить обход (как и в `telegram.mjs`).
  */
-export async function reportRun({ runId = null, trigger = "manual", depth = "all", done = 0, failed = 0, slotLabel = null, log } = {}) {
+export async function reportRun({ runId = null, trigger = "manual", depth = "all", depthFrom = null, depthTo = null, done = 0, failed = 0, slotLabel = null, log } = {}) {
   const all = run ?? [];
   run = null;
   if (all.length === 0) return false;
@@ -309,7 +311,9 @@ export async function reportRun({ runId = null, trigger = "manual", depth = "all
   saveState({ ...state, creatorErrors: memory });
   // `slotLabel` ставит только неудавшийся повтор: отдельного письма «не удался дважды» больше
   // нет (владелец получал два письма об одном событии), и эта строка — всё, что от него осталось.
-  const head = `Amestat, обход #${runId ?? "?"} (${trigger}, ${depth === "week" ? "неделя" : "всё"}): собрано ${done}, с ошибкой ${failed}`
+  // Глубина словом — одной функцией на весь сборщик (`scope.mjs`): «всё», «неделя», «месяц»,
+  // «период 01.09–09.09». Свой тернарник здесь стоил бы четвёртого места, где про «месяц» забыли.
+  const head = `Amestat, обход #${runId ?? "?"} (${trigger}, ${depthLabel(depth, depthFrom, depthTo)}): собрано ${done}, с ошибкой ${failed}`
     + (slotLabel ? `\nвторая неудача подряд после слота ${slotLabel}` : "");
   const text = buildMessage(head, items);
   const say = log ?? logLine;

@@ -2,6 +2,11 @@
 //   node run.mjs                                        — все креаторы, весь список видео
 //   node run.mjs --creator <uuid>                       — один
 //   node run.mjs --depth week                           — только видео за последние 7 дней
+//   node run.mjs --depth month                          — за последние 30 дней
+//   node run.mjs --depth range --from 2026-09-01 --to 2026-09-09
+//                                                       — за выбранный период; даты МЕСТНЫЕ и
+//                                                         берутся целыми сутками (--from с
+//                                                         начала дня, --to по конец дня)
 //   node run.mjs --failed-only                          — только те, у кого осталась ошибка
 //   node run.mjs --no-comments                          — не снимать тексты комментариев вовсе
 //   node run.mjs --no-replies                           — снять корневые, ветки ответов не раскрывать
@@ -13,6 +18,7 @@
 // Печатает ход дела построчно и завершается кодом 0 (все собрались) или 1 (кто-то нет).
 
 import { runSync } from "./sync.mjs";
+import { dayRange } from "./scope.mjs";
 
 const argv = process.argv.slice(2);
 const opt = (name, fallback = null) => {
@@ -22,7 +28,7 @@ const opt = (name, fallback = null) => {
 const has = (name) => argv.includes(name);
 
 if (has("--help") || has("-h")) {
-  console.log("node run.mjs [--creator <uuid>] [--depth all|week] [--only-ours] [--failed-only] [--no-comments] [--no-replies] [--all-videos] [--trigger manual|schedule|catchup|retry]");
+  console.log("node run.mjs [--creator <uuid>] [--depth all|week|month|range] [--from ГГГГ-ММ-ДД --to ГГГГ-ММ-ДД] [--only-ours] [--failed-only] [--no-comments] [--no-replies] [--all-videos] [--trigger manual|schedule|catchup|retry]");
   process.exit(0);
 }
 
@@ -42,15 +48,32 @@ if (!["manual", "schedule", "catchup", "retry"].includes(trigger)) {
   process.exit(2);
 }
 const depth = opt("--depth", "all");
-if (!["all", "week"].includes(depth)) {
-  console.error(`✗ --depth бывает только all или week, а не «${depth}»`);
+if (!["all", "week", "month", "range"].includes(depth)) {
+  console.error(`✗ --depth бывает только all, week, month или range, а не «${depth}»`);
+  process.exit(2);
+}
+// Края периода. Даты местные и целыми сутками — разбирает чистая `dayRange` (`scope.mjs`),
+// чтобы «с 1 по 9» не теряло девятое число и чтобы её проверяли тесты.
+// ⚠️ Ругаемся тут, а не молча опускаемся до «всё»: человек в командной строке просил период,
+// и подменённая глубина выглядела бы как исправная работа.
+let depthFrom = null, depthTo = null;
+if (depth === "range") {
+  const range = dayRange(opt("--from"), opt("--to"));
+  if (!range) {
+    console.error("✗ --depth range требует --from и --to (ГГГГ-ММ-ДД, начало периода раньше конца)");
+    process.exit(2);
+  }
+  depthFrom = range.from;
+  depthTo = range.to;
+} else if (opt("--from") || opt("--to")) {
+  console.error(`✗ --from и --to бывают только у --depth range, а глубина здесь «${depth}»`);
   process.exit(2);
 }
 
 const started = Date.now();
 let result;
 try {
-  result = await runSync({ trigger, creatorId, failedOnly, depth, videos, comments, replies, allVideos, onLog: (line) => console.log(line) });
+  result = await runSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthTo, videos, comments, replies, allVideos, onLog: (line) => console.log(line) });
 } catch (e) {
   // Сюда попадает только то, что случилось до первой строки в базе (например, нет .env.local).
   console.error(`✗ ${String(e?.message ?? e).split("\n")[0]}`);

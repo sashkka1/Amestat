@@ -15,10 +15,12 @@
 //   4. Повтор через час после неудачного обхода по расписанию (`retry`) — только по тем
 //      креаторам, у кого осталась ошибка.
 //
-// Просьбы, пришедшие пока идёт обход, копятся и склеиваются: ключ — пара «охват × глубина»,
-// а обход, который делает больше, забирает просьбы того, кто делает меньше (обход всех
-// поглощает частные, глубина «всё» поглощает «неделю» того же охвата). Смысл один: не гонять
-// браузер к одному креатору дважды подряд — TikTok от этого отвечает пустотой.
+// Просьбы, пришедшие пока идёт обход, копятся и склеиваются: ключ — «охват × глубина (с краями
+// периода)», а обход, который делает больше, забирает просьбы того, кто делает меньше (обход
+// всех поглощает частные, «всё» поглощает «месяц» и «неделю», «месяц» — «неделю»). Смысл один:
+// не гонять браузер к одному креатору дважды подряд — TikTok от этого отвечает пустотой.
+// ⚠️ Глубина «период» (v18) не поглощает и не поглощается ничем, кроме такого же периода: у неё
+// своя ВЕРХНЯЯ граница, и чужие свежие видео она отсекает.
 // ⚠️ Галочки «снимать комментарии» и «снимать ветки» ключом группы НЕ являются: они
 // складываются по «или» — `true` поглощает `false` того же охвата и глубины. Иначе просьба
 // «всё, с комментариями» и просьба «всё, без комментариев» дали бы два обхода подряд, а
@@ -69,6 +71,7 @@ import {
 } from "./schedule.mjs";
 import { logSystem } from "./synclog.mjs";
 import { groupRequests } from "./requests.mjs";
+import { depthLabel, normalizeDepth } from "./scope.mjs";
 import { resolveBrowser, killLeftoverBrowsers } from "./browser.mjs";
 import { sendTelegram } from "./telegram.mjs";
 import {
@@ -98,8 +101,6 @@ function hhmm(date) {
   const p = (n) => String(n).padStart(2, "0");
   return `${p(date.getHours())}:${p(date.getMinutes())}`;
 }
-const depthWord = (depth) => (depth === "week" ? "неделя" : "всё");
-
 function log(text) {
   const line = `${stamp()} ${text}`;
   console.log(line);
@@ -137,7 +138,10 @@ function remember(row, source) {
   if (!row || row.taken_at) return null;
   const id = Number(row.id);
   if (!Number.isFinite(id) || handled.has(id) || pending.has(id)) return null;
-  const depth = row.depth === "week" ? "week" : "all";
+  // Глубина и края периода (миграция v18). Незнакомое слово и «период» без границ опускаются
+  // до «всё» — со строкой в лог: молча подменённая глубина хуже, чем громко подменённая.
+  const { depth, from: depthFrom, to: depthTo, note } = normalizeDepth(row.depth, row.depth_from ?? null, row.depth_to ?? null);
+  if (note) log(`просьба #${id}: ${note}`);
   // Колонки в базе `not null default true`, но старую просьбу (или обрезанный select) читаем
   // мягко: нет поля — считаем, что снимать надо, как раньше и было.
   const comments = row.comments !== false;
@@ -146,8 +150,8 @@ function remember(row, source) {
   const allVideos = row.all_videos === true;
   // Охват списка (v17): `default 'all'` в базе; нет поля вовсе (старая просьба) — тоже «всё».
   const videos = row.videos === "ours" ? "ours" : "all";
-  pending.set(id, { id, creator_id: row.creator_id ?? null, requested_by: row.requested_by ?? null, depth, videos, comments, replies, allVideos });
-  log(`просьба #${id} (${row.creator_id ? `креатор ${row.creator_id}` : "все"}, глубина ${depthWord(depth)}, комментарии ${comments ? "да" : "нет"}, ветки ${replies ? "да" : "нет"}${allVideos ? ", и не наши видео" : ""}${videos === "ours" ? " · только наши" : ""}) — ${source}`);
+  pending.set(id, { id, creator_id: row.creator_id ?? null, requested_by: row.requested_by ?? null, depth, depth_from: depthFrom, depth_to: depthTo, videos, comments, replies, allVideos });
+  log(`просьба #${id} (${row.creator_id ? `креатор ${row.creator_id}` : "все"}, глубина ${depthLabel(depth, depthFrom, depthTo)}, комментарии ${comments ? "да" : "нет"}, ветки ${replies ? "да" : "нет"}${allVideos ? ", и не наши видео" : ""}${videos === "ours" ? " · только наши" : ""}) — ${source}`);
   return id;
 }
 
@@ -335,6 +339,8 @@ async function drain() {
           trigger: "manual",
           creatorId: group.creatorId,
           depth: group.depth,
+          depthFrom: group.depthFrom,
+          depthTo: group.depthTo,
           videos: group.videos,
           comments: group.comments,
           replies: group.replies,
@@ -365,7 +371,10 @@ const browser = (() => {
 // Прогрев: первые полторы минуты сеть только поднимается (особенно если компьютер спал), и
 // её отказы владельцу не нужны — они уходят в лог и никуда больше.
 startWarmup("старта");
-log(`резидент запущен. Браузер: ${browser}. Слоты: ${env.slotHours.map((h) => `${String(h).padStart(2, "0")}:00`).join(", ")} (глубина ${depthWord(env.slotDepth)}). Пауза между креаторами TikTok ${Math.round(env.pauseMs / 1000)} с. Запусков TikTok не больше ${env.ttLaunchLimit} за ${Math.round(env.ttWindowMs / 60_000)} мин. Повтор после неудачи через ${Math.round(env.retryMs / 60_000)} мин, повтор ручной просьбы через ${env.manualRetryMin} мин. Instagram: ${env.igSource}. Логи: ${logsDir}`);
+// ⚠️ `range` слоту не разрешён вовсе (`env.mjs`): расписание ходит каждый день, а период —
+// это один срез за конкретные числа. Опустили до «всё» — говорим об этом вслух.
+if (env.slotDepthNote) log(`AMESTAT_SLOT_DEPTH: ${env.slotDepthNote}`);
+log(`резидент запущен. Браузер: ${browser}. Слоты: ${env.slotHours.map((h) => `${String(h).padStart(2, "0")}:00`).join(", ")} (глубина ${depthLabel(env.slotDepth)}). Пауза между креаторами TikTok ${Math.round(env.pauseMs / 1000)} с. Запусков TikTok не больше ${env.ttLaunchLimit} за ${Math.round(env.ttWindowMs / 60_000)} мин. Повтор после неудачи через ${Math.round(env.retryMs / 60_000)} мин, повтор ручной просьбы через ${env.manualRetryMin} мин. Instagram: ${env.igSource}. Логи: ${logsDir}`);
 
 // 0. Остатки прошлых обходов: упавший обход оставляет окно Opera на нашем профиле, а оно и
 //    память держит, и не даёт подняться следующему браузеру. Свои окна владельца не трогаем —
@@ -475,7 +484,7 @@ const channel = supabase
 let firstPoll = true;
 async function poll() {
   try {
-    const rows = await get("sync_requests?select=id,creator_id,requested_by,depth,videos,comments,replies,all_videos,seen_at,taken_at&taken_at=is.null&order=id.asc");
+    const rows = await get("sync_requests?select=id,creator_id,requested_by,depth,depth_from,depth_to,videos,comments,replies,all_videos,seen_at,taken_at&taken_at=is.null&order=id.asc");
     const fresh = [];
     for (const row of rows) {
       const id = remember(row, "опрос");

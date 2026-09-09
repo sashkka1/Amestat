@@ -339,7 +339,9 @@ function CreatorsScreen() {
                             креатора, которого человек видит. */}
                         <RowSyncButton
                           state={queue.rows.get(r.creator.id)}
-                          onAsk={(depth, pick) => void queue.ask(r.creator.id, depth, pick)}
+                          onAsk={(depth, pick, range) =>
+                            void queue.ask(r.creator.id, depth, pick, range)
+                          }
                         />
                       </TableCell>
                     </TableRow>

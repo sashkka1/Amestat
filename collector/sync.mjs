@@ -22,8 +22,10 @@
 //     по-прежнему в чистом одноразовом профиле на креатора, и это правило не трогается).
 //     ⚠️ Профилей поэтому два: одна папка держит один процесс браузера, а полос две
 //     (`PROFILE_OPERA` и `PROFILE_TIKTOK`, копия заводится сама — см. `browser.mjs`).
-//   • Глубина (`depth`) обхода целиком передаётся сборщикам площадок: 'all' — весь список
-//     видео, 'week' — только за последние 7 дней. Снимок профиля делается всегда одинаково.
+//   • Глубина (`depth`, миграция v18): 'all' — весь список видео, 'week' — 7 дней, 'month' —
+//     30, 'range' — период между `depthFrom` и `depthTo`. Границы считаются ОДИН раз на обход
+//     (`depthBounds` в `scope.mjs`) и уходят площадкам готовыми: дат они не считают.
+//     Снимок профиля делается всегда одинаково, при любой глубине.
 //   • Охват видео (`videos`, миграция v17; владелец, 2026-09-09): 'all' — как было всегда,
 //     'ours' — «на лишние видео не смотрим и экономим время». При 'ours' сборщик СНАЧАЛА
 //     спрашивает у базы отслеживаемые видео креатора (`ours` или `watch`) и листает список
@@ -45,9 +47,15 @@
 //     свой бакет (`images.mjs`), в базу идёт наш публичный адрес. Причина — в `images.mjs`;
 //     у TikTok картинки показываются как есть, и его это не касается вовсе.
 //   • Запусков чистого профиля TikTok — не больше `AMESTAT_TT_LAUNCHES` за `AMESTAT_TT_WINDOW_MIN`
-//     минут на весь компьютер (`tiktok-gate.mjs`). Окно кончилось — полоса TikTok ЖДЁТ, пишет об
-//     этом в журнал и кладёт в `sync_runs.current_handles` строку «пауза TikTok до HH:MM».
+//     минут НА КАЖДЫЙ АДРЕС (`tiktok-gate.mjs`). Свободного адреса нет — полоса TikTok ЖДЁТ, пишет
+//     об этом в журнал и кладёт в `sync_runs.current_handles` строку «пауза TikTok до HH:MM».
 //     Полосу Instagram ожидание не задевает: полосы идут через `Promise.all`.
+//   • Адреса (`proxies.mjs`, 2026-09-09): пул из домашнего адреса и прокси `AMESTAT_PROXIES`
+//     чередуется по кругу, и «защита TikTok по адресу» перестаёт быть потолком скорости. Адрес
+//     выбирает сам шаг списка через `pool` — так вторая попытка после пустого списка уходит на
+//     СЛЕДУЮЩИЙ адрес, а не на тот же. ⚠️ Браузеры полос (Instagram, комментарии) сидят на
+//     домашнем адресе, пока `AMESTAT_PROXY_SCOPE` не `all`: в них живут ВОШЕДШИЕ аккаунты, а
+//     смена адреса у вошедшего аккаунта ловит проверки безопасности.
 //   • Каждая строка лога уезжает в `sync_log` ПО ХОДУ дела (`synclog.mjs`, миграция v16) —
 //     сайт показывает администратору живой журнал. `sync_runs.log` (весь текст в конце) остался.
 
@@ -62,7 +70,9 @@ import { launchProfile, trimTraffic, ensureProfileCopy, PROFILE_OPERA, PROFILE_T
 import { rehostImage, isOurs, avatarPath, coverPath } from "./images.mjs";
 import { notice, startRun, reportRun, takeSessionHints } from "./notices.mjs";
 import { takeLaunchSlot } from "./tiktok-gate.mjs";
+import { labelOf, rememberBad, rememberGood } from "./proxies.mjs";
 import { startSyncLog, pushSyncLog, stopSyncLog } from "./synclog.mjs";
+import { depthBounds, depthLabel, normalizeDepth } from "./scope.mjs";
 import { basename } from "node:path";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -124,21 +134,37 @@ export function pauseAfter(lane, error = null) {
 }
 
 /**
+ * Адрес для браузера полосы. Пусто — домашний, как было всегда.
+ *
+ * ⚠️ При `AMESTAT_PROXY_SCOPE=all` берётся ОДИН И ТОТ ЖЕ адрес — первый прокси пула, — а не
+ * следующий по кругу: в профилях полос живут вошедшие фейковые аккаунты, и гуляющий адрес у
+ * вошедшего аккаунта — это проверки безопасности площадки, а не выигрыш в скорости. Чередование
+ * заведено ради ЧИСТЫХ профилей списка TikTok, где входа нет вовсе.
+ */
+function laneProxy(env) {
+  if (env.proxyScope !== "all") return null;
+  return (env.proxyAddresses ?? []).find((a) => a.id > 0) ?? null;
+}
+
+/**
  * Кто собирает этого креатора. Instagram — по IG_SOURCE (graph | web).
+ * `depth` и `bounds` идут вместе: первое — на слово в логе, второе — готовые границы отбора
+ * (`depthBounds`, посчитаны один раз на обход).
  * `scope` — охват списка: `{ videos: 'all'|'ours', trackedIds, maxPages }`. Graph API листает
  * по-своему (там страницы дешёвые и правило прокрутки не при чём) — ему охват не передаётся.
+ * `pool` — адреса для чистых профилей списка TikTok (см. `laneBrowser` и `takeLaunchSlot`).
  */
-function pickCollector(creator, env, depth, ctx, scope) {
+function pickCollector(creator, env, depth, bounds, ctx, scope, pool) {
   const platform = creator.platform ?? "tiktok";
   if (platform === "tiktok") {
-    return (log) => collectTikTok(creator, { browserChoice: env.browser, depth, scope, log });
+    return (log) => collectTikTok(creator, { browserChoice: env.browser, depth, bounds, scope, pool, log });
   }
   if (platform === "instagram") {
     if (env.igSource === "graph") {
-      return (log) => collectInstagramGraph(creator, { token: env.igToken, userId: env.igUserId, depth, log });
+      return (log) => collectInstagramGraph(creator, { token: env.igToken, userId: env.igUserId, depth, bounds, log });
     }
     // Браузер полосы уже поднят и уже с перехватом: свой модуль не заводит.
-    return (log) => collectInstagramWeb(creator, { browserChoice: env.browser, depth, ctx, scope, log });
+    return (log) => collectInstagramWeb(creator, { browserChoice: env.browser, depth, bounds, ctx, scope, proxy: laneProxy(env), log });
   }
   throw new Error(`неизвестная площадка: ${platform}`);
 }
@@ -181,7 +207,7 @@ function laneBrowser(kind, env) {
           const { copied, from, to } = ensureProfileCopy(cfg.profile, PROFILE_OPERA);
           if (copied) log(`  заведена вторая копия профиля: ${to} (из ${from}, без кэшей и сессий вкладок)`);
         }
-        const browser = await launchProfile(env.browser, { headless: cfg.headless, profile: cfg.profile, log });
+        const browser = await launchProfile(env.browser, { headless: cfg.headless, profile: cfg.profile, proxy: laneProxy(env), log });
         let traffic = null;
         // Перехват ставится РАЗ на контекст полосы: он живёт на контексте, а не на вкладке,
         // и второй `ctx.route` просто множил бы обработчики на каждого креатора.
@@ -321,17 +347,22 @@ async function syncedCounts(ids, log) {
  *     (`videos.comments_synced_count`), пропускается: обсуждение не двигалось, а страница
  *     на видео стоит минуты. Первый раз (`null` или неизвестно) — снимаем всегда.
  * `known` — Map id → `{ count, ours, watch }` (старый вид «id → число» тоже понимается).
+ * `untilMs` — верхняя граница свежести (миграция v18): при глубине «период» комментарии
+ * снимаются у видео ИЗ ПЕРИОДА, а не у вчерашних. Пусто — как было: всё, что новее `sinceMs`.
  * Отдаёт `{ picked, unchanged, foreign, watched }`: `watched` — жёлтые, `foreign` — совсем
  * чужие; текстов не получают ни те ни другие, но в логе они названы порознь.
  * Чистая функция: её проверяют тесты.
  */
-export function pickComments(videos, known, sinceMs, { allVideos = false } = {}) {
+export function pickComments(videos, known, sinceMs, { allVideos = false, untilMs = null } = {}) {
   const picked = [], unchanged = [], foreign = [], watched = [];
   for (const v of videos ?? []) {
     const count = v.comments ?? 0;
     if (count <= 0) continue;
     if (v.publishedAt === null || v.publishedAt === undefined) continue;
-    if (Date.parse(v.publishedAt) < sinceMs) continue;
+    const at = Date.parse(v.publishedAt);
+    if (Number.isNaN(at)) continue;
+    if (at < sinceMs) continue;
+    if (untilMs !== null && untilMs !== undefined && at > untilMs) continue;
     const row = known?.get(String(v.id));
     const known_ = row !== null && typeof row === "object";
     const was = known_ ? row.count : row;
@@ -365,16 +396,22 @@ export function pickComments(videos, known, sinceMs, { allVideos = false } = {})
  *     `AMESTAT_REPLIES_MAX` на ветку) — они ложатся в ту же таблицу тем же upsert'ом.
  *     `replies: false` отменяет только клики по веткам; даровые ответы приезжают всё равно.
  */
-async function collectComments(creator, videos, env, lane, flags, log) {
+async function collectComments(creator, videos, env, lane, flags, bounds, log) {
   const platform = creator.platform ?? "tiktok";
   const collect = platform === "tiktok" ? collectTikTokComments
     : platform === "instagram" ? collectInstagramComments
       : null;
   if (!collect) return;
 
-  const since = Date.now() - env.commentsDays * DAY_MS;
+  // Обычно шаг берёт СВЕЖИЕ видео — за `AMESTAT_COMMENTS_DAYS` дней, как и раньше при любой
+  // глубине. Исключение одно: просьба «за выбранный период» (v18) — там комментарии нужны у
+  // видео ИЗ ПЕРИОДА, иначе срез за первую неделю сентября принёс бы вчерашние обсуждения.
+  const ranged = bounds?.until !== null && bounds?.until !== undefined && bounds?.since !== null && bounds?.since !== undefined;
+  const since = ranged ? bounds.since : Date.now() - env.commentsDays * DAY_MS;
+  const until = ranged ? bounds.until : null;
+  const window = ranged ? "за выбранный период" : `за ${env.commentsDays} дн.`;
   const known = await syncedCounts(videos.map((v) => v.id), log);
-  const { picked, unchanged, foreign, watched } = pickComments(videos, known, since, { allVideos: flags.allVideos });
+  const { picked, unchanged, foreign, watched } = pickComments(videos, known, since, { allVideos: flags.allVideos, untilMs: until });
   const same = unchanged.length > 0 ? `, без изменений: ${unchanged.length} видео` : "";
   // Чужие и жёлтые считаются порознь: у обоих текстов нет, но жёлтое мы смотрим намеренно.
   const skipped = [
@@ -383,9 +420,10 @@ async function collectComments(creator, videos, env, lane, flags, log) {
   ].filter(Boolean).join(", ");
   const alien = skipped ? `, ${skipped}` : "";
   if (picked.length === 0) {
-    log?.(`  комментарии: видео 0, собрано 0, не вышло 0 (свежих с новыми комментариями нет за ${env.commentsDays} дн.${same}${alien})`);
+    log?.(`  комментарии: видео 0, собрано 0, не вышло 0 (свежих с новыми комментариями нет ${window}${same}${alien})`);
     return;
   }
+  if (ranged) log?.("  комментарии: глубина «период» — берём видео из периода, а не свежие");
   if (unchanged.length > 0) log?.(`  комментарии: без изменений: ${unchanged.length} видео — их не открываем`);
   if (skipped) log?.(`  комментарии: ${skipped} — тексты не снимаем (нужны — просьба «и не наши видео»)`);
   if (flags.allVideos) log?.(`  комментарии: просьба «и не наши видео» — снимаем у всех свежих`);
@@ -443,7 +481,7 @@ async function collectComments(creator, videos, env, lane, flags, log) {
   log?.(`  комментарии: видео ${picked.length}, собрано ${rows} (ответов ${answers}${flags.replies ? "" : ", ветки не раскрывались"}), не вышло ${failed}${same}`);
 }
 
-async function collectOne(creator, env, depth, lane, flags, log) {
+async function collectOne(creator, env, depth, bounds, lane, flags, log, pool = null) {
   // Instagram собирается браузером полосы — тем же, который потом пойдёт за комментариями.
   // TikTok свой список видео берёт чистым одноразовым профилем и браузера полосы не трогает.
   const instagramWeb = (creator.platform ?? "tiktok") === "instagram" && env.igSource !== "graph";
@@ -465,7 +503,7 @@ async function collectOne(creator, env, depth, lane, flags, log) {
     }
   }
 
-  const collect = pickCollector(creator, env, depth, ctx, scope);
+  const collect = pickCollector(creator, env, depth, bounds, ctx, scope, pool);
   const { profile, videos } = await collect(log);
   const takenAt = new Date().toISOString();
   const instagram = (creator.platform ?? "tiktok") === "instagram";
@@ -507,7 +545,7 @@ async function collectOne(creator, env, depth, lane, flags, log) {
     // Тексты комментариев — после снимков и только по свежим видео: строки `video_comments`
     // ссылаются на `videos`, значит upsert выше должен пройти первым.
     // ⚠️ `comments: false` пропускает шаг целиком — вместе с запросом прежних чисел.
-    if (flags.comments) await collectComments(creator, videos, env, lane, flags, log);
+    if (flags.comments) await collectComments(creator, videos, env, lane, flags, bounds, log);
     else log?.("  комментарии: пропущены (просьба без комментариев)");
   }
 
@@ -529,9 +567,13 @@ async function collectOne(creator, env, depth, lane, flags, log) {
   return { videos: videos.length, followers: profile.followers };
 }
 
-async function doSync({ trigger, creatorId, failedOnly, depth, videos, comments, replies, allVideos, requestedBy, requestIds, slotLabel, onLog }) {
+async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthTo, videos, comments, replies, allVideos, requestedBy, requestIds, slotLabel, onLog }) {
   const env = loadEnv();
   const lines = [];
+  // Границы отбора считаются РАЗ на обход и уходят площадкам готовыми: «сейчас» у полос иначе
+  // разъехалось бы на минуты, а «месяц» пришлось бы заводить в трёх модулях (`scope.mjs`).
+  const bounds = depthBounds(depth, { from: depthFrom, to: depthTo });
+  const label = depthLabel(depth, depthFrom, depthTo);
   /**
    * Строка лога обхода. Уходит сразу в три места: в память (`sync_runs.log` в конце), тому, кто
    * обход завёл (консоль или файл резидента), и в живой журнал `sync_log` для сайта (v16).
@@ -554,6 +596,9 @@ async function doSync({ trigger, creatorId, failedOnly, depth, videos, comments,
       trigger,
       scope: failedOnly ? "failed" : creatorId ?? "all",
       depth,
+      // Края периода (v18). У остальных глубин колонки пусты — так стоит и в проверке базы.
+      depth_from: depthFrom,
+      depth_to: depthTo,
       // Охват видео этого обхода (v17): 'all' или 'ours'. Сайт читает его из строки обхода.
       videos,
       comments,
@@ -573,11 +618,11 @@ async function doSync({ trigger, creatorId, failedOnly, depth, videos, comments,
     log(`обход не начался: ${text}`);
     notice("run", `обход не начался: ${text}`);
     // Строки в базе нет, но сказать владельцу надо тем более: сайт тоже читает из базы.
-    await reportRun({ runId: null, trigger, depth, done: 0, failed: 0, slotLabel, log });
+    await reportRun({ runId: null, trigger, depth, depthFrom, depthTo, done: 0, failed: 0, slotLabel, log });
     return { runId: null, ok: false, done: 0, failed: 0, error: text, failures, depth, log: lines.join("\n") };
   }
   const who = failedOnly ? "только неудавшиеся" : creatorId ? `креатор ${creatorId}` : "все";
-  log(`обход #${runId} (${trigger}, ${who}, глубина ${depth === "week" ? "неделя" : "всё"}, комментарии ${comments ? "да" : "нет"}, ветки ${replies ? "да" : "нет"}${allVideos ? ", и не наши видео" : ""}${videos === "ours" ? " · только наши" : ""})`);
+  log(`обход #${runId} (${trigger}, ${who}, глубина ${label}, комментарии ${comments ? "да" : "нет"}, ветки ${replies ? "да" : "нет"}${allVideos ? ", и не наши видео" : ""}${videos === "ours" ? " · только наши" : ""})`);
 
   // Просьбы забраны этим обходом — сайт перестаёт показывать «в очереди».
   if (requestIds?.length && runId) {
@@ -651,29 +696,50 @@ async function doSync({ trigger, creatorId, failedOnly, depth, videos, comments,
           current.set(kind, `@${creator.handle}`);
           await progress();
           // Полоса TikTok поднимает ЧИСТЫЙ профиль на каждого креатора, а таких запусков с
-          // одного адреса площадка терпит немного. Кончилось окно — ждём его освобождения,
-          // и это ожидание видно и в журнале, и на кнопке сайта. Полосу Instagram оно не
-          // задевает вовсе: полосы идут через Promise.all.
-          if (kind === "tt") {
-            await takeLaunchSlot({
-              limit: env.ttLaunchLimit,
-              windowMs: env.ttWindowMs,
-              onWait: (until) => {
-                say(`ждём паузу TikTok до ${hhmm(until)} (${env.ttLaunchLimit} запусков за ${Math.round(env.ttWindowMs / 60_000)} мин)`);
-                current.set(kind, `пауза TikTok до ${hhmm(until)}`);
-                void progress();
-              },
-              onFree: (waited) => {
-                say(`пауза TikTok кончилась, ждали ${Math.round(waited / 60_000)} мин`);
-                current.set(kind, `@${creator.handle}`);
-                void progress();
-              },
-            });
-          }
+          // ОДНОГО АДРЕСА площадка терпит немного. Пул выбирает следующий адрес по кругу, а если
+          // свободных нет — ждёт ближайшего освобождения; ожидание видно и в журнале, и на кнопке
+          // сайта. Полосу Instagram оно не задевает вовсе: полосы идут через Promise.all.
+          // ⚠️ Адрес берётся не здесь, а внутри шага списка (`tiktok.mjs`): после пустого списка
+          // ему нужен СЛЕДУЮЩИЙ адрес, а не тот же самый.
+          const pool = kind !== "tt" ? null : {
+            async take({ exclude = [] } = {}) {
+              const { address } = await takeLaunchSlot({
+                limit: env.ttLaunchLimit,
+                windowMs: env.ttWindowMs,
+                addresses: env.proxyAddresses,
+                exclude,
+                onWait: (until, waitMs, info) => {
+                  const why = info?.addresses > 1
+                    ? "все адреса заняты"
+                    : `${env.ttLaunchLimit} запусков за ${Math.round(env.ttWindowMs / 60_000)} мин`;
+                  say(`ждём паузу TikTok до ${hhmm(until)} (${why})`);
+                  current.set(kind, `пауза TikTok до ${hhmm(until)}`);
+                  void progress();
+                },
+                onFree: (waited, address) => {
+                  say(`пауза TikTok кончилась, ждали ${Math.round(waited / 60_000)} мин, адрес: ${address.label}`);
+                  current.set(kind, `@${creator.handle}`);
+                  void progress();
+                },
+              });
+              return address;
+            },
+            bad(id, why) {
+              // ⚠️ Адрес один — паузы не ставим вовсе: она остановила бы весь обход на полчаса
+              // ради беды, которая и так лечится ожиданием следующего слота. Это и есть
+              // «с одним адресом — поведение как сейчас».
+              if ((env.proxyAddresses?.length ?? 1) < 2) return;
+              const until = rememberBad(id, env.proxyCooldownMs);
+              say(`  ${labelOf(env.proxyAddresses, id)} в паузе до ${hhmm(new Date(until))}: ${why}`);
+            },
+            good(id) {
+              rememberGood(id);
+            },
+          };
           const started = Date.now();
           let error = null;
           try {
-            const res = await collectOne(creator, env, depth, lane, flags, say);
+            const res = await collectOne(creator, env, depth, bounds, lane, flags, say, pool);
             done++;
             laneDone++;
             say(`  готово: видео ${res.videos}, подписчиков ${res.followers ?? "?"}`);
@@ -733,7 +799,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, videos, comments,
     // попасть в `sync_runs.log` — иначе на сайте не видно, о чём владельцу сказали.
     // `slotLabel` — только у неудавшегося повтора: одно письмо на обход, отдельного «не удался
     // дважды» больше нет (владелец, 2026-09-08: два письма об одном событии).
-    await reportRun({ runId, trigger, depth, done, failed, slotLabel: failed > 0 || firstError ? slotLabel ?? null : null, log });
+    await reportRun({ runId, trigger, depth, depthFrom, depthTo, done, failed, slotLabel: failed > 0 || firstError ? slotLabel ?? null : null, log });
     if (runId) {
       try {
         await patch(`sync_runs?id=eq.${runId}`, {
@@ -759,8 +825,12 @@ async function doSync({ trigger, creatorId, failedOnly, depth, videos, comments,
 
 /**
  * Один обход. Пока идёт предыдущий — ждёт его в очереди.
- * `{ trigger: 'schedule'|'catchup'|'manual'|'retry', creatorId?, failedOnly?, depth?, videos?,
- *    comments?, replies?, allVideos?, requestedBy?, requestIds?, slotLabel?, onLog? }`
+ * `{ trigger: 'schedule'|'catchup'|'manual'|'retry', creatorId?, failedOnly?, depth?, depthFrom?,
+ *    depthTo?, videos?, comments?, replies?, allVideos?, requestedBy?, requestIds?, slotLabel?,
+ *    onLog? }`
+ * `depth` — 'all' (по умолчанию) | 'week' | 'month' | 'range' (миграция v18); у 'range'
+ * обязательны обе границы `depthFrom` / `depthTo` (ISO или Date) — без них глубина опускается
+ * до 'all' (`normalizeDepth` в `scope.mjs`), и это видно строкой в логе обхода;
  * `videos` — охват списка: `'all'` (по умолчанию, как ходят расписание, догон и повтор) или
  * `'ours'` — листать лишь до тех пор, пока не встретились все наши и жёлтые видео креатора;
  * `comments` — снимать ли тексты комментариев (`false` — шага нет вовсе);
@@ -775,10 +845,16 @@ async function doSync({ trigger, creatorId, failedOnly, depth, videos, comments,
  * `failures` — `[{ handle, error }]` по каждому неудавшемуся креатору: из них резидент
  * собирает сообщение владельцу в Telegram.
  */
-export function runSync({ trigger = "manual", creatorId = null, failedOnly = false, depth = "all", videos = "all", comments = true, replies = true, allVideos = false, requestedBy = null, requestIds = [], slotLabel = null, onLog } = {}) {
+export function runSync({ trigger = "manual", creatorId = null, failedOnly = false, depth = "all", depthFrom = null, depthTo = null, videos = "all", comments = true, replies = true, allVideos = false, requestedBy = null, requestIds = [], slotLabel = null, onLog } = {}) {
+  // Глубина приводится к одному из четырёх видов ЗДЕСЬ и один раз: дальше по обходу ходит уже
+  // разобранная пара «глубина + границы», и в базу ложится ровно она.
+  const norm = normalizeDepth(depth, depthFrom, depthTo);
+  if (norm.note) onLog?.(`глубина: ${norm.note}`);
   const args = {
     trigger, creatorId, failedOnly,
-    depth: depth === "week" ? "week" : "all",
+    depth: norm.depth,
+    depthFrom: norm.from,
+    depthTo: norm.to,
     // Всё, кроме прямого «только наши», — полный охват: у колонки в базе тоже default 'all'.
     videos: videos === "ours" ? "ours" : "all",
     comments: comments !== false,

@@ -1,4 +1,4 @@
-import type { SyncRequest, SyncRun, SyncTrigger } from "@/lib/types";
+import type { SyncDepth, SyncRequest, SyncRun, SyncTrigger } from "@/lib/types";
 
 // Общая часть двух мест, которые ждут обход: кнопки «Обновить» над страницей
 // (`components/sync-button.tsx`) и очереди строк списка (`lib/use-sync-queue.ts`).
@@ -106,6 +106,61 @@ export const OURS_ONLY_TEXT = " · только наши";
 // не смотрели», и в пачке, где хоть один обход шёл по всему списку, оно неверно.
 export function videosTail(runs: SyncRun[]): string {
   return runs.length > 0 && runs.every((r) => r.videos === "ours") ? OURS_ONLY_TEXT : "";
+}
+
+// 🔴 Слова глубины живут здесь по одному разу (миграции v7 и v18): их зовут сводка попапа
+// («… · месяц · …»), строка состояния кнопки, строка «Обновлено» и тосты очереди строк.
+// Разъедутся — два места назовут одну и ту же просьбу по-разному.
+export const DEPTH_WORD: Record<SyncDepth, string> = {
+  all: "всё",
+  week: "неделя",
+  month: "месяц",
+  range: "период",
+};
+
+// Единственный текст про незаполненный период: он же под полями дат в попапе, он же ответ
+// requestSync, если просьба с depth = 'range' всё-таки ушла без границ.
+export const RANGE_REQUIRED = "Укажи период: «с» раньше «по»";
+
+function two(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+// «01.09–09.09» — концы периода. Год пишется, только если хоть один конец не в нынешнем
+// году: внутри года он лишний шум, а «01.09–09.09» прошлого года без него врало бы.
+export function rangeWord(from: string | Date, to: string | Date): string | null {
+  const f = from instanceof Date ? from : new Date(from);
+  const t = to instanceof Date ? to : new Date(to);
+  if (Number.isNaN(f.getTime()) || Number.isNaN(t.getTime())) return null;
+  const year = new Date().getFullYear();
+  const withYear = f.getFullYear() !== year || t.getFullYear() !== year;
+  const one = (d: Date) => `${two(d.getDate())}.${two(d.getMonth() + 1)}${withYear ? `.${d.getFullYear()}` : ""}`;
+  return `${one(f)}–${one(t)}`;
+}
+
+// Слово глубины для сводки: у 'range' вместо слова стоят сами даты, а «период» остаётся
+// запасным вариантом, пока даты не выбраны.
+export function depthWord(
+  depth: SyncDepth,
+  from?: string | Date | null,
+  to?: string | Date | null,
+): string {
+  if (depth !== "range") return DEPTH_WORD[depth];
+  const w = from && to ? rangeWord(from, to) : null;
+  return w ?? DEPTH_WORD.range;
+}
+
+// Строка и просьба, и обхода: обе несут depth с границами (миграции v7, v18).
+type DepthRow = { depth: SyncDepth; depth_from: string | null; depth_to: string | null };
+
+// Хвост «· месяц» / «· 01.09–09.09» к строке состояния, к «Обновлено» и к тостам.
+// ⚠️ У 'all' и 'week' хвоста нет намеренно: так было до v18, и обычный ежедневный обход
+// не должен обрастать словами. Пачка сведена сборщиком из одной просьбы — берём первую
+// строку, как и triggerText.
+export function depthTail(rows: DepthRow[]): string {
+  const first = rows[0];
+  if (!first || first.depth === "all" || first.depth === "week") return "";
+  return ` · ${depthWord(first.depth, first.depth_from, first.depth_to)}`;
 }
 
 // Чем кончилась пачка обходов — одной строкой для тоста. Не удался хоть один — показываем

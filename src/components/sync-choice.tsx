@@ -1,9 +1,18 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { RefreshCwIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { useSyncOptions } from "@/components/sync-options";
+import {
+  endOfLocalDay,
+  fromDateInputValue,
+  startOfLocalDay,
+  toDateInputValue,
+  type PeriodRange,
+} from "@/lib/period";
+import { RANGE_REQUIRED } from "@/lib/sync-phase";
 import type { SyncDepth, SyncPick, SyncVideos } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -87,14 +96,99 @@ export function SyncChoiceBlock({
   );
 }
 
-// Глубина обхода — одинаковая у обеих кнопок.
+// Период обхода: поля «с» и «по» под группой глубины (владелец, 2026-09-09; миграция v18).
+// Состояние живёт в попапе — своё у кнопки над страницей и у кнопки строки, и сбрасывается
+// при каждом открытии: тяжёлый обход по датам выбирается руками каждый раз.
+export type SyncRangeState = {
+  // Строки поля <input type="date"> (YYYY-MM-DD), как в «своём сроке» статистики.
+  from: string;
+  to: string;
+  setFrom: (v: string) => void;
+  setTo: (v: string) => void;
+  reset: () => void;
+  // Готовые границы просьбы; null — поля пусты или «с» не раньше «по».
+  range: PeriodRange | null;
+};
+
+const DAY_MS = 86_400_000;
+
+// Умолчание при первом раскрытии — последние 30 дней.
+function defaultFrom(): string {
+  return toDateInputValue(new Date(Date.now() - 30 * DAY_MS));
+}
+
+function todayValue(): string {
+  return toDateInputValue(new Date());
+}
+
+// Границы просьбы из двух полей: «с» — начало дня, «по» — конец дня по местному времени.
+// ⚠️ «по» не позже сегодня: набранная руками будущая дата подрезается до сегодняшней, и
+// сводка под кнопкой показывает уже подрезанную — уходит ровно то, что там написано.
+// Один и тот же день в обоих полях допустим: 00:00:00.000 < 23:59:59.999.
+export function resolveSyncRange(from: string, to: string): PeriodRange | null {
+  const f = fromDateInputValue(from);
+  const t = fromDateInputValue(to);
+  if (!f || !t) return null;
+  const now = new Date();
+  const start = startOfLocalDay(f);
+  const end = endOfLocalDay(t > now ? now : t);
+  return start < end ? { from: start, to: end } : null;
+}
+
+export function useSyncRange(): SyncRangeState {
+  const [from, setFrom] = useState(defaultFrom);
+  const [to, setTo] = useState(todayValue);
+  const reset = useCallback(() => {
+    setFrom(defaultFrom());
+    setTo(todayValue());
+  }, []);
+  const range = useMemo(() => resolveSyncRange(from, to), [from, to]);
+  return { from, to, setFrom, setTo, reset, range };
+}
+
+// Одно поле даты: подпись слева, поле справа. `[color-scheme:dark]` — ради тёмной темы:
+// иконку календаря и выпадающий календарь рисует сам браузер, и без этого они остаются
+// белыми пятнами на тёмном попапе.
+function SyncDateField({
+  label,
+  aria,
+  value,
+  max,
+  onChange,
+}: {
+  label: string;
+  aria: string;
+  value: string;
+  max: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      {label}
+      <Input
+        type="date"
+        value={value}
+        max={max}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-8 dark:[color-scheme:dark]"
+        aria-label={aria}
+      />
+    </label>
+  );
+}
+
+// Глубина обхода — одинаковая у обеих кнопок. Четыре блока (владелец, 2026-09-09):
+// «Всё», «Неделя», «Месяц», «Период»; у последнего под группой раскрываются две даты.
 export function SyncDepthGroup({
   depth,
   onDepth,
+  range,
 }: {
   depth: SyncDepth;
   onDepth: (next: SyncDepth) => void;
+  range: SyncRangeState;
 }) {
+  const max = todayValue();
   return (
     <SyncGroup title="Глубина">
       <SyncChoiceBlock
@@ -104,11 +198,49 @@ export function SyncDepthGroup({
         onClick={() => onDepth("all")}
       />
       <SyncChoiceBlock
-        label="Последняя неделя"
-        hint="только видео за 7 дней"
+        label="Неделя"
+        hint="видео за 7 дней"
         selected={depth === "week"}
         onClick={() => onDepth("week")}
       />
+      <SyncChoiceBlock
+        label="Месяц"
+        hint="видео за 30 дней"
+        selected={depth === "month"}
+        onClick={() => onDepth("month")}
+      />
+      <SyncChoiceBlock
+        label="Период"
+        hint="выбрать даты"
+        selected={depth === "range"}
+        onClick={() => onDepth("range")}
+      />
+      {depth === "range" && (
+        <div className="col-span-2 flex flex-col gap-1.5">
+          <div className="grid grid-cols-2 gap-1.5">
+            {/* max — сегодня: «по» не позже сегодняшнего дня, и календарь браузера дальше
+                не пускает. Набранную руками будущую дату подрезает resolveSyncRange. */}
+            <SyncDateField
+              label="с"
+              aria="С какого дня"
+              value={range.from}
+              max={max}
+              onChange={range.setFrom}
+            />
+            <SyncDateField
+              label="по"
+              aria="По какой день"
+              value={range.to}
+              max={max}
+              onChange={range.setTo}
+            />
+          </div>
+          {/* Кнопка внизу в это время выключена — без строки было бы непонятно, почему. */}
+          {range.range === null && (
+            <p className="text-xs leading-snug text-destructive">{RANGE_REQUIRED}</p>
+          )}
+        </div>
+      )}
     </SyncGroup>
   );
 }
@@ -204,7 +336,8 @@ export function SyncPickGroup({
 
 // Слова сводки. Собираются из того же выбора, что уходит в просьбу, — чтобы под кнопкой
 // стояло ровно то, что случится по нажатию.
-export const DEPTH_WORD: Record<SyncDepth, string> = { all: "всё", week: "неделя" };
+// ⚠️ Слова глубины сюда не переезжают: они живут в `lib/sync-phase.ts` (DEPTH_WORD,
+// depthWord, depthTail) — их зовут и попапы, и строки состояния, и тосты очереди.
 
 export function pickWords(pick: SyncPick): string {
   if (!pick.comments) return "без комментариев";

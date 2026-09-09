@@ -4,8 +4,11 @@
 export type Platform = "tiktok" | "instagram";
 // retry — повтор через час после неудачного обхода по расписанию, заводит сборщик (миграция v7).
 export type SyncTrigger = "schedule" | "catchup" | "manual" | "retry";
-// Глубина обхода (миграция v7): all — весь список видео, week — только за последние 7 дней.
-export type SyncDepth = "all" | "week";
+// Глубина обхода (миграции v7 и v18): all — весь список видео, week — за последние 7 дней,
+// month — за последние 30 дней, range — за выбранный период (depth_from … depth_to).
+// ⚠️ У 'range' обе границы обязательны и depth_from < depth_to — это проверка в базе;
+// у остальных глубин они пусты. Кто пишет просьбу, тот и держит это правило.
+export type SyncDepth = "all" | "week" | "month" | "range";
 // Охват видео в обходе (миграция v17): all — весь список, как в ежедневном обходе;
 // ours — список листается лишь до наших и жёлтых видео, остальные не смотрим и экономим
 // время. Расписание всегда ходит с 'all'.
@@ -213,6 +216,9 @@ export type SyncRun = {
   // 'all' — обход всех видимых; иначе id одного креатора.
   scope: string;
   depth: SyncDepth;
+  // Границы периода у depth = 'range' (миграция v18); у остальных глубин null.
+  depth_from: string | null;
+  depth_to: string | null;
   // Чем шёл обход (миграция v12): снимались ли тексты комментариев и ветки ответов.
   comments: boolean;
   replies: boolean;
@@ -273,6 +279,10 @@ export type SyncRequest = {
   taken_at: string | null;
   run_id: number | null;
   depth: SyncDepth;
+  // Границы выбранного периода (миграция v18): заполнены только при depth = 'range',
+  // обе сразу и depth_from < depth_to — иначе вставку отобьёт проверка базы.
+  depth_from: string | null;
+  depth_to: string | null;
   // Что снимать (миграция v12): тексты комментариев и ветки ответов под ними.
   // replies без comments смысла не имеет — галочка в матрице гаснет вместе с первой.
   comments: boolean;
@@ -292,6 +302,9 @@ export type SyncRequestInsert = {
   requested_by: string;
   creator_id?: string | null;
   depth?: SyncDepth;
+  // Только при depth = 'range' и только парой (миграция v18).
+  depth_from?: string | null;
+  depth_to?: string | null;
   comments?: boolean;
   replies?: boolean;
   all_videos?: boolean;
