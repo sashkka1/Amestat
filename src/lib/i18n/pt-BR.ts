@@ -302,6 +302,7 @@ export const ptBR: Dict = {
     byCreators: "Por criador",
     creatorsLoading: "Lendo as séries dos criadores…",
     creatorsError: "Não foi possível ler as séries dos criadores: {error}",
+    note: "As métricas são atribuídas à data de publicação: a barra do dia são as views dos vídeos publicados nesse dia.",
   },
 
   overview: {
@@ -312,7 +313,7 @@ export const ptBR: Dict = {
     trend: "Tendência de views por plataforma",
     trendTotal: "{n} no total",
     share: "Participação das plataformas",
-    shareSubtitle: "Participação nas views do período",
+    shareSubtitle: "Participação nas views dos vídeos publicados no período",
     empty: "Não há dados neste período.",
   },
 

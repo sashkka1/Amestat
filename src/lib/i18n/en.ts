@@ -302,6 +302,7 @@ export const en: Dict = {
     byCreators: "By creator",
     creatorsLoading: "Loading creator series…",
     creatorsError: "Could not read creator series: {error}",
+    note: "Metrics are attributed to the upload date: a day's bar is the views of the videos released that day.",
   },
 
   overview: {
@@ -312,7 +313,7 @@ export const en: Dict = {
     trend: "Views trend by platform",
     trendTotal: "{n} total",
     share: "Platform share",
-    shareSubtitle: "Share of views for the range",
+    shareSubtitle: "Share of views of the videos released in the range",
     empty: "No data for this range.",
   },
 

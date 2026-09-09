@@ -38,8 +38,8 @@ const TIP_STYLE = {
 
 const AXIS_TICK = { fontSize: 10, fill: "var(--muted-foreground)" } as const;
 
-// Прирост просмотров по дням, разложенный по дню: база отдаёт его как есть (миграция v20),
-// здесь остаётся только разложить ряд по сетке дней страницы.
+// Просмотры по дню публикации видео: база отдаёт ряд как есть (миграция v21), здесь остаётся
+// только разложить его по сетке дней страницы.
 function viewsByDay(rows: DailyViews[]): Map<string, number> {
   return new Map(rows.map((d) => [d.day, d.views]));
 }
@@ -88,7 +88,7 @@ export function OverviewCards({
     return days.map((day) => ({ day, tiktok: tk.get(day) ?? 0, instagram: ig.get(day) ?? 0 }));
   }, [days, tiktok, instagram]);
 
-  // Доля площадки — сумма её дневных приростов за срок: то же число, что нарисовано линией.
+  // Доля площадки — сумма её дневных значений за срок: то же число, что нарисовано линией.
   const shares = useMemo(() => {
     const sum = (p: Platform) => trendRows.reduce((s, r) => s + r[p], 0);
     const rows = (["tiktok", "instagram"] as Platform[])

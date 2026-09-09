@@ -266,6 +266,10 @@ export async function creatorsOverview(range: PeriodRange): Promise<CreatorOverv
 
 // График по дням считает база, поэтому фильтр площадки уходит в неё параметром
 // (миграция v10): null — все площадки, как было до переключателя.
+//
+// ⚠️ Значение дня — не «сколько сборщик увидел в этот день», а «сколько набрали видео,
+// вышедшие в этот день» (миграция v21): текущие счётчики этих роликов. День снимка на числа
+// не влияет вовсе.
 export async function dailyViewsAll(
   range: PeriodRange,
   platform: Platform | null = null,
@@ -279,8 +283,8 @@ export async function dailyViewsAll(
   return data ?? [];
 }
 
-// Ряд карточки креатора. Как и daily_views_all — прирост за день, а не накопленная сумма
-// (миграция v20).
+// Ряд карточки креатора — та же атрибуция по дате публикации, что и у ряда по всем
+// (миграция v21).
 export async function creatorDailyViews(creatorId: string, range: PeriodRange): Promise<DailyViews[]> {
   const { data, error } = await createClient().rpc("creator_daily_views", {
     p_creator: creatorId,

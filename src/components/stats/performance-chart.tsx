@@ -52,8 +52,9 @@ export type ChartCreator = { id: string; name: string };
 type Row = Record<string, number | string> & { day: string };
 type Column = { key: string; values: number[] };
 
-// Ряд базы → то, что рисуем. База отдаёт прирост за день (миграция v20), поэтому «по дням» —
-// это её значения как есть, а «накопительно» — бегущая сумма от начала срока.
+// Ряд базы → то, что рисуем. База отдаёт день как «сколько набрали видео, вышедшие в этот
+// день» (миграция v21), поэтому «по дням» — это её значения как есть, а «накопительно» —
+// бегущая сумма от начала срока.
 function toMode(values: number[], mode: Mode): number[] {
   return mode === "total" ? runningTotal(values) : values;
 }
@@ -101,9 +102,10 @@ function buildRows(days: string[], cols: Column[], bucket: Bucket, mode: Mode): 
 // и держатся в состоянии по ключу «срок + пятёрка» — переключение туда-обратно базу не дёргает.
 type CreatorSeries = { key: string; days: string[]; cols: Column[] };
 
-// «Динамика»: пять рядов по дням (миграции v4 и v20). База отдаёт прирост за день по правилам
-// базовой линии `video_stats_between`, поэтому «по дням» — её значения как есть, а
-// «накопительно» — бегущая сумма приростов от начала срока.
+// «Динамика»: пять рядов по дням (миграции v4 и v21). Метрики отнесены к ДАТЕ ПУБЛИКАЦИИ:
+// столбец дня — текущие счётчики видео, вышедших в этот день (владелец, 2026-09-09: «все
+// графики должны работать по дню публикации, вне зависимости от того, в какой день сборщик
+// что-то словил»). «Накопительно» — бегущая сумма этих значений от начала срока.
 //
 // `range` и `creators` нужны только режиму «По креаторам»: без них третий сегмент не рисуется
 // вовсе (так карточка креатора и живёт — там сравнивать не с кем).
@@ -286,7 +288,7 @@ export function PerformanceChart({
       {rows.length === 0 ? (
         <Empty>{empty}</Empty>
       ) : (
-        <div className="h-64 w-full px-2 pb-3 sm:h-72">
+        <div className="h-64 w-full px-2 sm:h-72">
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart data={rows} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
               <defs>
@@ -350,6 +352,10 @@ export function PerformanceChart({
           </ResponsiveContainer>
         </div>
       )}
+
+      {/* Подпись про атрибуцию: без неё столбец дня легко прочитать как «столько собрали
+          в этот день», а он про другое — про ролики, вышедшие в этот день. */}
+      <p className="px-4 pb-3 text-xs text-muted-foreground">{t("chart.note")}</p>
     </Panel>
   );
 }
