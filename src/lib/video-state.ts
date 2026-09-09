@@ -52,3 +52,12 @@ export const STATE_ROW_CLASS: Record<VideoState, string> = {
   watch: "border-l-2 border-amber-500 bg-amber-500/10",
   ours: "border-l-2 border-emerald-500 bg-emerald-500/10",
 };
+
+// Точка перед подписью видео — те же три цвета, что у полосы строки. Полосу она не заменяет:
+// полоса видна только у крайних колонок, а метка стоит там, куда смотрят — у названия.
+// «Не наше» серое, а не прозрачное: отсутствие метки читалось бы как «состояние неизвестно».
+export const STATE_DOT_CLASS: Record<VideoState, string> = {
+  none: "bg-muted-foreground/50",
+  watch: "bg-amber-500",
+  ours: "bg-emerald-500",
+};

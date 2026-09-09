@@ -121,6 +121,15 @@ export const ptBR: Dict = {
     badRange: "O início não pode ser depois do fim.",
   },
 
+  periodBar: {
+    compare: "Comparar com o período anterior",
+    comparedWith: "Comparação com {from} → {to}",
+    scopeGroup: "Escopo dos vídeos",
+    scopeAll: "Todos os vídeos",
+    scopeOurs: "Somente nossos",
+    scopeServerNote: "Os cartões, a “Dinâmica”, a tendência das plataformas e os “Melhores criadores” são calculados no banco e não seguem este escopo.",
+  },
+
   auth: {
     noProfileTitle: "Acesso não liberado",
     noProfileText:
@@ -335,6 +344,7 @@ export const ptBR: Dict = {
   videosTable: {
     title: "Vídeos",
     count: "{n} {videos}",
+    countOf: "{shown} de {total} {videos}",
     filterAll: "Todos",
     filterOurs: "Nossos",
     filterWatch: "Acompanhando",

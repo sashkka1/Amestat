@@ -14,7 +14,7 @@ import { Panel, PanelHead, Empty } from "./panel";
 import { SortHead, nextSort, type SortDir } from "./sort-head";
 import { engagementPct, fmtDayAxis, fmtNum } from "@/lib/format";
 import { useT, type TKey } from "@/lib/i18n";
-import { STATE_ROW_CLASS, type VideoState } from "@/lib/video-state";
+import { STATE_DOT_CLASS, STATE_ROW_CLASS, stateLabel, type VideoState } from "@/lib/video-state";
 import type { Platform } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -126,10 +126,20 @@ export function VideosTable({
     <Panel collapseKey={collapseKey}>
       <PanelHead
         title={title ?? t("videosTable.title")}
-        subtitle={t("videosTable.count", {
-          n: fmtNum(filtered.length),
-          videos: t.plural("videos", filtered.length),
-        })}
+        /* Список сужен поиском или чипом — подпись говорит и сколько всего: иначе «12 видео»
+           у креатора с сотней выглядит как потеря данных, а не как фильтр. */
+        subtitle={
+          filtered.length === rows.length
+            ? t("videosTable.count", {
+                n: fmtNum(filtered.length),
+                videos: t.plural("videos", filtered.length),
+              })
+            : t("videosTable.countOf", {
+                shown: fmtNum(filtered.length),
+                total: fmtNum(rows.length),
+                videos: t.plural("videos", rows.length),
+              })
+        }
       >
         {/* Чипы состояния — рядом с поиском: тот же ряд управления таблицей. */}
         <div className="flex flex-wrap items-center gap-1">
@@ -209,6 +219,11 @@ export function VideosTable({
                   )}
                   <TableCell>
                     <div className="flex items-center gap-2">
+                      <span
+                        title={stateLabel(r.state)}
+                        aria-label={stateLabel(r.state)}
+                        className={cn("size-2 shrink-0 rounded-full", STATE_DOT_CLASS[r.state])}
+                      />
                       <Cover src={r.coverUrl} width={28} />
                       <PlatformIcon platform={r.platform} />
                       <a

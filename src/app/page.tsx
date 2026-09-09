@@ -3,12 +3,12 @@
 import { useCallback, useMemo } from "react";
 import { AuthGate } from "@/components/auth-gate";
 import { Page, PageError, PageSkeleton } from "@/components/page";
-import { PeriodChip } from "@/components/period-chip";
 import { PlatformSwitch } from "@/components/platform-switch";
 import { SyncButton } from "@/components/sync-button";
 import { SyncLogPanel } from "@/components/sync-log-panel";
 import { KpiRow, totalsToKpis } from "@/components/stats/kpi-row";
 import { OverviewCards } from "@/components/stats/overview-cards";
+import { PeriodBar } from "@/components/stats/period-bar";
 import { PerformanceChart, type ChartCreator } from "@/components/stats/performance-chart";
 import { TopPosts } from "@/components/stats/top-posts";
 import { TopCreators, buildCreatorRows } from "@/components/stats/top-creators";
@@ -23,6 +23,7 @@ import {
   type VideoRow,
 } from "@/lib/queries";
 import { earliestAdded, publishedIn, toPosts, toTableRows } from "@/lib/video-rows";
+import { matchesScope, useCompare, useScope } from "@/lib/dashboard-prefs";
 import { useT } from "@/lib/i18n";
 import {
   matchesPlatform,
@@ -65,6 +66,11 @@ function Dashboard() {
   const earliest = useMemo(() => earliestAdded(allCreators), [allCreators]);
   const period = usePeriod(earliest);
 
+  // Полоса периода держит ещё две настройки страницы, и обе помнятся между заходами
+  // (`lib/dashboard-prefs.ts`): сравнивать ли срок с прошлым и какие видео считать.
+  const compare = useCompare();
+  const { scope, setScope } = useScope();
+
   // «Только эта страница» в матрице обновления имеет смысл, когда страница уже сужена:
   // у менеджера — до его креаторов, у админа — переключателем площадки. Админ на «Все»
   // видит всех, и выбирать не из чего (null прячет строку).
@@ -87,12 +93,17 @@ function Dashboard() {
   // у них нет: это тот же daily_views_all, позванный с p_platform. На «Все» он зовётся дважды,
   // а при выбранной площадке второго запроса нет вовсе — её ряд и есть тот `daily`, что уже
   // прочитан для графика.
+  //
+  // ⚠️ Сравнение выключено — прошлый срок не читается вовсе: это второй такой же вызов
+  // creators_overview на каждую смену срока, и он никому не нужен, пока дельты не показывают.
+  const comparing = compare.on;
   const stats = useLoader(async () => {
-    if (!period.range || !period.previous) return null;
+    if (!period.range) return null;
     const range = period.range;
+    const previous = comparing ? period.previous : null;
     const [now, prev, daily, split] = await Promise.all([
       creatorsOverview(range),
-      creatorsOverview(period.previous),
+      previous ? creatorsOverview(previous) : Promise.resolve(null),
       dailyViewsAll(range, rpcPlatform),
       rpcPlatform === null
         ? Promise.all([dailyViewsAll(range, "tiktok"), dailyViewsAll(range, "instagram")])
@@ -101,7 +112,7 @@ function Dashboard() {
     const tiktok: DailyViews[] = rpcPlatform === "instagram" ? [] : split ? split[0] : daily;
     const instagram: DailyViews[] = rpcPlatform === "tiktok" ? [] : split ? split[1] : daily;
     return { now, prev, daily, tiktok, instagram };
-  }, [fromMs, toMs, rpcPlatform]);
+  }, [fromMs, toMs, rpcPlatform, comparing]);
 
   const creatorIds = useMemo(() => new Set(creators.map((c) => c.id)), [creators]);
   const nowRows = useMemo(
@@ -109,22 +120,32 @@ function Dashboard() {
     [stats.data, creatorIds],
   );
   const prevRows = useMemo(
-    () => stats.data?.prev.filter((o) => creatorIds.has(o.creator_id)) ?? null,
+    () => stats.data?.prev?.filter((o) => creatorIds.has(o.creator_id)) ?? null,
     [stats.data, creatorIds],
   );
 
   // toTableRows выбрасывает видео тех, кого нет в переданном списке креаторов, — поэтому
   // отфильтрованный список сам оставляет и «Лучшие видео», и «Новые видео» по площадке.
+  //
+  // Охват «Только наши» ложится тем же слоем, но действует лишь на то, что считается прямо
+  // здесь, из видео: «Лучшие видео», «Новые видео» и столбцы публикаций в карточках. Плитки,
+  // «Динамика», тренд площадок и «Лучшие креаторы» приходят суммами из базы
+  // (creators_overview, daily_views_all), а она про «наше / жёлтое» не знает — разложить эти
+  // суммы по состоянию видео на клиенте нечем, и полоса честно об этом пишет.
   const tableRows = useMemo(
     () => (base.data ? toTableRows(base.data.videos, creators) : []),
     [base.data, creators],
+  );
+  const scopedRows = useMemo(
+    () => tableRows.filter((r) => matchesScope(scope, r.state)),
+    [tableRows, scope],
   );
 
   const range = period.range;
   const topPosts = useMemo(() => {
     if (!range) return [];
-    return toPosts(tableRows.filter((r) => publishedIn(r.publishedAt, range)));
-  }, [tableRows, range]);
+    return toPosts(scopedRows.filter((r) => publishedIn(r.publishedAt, range)));
+  }, [scopedRows, range]);
 
   const totals = nowRows ? sumOverview(nowRows) : null;
   const prevTotals = prevRows ? sumOverview(prevRows) : null;
@@ -149,9 +170,9 @@ function Dashboard() {
   const publishedAt = useMemo(
     () =>
       range
-        ? tableRows.flatMap((r) => (r.publishedAt && publishedIn(r.publishedAt, range) ? [r.publishedAt] : []))
+        ? scopedRows.flatMap((r) => (r.publishedAt && publishedIn(r.publishedAt, range) ? [r.publishedAt] : []))
         : [],
-    [tableRows, range],
+    [scopedRows, range],
   );
 
   // Обход кончился — перечитываем и списки, и сводку за срок.
@@ -174,10 +195,19 @@ function Dashboard() {
         <>
           <PlatformSwitch state={platform} />
           <SyncButton scope={null} pageCreatorIds={pageCreatorIds} onDone={onSynced} />
-          <PeriodChip period={period} />
         </>
       }
     >
+      {/* Пилюля срока переехала из шапки сюда: полоса собирает в одном месте всё, чем
+          ограничена страница, и рядом с ней есть место для подписи о прошлом сроке. */}
+      <PeriodBar
+        period={period}
+        compare={compare.on}
+        onCompare={compare.set}
+        scope={scope}
+        onScope={setScope}
+      />
+
       {/* Ход обновления — только администратору; менеджеру панель не рендерится вовсе.
           Стоит до содержимого страницы: она читается своими запросами и не должна ждать
           ни сводки, ни списка видео. */}
@@ -191,7 +221,7 @@ function Dashboard() {
         <>
           {stats.error ? (
             <PageError error={stats.error} />
-          ) : totals && prevTotals ? (
+          ) : totals && (!compare.on || prevTotals) ? (
             /* Дневной ряд у плиток тот же, что рисует «Динамика»: спарклайн в плитке —
                это её кусок, а не отдельный расчёт. */
             <KpiRow items={totalsToKpis(totals, prevTotals, stats.data?.daily)} collapseKey="kpi" />
@@ -239,7 +269,7 @@ function Dashboard() {
           )}
 
           <VideosTable
-            rows={tableRows}
+            rows={scopedRows}
             title={t("dashboard.newVideos")}
             defaultSort="published"
             collapseKey="new-videos"

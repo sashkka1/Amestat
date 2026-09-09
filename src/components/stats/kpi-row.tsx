@@ -22,12 +22,14 @@ import { cn } from "@/lib/utils";
 // `series` — дневной ряд за тот же срок, из которого сложилось `value`; его нет у счётчиков,
 // которых база по дням не отдаёт (вовлечённость, число видео), и тогда спарклайн не рисуется.
 // `color` — цвет ряда на «Динамике»: один счётчик — один цвет во всём дашборде.
+// `prev` — то же за прошлый срок; null значит «не сравниваем» (переключатель полосы периода),
+// и тогда строки с дельтой у плитки нет вовсе. Ноль на её месте соврал бы про «−100%».
 export type Kpi = {
   key: string;
   label: string;
   icon: LucideIcon;
   value: number;
-  prev: number;
+  prev: number | null;
   series?: number[];
   color?: string;
 };
@@ -63,8 +65,9 @@ export function KpiRow({ items, collapseKey }: { items: Kpi[]; collapseKey?: str
 
 function Tile({ kpi }: { kpi: Kpi }) {
   const Icon = kpi.icon;
-  const change = changeVs(kpi.value, kpi.prev);
-  const Arrow = change.tone === "up" ? ArrowUpRightIcon : change.tone === "down" ? ArrowDownRightIcon : null;
+  const change = kpi.prev === null ? null : changeVs(kpi.value, kpi.prev);
+  const Arrow =
+    change === null ? null : change.tone === "up" ? ArrowUpRightIcon : change.tone === "down" ? ArrowDownRightIcon : null;
   return (
     <div className="flex flex-col gap-1 p-4">
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -77,17 +80,19 @@ function Tile({ kpi }: { kpi: Kpi }) {
       >
         {fmtCompact(kpi.value)}
       </p>
-      <p
-        className={cn(
-          "flex items-center gap-0.5 text-xs tabular-nums",
-          change.tone === "up" && "text-[var(--up)]",
-          change.tone === "down" && "text-[var(--down)]",
-          change.tone === "flat" && "text-muted-foreground",
-        )}
-      >
-        {Arrow && <Arrow className="size-3 shrink-0" />}
-        {change.text}
-      </p>
+      {change && (
+        <p
+          className={cn(
+            "flex items-center gap-0.5 text-xs tabular-nums",
+            change.tone === "up" && "text-[var(--up)]",
+            change.tone === "down" && "text-[var(--down)]",
+            change.tone === "flat" && "text-muted-foreground",
+          )}
+        >
+          {Arrow && <Arrow className="size-3 shrink-0" />}
+          {change.text}
+        </p>
+      )}
       <Sparkline kpi={kpi} />
     </div>
   );
@@ -141,15 +146,19 @@ function dailySeries(daily: DailyViews[], key: "views" | "likes" | "comments" | 
 // `daily` необязателен: у кого дневного ряда нет, у того плитка остаётся без спарклайна.
 // Своего ряда по дням нет ни у вовлечённости, ни у числа видео — база их по дням не отдаёт,
 // и складывать их из чужих рядов значило бы рисовать выдуманное.
-export function totalsToKpis(now: Totals, prev: Totals, daily?: DailyViews[]): Kpi[] {
+//
+// `prev` — null, когда сравнение выключено полосой периода: тогда прошлый срок вообще
+// не читался, и дельту брать неоткуда.
+export function totalsToKpis(now: Totals, prev: Totals | null, daily?: DailyViews[]): Kpi[] {
   const series = (key: "views" | "likes" | "comments" | "shares") =>
     daily && daily.length > 1 ? dailySeries(daily, key) : undefined;
+  const was = (key: keyof Totals) => (prev ? prev[key] : null);
   return [
-    { key: "views", label: tr("metric.views"), icon: EyeIcon, value: now.views, prev: prev.views, series: series("views"), color: "var(--chart-1)" },
-    { key: "eng", label: tr("metric.engagement"), icon: FlameIcon, value: now.engagement, prev: prev.engagement },
-    { key: "likes", label: tr("metric.likes"), icon: HeartIcon, value: now.likes, prev: prev.likes, series: series("likes"), color: "var(--chart-3)" },
-    { key: "comments", label: tr("metric.comments"), icon: MessageCircleIcon, value: now.comments, prev: prev.comments, series: series("comments"), color: "var(--chart-4)" },
-    { key: "shares", label: tr("metric.shares"), icon: Share2Icon, value: now.shares, prev: prev.shares, series: series("shares"), color: "var(--chart-5)" },
-    { key: "videos", label: tr("metric.videos"), icon: VideoIcon, value: now.videos, prev: prev.videos },
+    { key: "views", label: tr("metric.views"), icon: EyeIcon, value: now.views, prev: was("views"), series: series("views"), color: "var(--chart-1)" },
+    { key: "eng", label: tr("metric.engagement"), icon: FlameIcon, value: now.engagement, prev: was("engagement") },
+    { key: "likes", label: tr("metric.likes"), icon: HeartIcon, value: now.likes, prev: was("likes"), series: series("likes"), color: "var(--chart-3)" },
+    { key: "comments", label: tr("metric.comments"), icon: MessageCircleIcon, value: now.comments, prev: was("comments"), series: series("comments"), color: "var(--chart-4)" },
+    { key: "shares", label: tr("metric.shares"), icon: Share2Icon, value: now.shares, prev: was("shares"), series: series("shares"), color: "var(--chart-5)" },
+    { key: "videos", label: tr("metric.videos"), icon: VideoIcon, value: now.videos, prev: was("videos") },
   ];
 }

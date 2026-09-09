@@ -121,6 +121,15 @@ export const en: Dict = {
     badRange: "The start must not be later than the end.",
   },
 
+  periodBar: {
+    compare: "Compare with previous period",
+    comparedWith: "Compared with {from} → {to}",
+    scopeGroup: "Video scope",
+    scopeAll: "All videos",
+    scopeOurs: "Ours only",
+    scopeServerNote: "Tiles, “Dynamics”, the platform trend and “Top creators” are computed in the database and ignore this scope.",
+  },
+
   auth: {
     noProfileTitle: "Access not granted",
     noProfileText:
@@ -335,6 +344,7 @@ export const en: Dict = {
   videosTable: {
     title: "Videos",
     count: "{n} {videos}",
+    countOf: "{shown} of {total} {videos}",
     filterAll: "All",
     filterOurs: "Ours",
     filterWatch: "Watching",
