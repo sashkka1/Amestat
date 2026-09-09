@@ -5,7 +5,7 @@ import { PeriodChip } from "@/components/period-chip";
 import { Button } from "@/components/ui/button";
 import { SCOPES, scopeLabel, type Scope } from "@/lib/dashboard-prefs";
 import { fmtDayYear } from "@/lib/format";
-import { useT } from "@/lib/i18n";
+import { useT, type TKey } from "@/lib/i18n";
 import type { PeriodState } from "@/lib/use-period";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +22,7 @@ export function PeriodBar({
   onCompare,
   scope,
   onScope,
+  scopeNote = "periodBar.scopeServerNote",
   className,
 }: {
   period: PeriodState;
@@ -29,6 +30,9 @@ export function PeriodBar({
   onCompare: (on: boolean) => void;
   scope: Scope;
   onScope: (next: Scope) => void;
+  // Какие именно блоки страницы охвату не подчиняются: на дашборде их четыре, на карточке
+  // креатора — только плитки и «Динамика». Строка та же, меняется лишь перечисление.
+  scopeNote?: TKey;
   className?: string;
 }) {
   const t = useT();
@@ -74,7 +78,7 @@ export function PeriodBar({
         </p>
       )}
       {scope === "ours" && (
-        <p className="text-xs text-muted-foreground">{t("periodBar.scopeServerNote")}</p>
+        <p className="text-xs text-muted-foreground">{t(scopeNote)}</p>
       )}
     </div>
   );

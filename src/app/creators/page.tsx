@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { SearchIcon } from "lucide-react";
 import { AuthGate } from "@/components/auth-gate";
@@ -13,13 +13,16 @@ import { TagPicker } from "@/components/creators/tag-picker";
 import { TagsDialog } from "@/components/creators/tags-dialog";
 import { AddCreatorDialog } from "@/components/creators/add-creator-dialog";
 import { RowSyncButton } from "@/components/creators/row-sync-button";
+import { Delta } from "@/components/stats/delta";
 import { Panel, PanelHead, Empty } from "@/components/stats/panel";
 import { SortHead, nextSort, type SortDir } from "@/components/stats/sort-head";
+import { Sparkline } from "@/components/stats/sparkline";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
+  creatorDailyViews,
   creatorsOverview,
   listCreatorLatest,
   listCreatorTags,
@@ -32,6 +35,7 @@ import { matchesPlatform, platformFilterLabel, usePlatformFilter } from "@/lib/p
 import { useLoader } from "@/lib/use-loader";
 import { useSyncQueue } from "@/lib/use-sync-queue";
 import { useProfile } from "@/lib/profile-context";
+import type { PeriodRange } from "@/lib/period";
 import type { Creator, CreatorLatest, CreatorOverview, CreatorTag, Tag } from "@/lib/types";
 
 type Data = {
@@ -40,10 +44,18 @@ type Data = {
   creatorTags: CreatorTag[];
   latest: CreatorLatest[];
   overview: CreatorOverview[];
+  // Срок, за который сосчитан `overview`: по нему же читаются ряды спарклайнов и прошлая
+  // неделя — иначе колонка сравнивала бы числа за чуть разные сроки.
+  range: PeriodRange;
 };
 
-// «Просмотры за 7 дней» в списке — та же сводка, что на дашборде, но срок здесь один.
+// «за 7 дней» в списке — та же сводка, что на дашборде, но срок здесь один.
 const WEEK_MS = 7 * 86_400_000;
+
+// Спарклайн — это отдельный запрос на каждого креатора. До этого числа они читаются пачкой
+// после списка, дальше столбец остаётся с одним числом и дельтой: сотня RPC ради рисунка
+// в ячейке дороже самой страницы.
+const SPARK_LIMIT = 30;
 
 async function loadData(): Promise<Data> {
   const to = new Date();
@@ -55,7 +67,30 @@ async function loadData(): Promise<Data> {
     listCreatorLatest(),
     creatorsOverview({ from, to }),
   ]);
-  return { creators, tags, creatorTags, latest, overview };
+  return { creators, tags, creatorTags, latest, overview, range: { from, to } };
+}
+
+// Дополнение к столбцу «за 7 дней»: прошлая неделя для дельты и дневные ряды для
+// спарклайнов. Читается ПОСЛЕ таблицы и отдельно от неё — таблица показывается сразу,
+// а рисунки и проценты появляются, когда приедут.
+type Trend = { prev: Map<string, number>; series: Map<string, number[]> };
+
+async function loadTrend(creators: Creator[], range: PeriodRange): Promise<Trend> {
+  const previous: PeriodRange = {
+    from: new Date(range.from.getTime() - WEEK_MS),
+    to: range.from,
+  };
+  const ids = creators.map((c) => c.id);
+  const [prev, series] = await Promise.all([
+    creatorsOverview(previous),
+    ids.length <= SPARK_LIMIT
+      ? Promise.all(ids.map((id) => creatorDailyViews(id, range)))
+      : Promise.resolve(null),
+  ]);
+  return {
+    prev: new Map(prev.map((o) => [o.creator_id, o.views_delta])),
+    series: new Map(series ? ids.map((id, i) => [id, series[i].map((d) => d.views)]) : []),
+  };
 }
 
 export default function CreatorsPage() {
@@ -84,6 +119,30 @@ function CreatorsScreen() {
   // площадки и поиска: иначе просьба переставала бы отслеживаться, стоило спрятать строку.
   const queueIds = useMemo(() => data?.creators.map((c) => c.id) ?? [], [data]);
   const queue = useSyncQueue(queueIds, reload);
+
+  // Тренд столбца «за 7 дней» — вторым заходом, уже после списка: пока он едет, таблица
+  // стоит и работает, просто без спарклайнов и процентов.
+  const [trend, setTrend] = useState<Trend | null>(null);
+  const [trendError, setTrendError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!data) return;
+    let alive = true;
+    loadTrend(data.creators, data.range).then(
+      (d) => {
+        if (!alive) return;
+        setTrendError(null);
+        setTrend(d);
+      },
+      (e: unknown) => {
+        // Молчать нельзя: столбец просто остался бы без половины содержимого, и это
+        // выглядело бы как «данных нет», а не как «не прочиталось».
+        if (alive) setTrendError(e instanceof Error ? e.message : String(e));
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [data]);
 
   // Галочки тегов меняются сразу, база — следом. Перечитали страницу — берём свежее.
   const [localTags, setLocalTags] = useState<CreatorTag[]>([]);
@@ -116,8 +175,11 @@ function CreatorsScreen() {
         followers: latestById.get(c.id)?.followers ?? null,
         videos: overviewById.get(c.id)?.videos_total ?? 0,
         views: overviewById.get(c.id)?.views_delta ?? 0,
+        // null — прошлая неделя ещё не приехала: ноль на её месте соврал бы про «−100%».
+        viewsPrev: trend?.prev.get(c.id) ?? null,
+        series: trend?.series.get(c.id),
       }));
-  }, [data, localTags, platformFilter]);
+  }, [data, localTags, platformFilter, trend]);
 
   function onTagChange(creatorId: string, tagId: string, on: boolean) {
     setLocalTags((prev) => {
@@ -224,6 +286,11 @@ function CreatorsScreen() {
                 {queue.error && (
                   <span className="text-destructive" title={queue.error}>
                     {` · ${t("creators.queueUnreadable")}`}
+                  </span>
+                )}
+                {trendError && (
+                  <span className="text-destructive" title={trendError}>
+                    {` · ${t("creators.trendUnreadable")}`}
                   </span>
                 )}
               </>
@@ -347,7 +414,22 @@ function CreatorsScreen() {
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{fmtNum(r.followers)}</TableCell>
                       <TableCell className="text-right tabular-nums">{fmtNum(r.videos)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{fmtNum(r.views)}</TableCell>
+                      {/* Столбец «за 7 дней»: число, дельта к прошлой семёрке и её ход
+                          по дням — тот же спарклайн, что в плитках дашборда. */}
+                      <TableCell className="text-right tabular-nums">
+                        <div className="flex min-w-24 flex-col items-end gap-0.5">
+                          <span>{fmtNum(r.views)}</span>
+                          {r.viewsPrev !== null && (
+                            <Delta
+                              now={r.views}
+                              prev={r.viewsPrev}
+                              className="text-xs"
+                              title={t("creators.vsPrevWeek")}
+                            />
+                          )}
+                          <Sparkline values={r.series} className="h-6 w-20" />
+                        </div>
+                      </TableCell>
                       <TableCell className="text-right text-muted-foreground">
                         <LocalTime iso={r.creator.last_synced_at} mode="date" />
                       </TableCell>

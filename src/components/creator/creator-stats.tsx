@@ -5,6 +5,8 @@ import { toast } from "sonner";
 import { SigmaIcon, UsersIcon, VideoIcon, type LucideIcon } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { KpiRow, totalsToKpis } from "@/components/stats/kpi-row";
+import { PostsPerDay } from "@/components/stats/overview-cards";
+import { Panel, PanelHead } from "@/components/stats/panel";
 import { PerformanceChart } from "@/components/stats/performance-chart";
 import { TopPosts, type PostItem } from "@/components/stats/top-posts";
 import { VideosTable, type VideoTableRow } from "@/components/stats/videos-table";
@@ -18,6 +20,7 @@ import {
   type Totals,
 } from "@/lib/queries";
 import { setVideoState } from "@/lib/api/videos";
+import { matchesScope, useCompare, useScope } from "@/lib/dashboard-prefs";
 import { videoState, type VideoState } from "@/lib/video-state";
 import { median, sum } from "@/lib/stats";
 import { changeVs, fmtCompact, fmtNum } from "@/lib/format";
@@ -31,9 +34,11 @@ import { cn } from "@/lib/utils";
 type Loaded = {
   key: string;
   range: PeriodRange;
-  prevRange: PeriodRange;
+  // Прошлый срок и его строки — только когда сравнение включено полосой периода. Выключено —
+  // второго вызова video_stats_between нет вовсе, и дельту у плиток брать неоткуда.
+  prevRange: PeriodRange | null;
   rows: VideoStats[];
-  prevRows: VideoStats[];
+  prevRows: VideoStats[] | null;
   // id жёлтых видео (`videos.watch`, миграция v17): video_stats_between эту колонку не
   // отдаёт, поэтому она читается отдельным запросом и живёт рядом со строками.
   watch: Set<string>;
@@ -46,11 +51,11 @@ async function loadStats(
   key: string,
   creatorId: string,
   range: PeriodRange,
-  previous: PeriodRange,
+  previous: PeriodRange | null,
 ): Promise<Loaded> {
   const [rows, prevRows, watch, daily, followers] = await Promise.all([
     videoStatsBetween(creatorId, range),
-    videoStatsBetween(creatorId, previous),
+    previous ? videoStatsBetween(creatorId, previous) : Promise.resolve(null),
     listVideoWatch(creatorId),
     creatorDailyViews(creatorId, range),
     creatorFollowers(creatorId, range),
@@ -113,12 +118,21 @@ export function CreatorStats({
     if (initialVideoId) setSelectedId(initialVideoId);
   }
 
+  // Полоса периода на странице держит эти две настройки; сторы общие с дашбордом
+  // (`lib/dashboard-prefs.ts`), поэтому выбор один на весь сайт.
+  const compare = useCompare();
+  const { scope } = useScope();
+  const comparing = compare.on;
+
   const range = period.range;
-  const previous = period.previous;
-  const key = range && previous ? `${creator.id}|${range.from.getTime()}|${range.to.getTime()}|${refreshKey}` : null;
+  // Сравнение выключено — прошлый срок не читается вовсе.
+  const previous = comparing ? period.previous : null;
+  const key = range
+    ? `${creator.id}|${range.from.getTime()}|${range.to.getTime()}|${comparing ? "cmp" : "solo"}|${refreshKey}`
+    : null;
 
   useEffect(() => {
-    if (key === null || !range || !previous) return;
+    if (key === null || !range) return;
     let alive = true;
     loadStats(key, creator.id, range, previous).then(
       (d) => {
@@ -169,7 +183,8 @@ export function CreatorStats({
   const summary = useMemo(() => {
     if (!loaded) return null;
     const now = totalsOf(loaded.rows, loaded.range);
-    const prev = totalsOf(loaded.prevRows, loaded.prevRange);
+    const prev =
+      loaded.prevRows && loaded.prevRange ? totalsOf(loaded.prevRows, loaded.prevRange) : null;
     // Плитка «С подробностями» — сколько видео помечено `ours`: у них снимаются тексты
     // комментариев. На суммы и медианы пометка не влияет. Рядом — сколько жёлтых: они не
     // наши, но их историю мы всё равно собираем (миграция v17).
@@ -210,9 +225,31 @@ export function CreatorStats({
     }));
   }, [loaded, creator]);
 
+  // Охват «Только наши» ложится на всё, что считается прямо здесь, из видео: «Лучшие видео»,
+  // таблицу и столбцы публикаций. Плитки и «Динамика» приходят суммами из базы
+  // (video_stats_between, creator_daily_views), а она про «наше / жёлтое» не знает — полоса
+  // периода честно об этом пишет.
+  const scopedRows = useMemo(
+    () => tableRows.filter((r) => matchesScope(scope, r.state)),
+    [tableRows, scope],
+  );
+
+  // Сетка дней и даты публикаций для карточки «Публикации по дням» — из уже прочитанного:
+  // дни те же, по которым идёт «Динамика».
+  const overviewDays = useMemo(() => loaded?.daily.map((d) => d.day) ?? [], [loaded]);
+  const publishedAt = useMemo(
+    () =>
+      loaded
+        ? scopedRows.flatMap((r) =>
+            r.publishedAt && publishedIn(r.publishedAt, loaded.range) ? [r.publishedAt] : [],
+          )
+        : [],
+    [scopedRows, loaded],
+  );
+
   const posts: PostItem[] = useMemo(() => {
     if (!loaded) return [];
-    return tableRows
+    return scopedRows
       .filter((r) => publishedIn(r.publishedAt, loaded.range))
       .map((r) => ({
         id: r.id,
@@ -229,7 +266,7 @@ export function CreatorStats({
         handle: r.handle,
         platform: r.platform,
       }));
-  }, [tableRows, loaded]);
+  }, [scopedRows, loaded]);
 
   const selected = loaded?.rows.find((r) => r.video_id === selectedId) ?? null;
   // Состояние строки до нажатия: нужно и переключателю в таблице, и в карточке — по нему
@@ -248,11 +285,16 @@ export function CreatorStats({
 
   return (
     <div className={cn("flex min-w-0 flex-col gap-4", stale && "opacity-60 transition-opacity")}>
-      <KpiRow items={totalsToKpis(summary.now, summary.prev)} />
+      {/* Дневной ряд у плиток тот же, что рисует «Динамика»: спарклайн в плитке — это её
+          кусок, а не отдельный расчёт. Прошлого срока нет (сравнение выключено) — строки
+          с дельтой у плитки нет вовсе. */}
+      <KpiRow items={totalsToKpis(summary.now, summary.prev, loaded.daily)} collapseKey="creator.kpi" />
 
-      <div className="grid min-w-0 gap-4 lg:grid-cols-[1fr_260px]">
-        <PerformanceChart data={loaded.daily} />
-        <div className="flex flex-col gap-4">
+      {/* Три плитки про самого креатора: их считает не сводка по видео, а снимки профиля
+          и медианы за срок, поэтому они стоят своим блоком. */}
+      <Panel collapseKey="creator.extra">
+        <PanelHead title={t("creatorStats.extraTitle")} />
+        <div className="grid grid-cols-1 divide-y divide-border border-t sm:grid-cols-3 sm:divide-x sm:divide-y-0">
           <Tile
             icon={UsersIcon}
             label={t("metric.followers")}
@@ -284,9 +326,22 @@ export function CreatorStats({
             })}
           />
         </div>
-      </div>
+      </Panel>
 
-      <TopPosts posts={posts} title={t("creatorStats.topVideos")} showCreator={false} />
+      {/* `creators` не передаём: режим «По креаторам» на карточке одного креатора
+          сравнивать не с кем. */}
+      <PerformanceChart data={loaded.daily} collapseKey="creator.chart" />
+
+      {/* Из ряда обзора здесь только публикации по дням: площадка одна, поэтому ни тренда
+          по площадкам, ни доли не бывает. */}
+      <PostsPerDay days={overviewDays} publishedAt={publishedAt} collapseKey="creator.posts" />
+
+      <TopPosts
+        posts={posts}
+        title={t("creatorStats.topVideos")}
+        showCreator={false}
+        collapseKey="creator.top-posts"
+      />
 
       {selected && (
         <VideoPanel
@@ -301,8 +356,9 @@ export function CreatorStats({
       )}
 
       <VideosTable
-        rows={tableRows}
+        rows={scopedRows}
         title={t("metric.videos")}
+        collapseKey="creator.videos"
         showCreator={false}
         onSetState={(id, next) => void changeState(id, next, stateOf(id))}
         onRowClick={(id) => setSelectedId((prev) => (prev === id ? null : id))}
@@ -325,8 +381,9 @@ function Tile({
   hint: string;
   title?: string;
 }) {
+  // Рамку и фон даёт панель-хозяйка, плитки внутри неё разделены линиями — как в `KpiRow`.
   return (
-    <div className="rounded-xl border bg-card p-4 shadow-sm">
+    <div className="flex flex-col gap-1 p-4">
       <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <Icon className="size-3.5" />
         {label}

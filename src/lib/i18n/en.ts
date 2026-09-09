@@ -128,6 +128,7 @@ export const en: Dict = {
     scopeAll: "All videos",
     scopeOurs: "Ours only",
     scopeServerNote: "Tiles, “Dynamics”, the platform trend and “Top creators” are computed in the database and ignore this scope.",
+    scopeServerNoteCreator: "Tiles and “Dynamics” are computed in the database and ignore this scope.",
   },
 
   auth: {
@@ -181,12 +182,14 @@ export const en: Dict = {
     listTitle: "List",
     countOf: "{shown} of {total}",
     queueUnreadable: "the update queue cannot be read",
+    trendUnreadable: "the 7-day trend cannot be read",
     searchPlaceholder: "Search by name or @handle",
     emptyFiltered: "Nobody matches the search and filters.",
     emptyNone: "No creators yet.",
     emptyPlatform: "No creators on this platform.",
     allOursHead: "All ours",
-    views7d: "Views over 7 days",
+    views7d: "Last 7 days",
+    vsPrevWeek: "vs the previous 7 days",
     allOursAria: "All videos are ours",
     someOursAria: "Only tagged videos are ours",
     allOursTitle: "Every video of this creator counts as ours",
@@ -269,6 +272,7 @@ export const en: Dict = {
     detailed: "With details",
     collectedWatch: "collected in total: {total} · watching: {watch}",
     topVideos: "Top videos of the range",
+    extraTitle: "More metrics",
   },
 
   videoPanel: {

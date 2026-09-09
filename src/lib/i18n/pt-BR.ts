@@ -128,6 +128,7 @@ export const ptBR: Dict = {
     scopeAll: "Todos os vídeos",
     scopeOurs: "Somente nossos",
     scopeServerNote: "Os cartões, a “Dinâmica”, a tendência das plataformas e os “Melhores criadores” são calculados no banco e não seguem este escopo.",
+    scopeServerNoteCreator: "Os cartões e a “Dinâmica” são calculados no banco e não seguem este escopo.",
   },
 
   auth: {
@@ -181,12 +182,14 @@ export const ptBR: Dict = {
     listTitle: "Lista",
     countOf: "{shown} de {total}",
     queueUnreadable: "a fila de atualização não pode ser lida",
+    trendUnreadable: "a tendência de 7 dias não pode ser lida",
     searchPlaceholder: "Buscar por nome ou @perfil",
     emptyFiltered: "Ninguém corresponde à busca e aos filtros.",
     emptyNone: "Ainda não há criadores.",
     emptyPlatform: "Não há criadores nesta plataforma.",
     allOursHead: "Todos nossos",
-    views7d: "Visualizações em 7 dias",
+    views7d: "Últimos 7 dias",
+    vsPrevWeek: "em relação aos 7 dias anteriores",
     allOursAria: "Todos os vídeos são nossos",
     someOursAria: "Só os vídeos marcados são nossos",
     allOursTitle: "Todos os vídeos deste criador contam como nossos",
@@ -269,6 +272,7 @@ export const ptBR: Dict = {
     detailed: "Com detalhes",
     collectedWatch: "coletados no total: {total} · acompanhando: {watch}",
     topVideos: "Melhores vídeos do período",
+    extraTitle: "Mais indicadores",
   },
 
   videoPanel: {

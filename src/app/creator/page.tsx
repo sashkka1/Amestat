@@ -4,13 +4,14 @@ import { Suspense, useCallback, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { AuthGate } from "@/components/auth-gate";
 import { Page, PageError, PageSkeleton } from "@/components/page";
-import { PeriodChip } from "@/components/period-chip";
+import { PeriodBar } from "@/components/stats/period-bar";
 import { SyncButton } from "@/components/sync-button";
 import { SyncLogPanel } from "@/components/sync-log-panel";
 import { CreatorHeader } from "@/components/creator/creator-header";
 import { CreatorStats } from "@/components/creator/creator-stats";
 import { creatorById, listCreatorManagers, listCreatorTags, listTags } from "@/lib/queries";
 import { listManagers } from "@/lib/api/profiles";
+import { useCompare, useScope } from "@/lib/dashboard-prefs";
 import { useT } from "@/lib/i18n";
 import { useLoader } from "@/lib/use-loader";
 import { usePeriod } from "@/lib/use-period";
@@ -102,17 +103,29 @@ function CreatorView({ id, videoId }: { id: string; videoId: string | null }) {
   // «Только эта страница» на карточке — это один креатор.
   const pageCreatorIds = useMemo(() => [id], [id]);
 
+  // Те же две настройки, что на дашборде, и те же сторы: выбор общий на весь сайт
+  // (`lib/dashboard-prefs.ts`). Сама статистика читает их своим хуком — стор один и тот же,
+  // поэтому полоса и содержимое всегда согласованы.
+  const compare = useCompare();
+  const { scope, setScope } = useScope();
+
   return (
     <Page
       title={name}
       subtitle={creator ? `@${creator.handle}` : undefined}
-      actions={
-        <>
-          <SyncButton scope={id} pageCreatorIds={pageCreatorIds} onDone={refresh} />
-          <PeriodChip period={period} />
-        </>
-      }
+      actions={<SyncButton scope={id} pageCreatorIds={pageCreatorIds} onDone={refresh} />}
     >
+      {/* Полоса периода вместо прежней пилюли в шапке: чем ограничена страница по времени
+          и по видео — в одном месте, как на дашборде. */}
+      <PeriodBar
+        period={period}
+        compare={compare.on}
+        onCompare={compare.set}
+        scope={scope}
+        onScope={setScope}
+        scopeNote="periodBar.scopeServerNoteCreator"
+      />
+
       {/* Ход обновления — только администратору. Обход берётся с учётом scope: тот, что
           касался этого креатора (его собственный или обход всех), как и время «Обновлено». */}
       <SyncLogPanel scope={id} />

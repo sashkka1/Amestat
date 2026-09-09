@@ -2,17 +2,16 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowDownRightIcon, ArrowUpRightIcon } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { PlatformChip } from "@/components/platform";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Delta } from "./delta";
 import { Panel, PanelHead, Empty } from "./panel";
 import { SortHead, nextSort, type SortDir } from "./sort-head";
-import { changePct, fmtNum } from "@/lib/format";
+import { fmtNum } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import type { Creator, CreatorOverview } from "@/lib/types";
-import { cn } from "@/lib/utils";
 
 export type CreatorRow = {
   creator: Creator;
@@ -160,25 +159,5 @@ export function TopCreators({
         </>
       )}
     </Panel>
-  );
-}
-
-// Просмотры против прошлого срока: стрелка и проценты, цвет — как у плиток сводки.
-// Сравнивать не с чем (в прошлом сроке ноль) — «—» серым, без стрелки.
-function Delta({ now, prev }: { now: number; prev: number }) {
-  const change = changePct(now, prev);
-  const Arrow = change.tone === "up" ? ArrowUpRightIcon : change.tone === "down" ? ArrowDownRightIcon : null;
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center justify-end gap-0.5",
-        change.tone === "up" && "text-[var(--up)]",
-        change.tone === "down" && "text-[var(--down)]",
-        change.tone === "flat" && "text-muted-foreground",
-      )}
-    >
-      {Arrow && <Arrow className="size-3 shrink-0" />}
-      {change.text}
-    </span>
   );
 }

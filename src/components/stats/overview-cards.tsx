@@ -56,6 +56,72 @@ function countByDay(days: string[], publishedAt: string[]): Map<string, number> 
   return out;
 }
 
+// Столбцы публикаций по дням: сетка дня → сколько роликов вышло. Считается и здесь, и в
+// одиночной карточке ниже — поэтому расчёт общий.
+function usePostRows(days: string[], publishedAt: string[]) {
+  const rows = useMemo(() => {
+    const counted = countByDay(days, publishedAt);
+    return days.map((day) => ({ day, n: counted.get(day) ?? 0 }));
+  }, [days, publishedAt]);
+  const total = useMemo(() => rows.reduce((s, r) => s + r.n, 0), [rows]);
+  return { rows, total };
+}
+
+// Сам рисунок карточки «Публикации по дням» — без обёртки: в ряду обзора он стоит внутри
+// `Card`, а на карточке креатора — внутри отдельной панели.
+function PostsChart({ rows, total }: { rows: { day: string; n: number }[]; total: number }) {
+  const t = useT();
+  if (total === 0) return <Empty>{t("overview.empty")}</Empty>;
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <BarChart data={rows} margin={{ top: 4, right: 4, left: 4, bottom: 0 }}>
+        <XAxis
+          dataKey="day"
+          tickFormatter={fmtDayAxis}
+          tick={AXIS_TICK}
+          tickLine={false}
+          axisLine={false}
+          minTickGap={24}
+        />
+        <Tooltip
+          cursor={{ fill: "var(--muted)" }}
+          formatter={(v) => [fmtNum(Number(v)), t("overview.postsLegend")]}
+          labelFormatter={(l) => fmtDayAxis(String(l))}
+          contentStyle={TIP_STYLE}
+        />
+        <Bar dataKey="n" fill="var(--chart-1)" radius={[3, 3, 0, 0]} isAnimationActive={false} />
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+// Та же карточка, но отдельной панелью — для страниц, где площадка одна и остальные две
+// карточки обзора не имеют смысла (карточка креатора): тренд по площадкам там нечему
+// сравнивать, а доля всегда 100%.
+export function PostsPerDay({
+  days,
+  publishedAt,
+  collapseKey,
+}: {
+  days: string[];
+  publishedAt: string[];
+  collapseKey?: string;
+}) {
+  const t = useT();
+  const { rows, total } = usePostRows(days, publishedAt);
+  return (
+    <Panel collapseKey={collapseKey}>
+      <PanelHead
+        title={t("overview.posts")}
+        subtitle={t("overview.postsTotal", { n: fmtNum(total) })}
+      />
+      <div className="h-50 border-t p-4">
+        <PostsChart rows={rows} total={total} />
+      </div>
+    </Panel>
+  );
+}
+
 export function OverviewCards({
   days,
   publishedAt,
@@ -76,11 +142,7 @@ export function OverviewCards({
 }) {
   const t = useT();
 
-  const postRows = useMemo(() => {
-    const counted = countByDay(days, publishedAt);
-    return days.map((day) => ({ day, n: counted.get(day) ?? 0 }));
-  }, [days, publishedAt]);
-  const postsTotal = useMemo(() => postRows.reduce((s, r) => s + r.n, 0), [postRows]);
+  const { rows: postRows, total: postsTotal } = usePostRows(days, publishedAt);
 
   const trendRows = useMemo(() => {
     const tk = viewsByDay(tiktok);
@@ -110,29 +172,7 @@ export function OverviewCards({
           total={t("overview.postsTotal", { n: fmtNum(postsTotal) })}
           legend={[{ key: "posts", label: t("overview.postsLegend"), color: "var(--chart-1)" }]}
         >
-          {postsTotal === 0 ? (
-            <Empty>{t("overview.empty")}</Empty>
-          ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={postRows} margin={{ top: 4, right: 4, left: 4, bottom: 0 }}>
-                <XAxis
-                  dataKey="day"
-                  tickFormatter={fmtDayAxis}
-                  tick={AXIS_TICK}
-                  tickLine={false}
-                  axisLine={false}
-                  minTickGap={24}
-                />
-                <Tooltip
-                  cursor={{ fill: "var(--muted)" }}
-                  formatter={(v) => [fmtNum(Number(v)), t("overview.postsLegend")]}
-                  labelFormatter={(l) => fmtDayAxis(String(l))}
-                  contentStyle={TIP_STYLE}
-                />
-                <Bar dataKey="n" fill="var(--chart-1)" radius={[3, 3, 0, 0]} isAnimationActive={false} />
-              </BarChart>
-            </ResponsiveContainer>
-          )}
+          <PostsChart rows={postRows} total={postsTotal} />
         </Card>
 
         <Card

@@ -11,8 +11,8 @@ import {
   VideoIcon,
   type LucideIcon,
 } from "lucide-react";
-import { Area, AreaChart, ResponsiveContainer } from "recharts";
 import { Panel, PanelHead } from "./panel";
+import { Sparkline } from "./sparkline";
 import { changeVs, fmtCompact, fmtNum } from "@/lib/format";
 import { tr, useT } from "@/lib/i18n";
 import type { Totals } from "@/lib/queries";
@@ -93,43 +93,9 @@ function Tile({ kpi }: { kpi: Kpi }) {
           {change.text}
         </p>
       )}
-      <Sparkline kpi={kpi} />
-    </div>
-  );
-}
-
-// Ход счётчика по дням внутри плитки: ни осей, ни сетки, ни подписей — только форма.
-// Ряда нет (счётчик по дням не считается) или в нём меньше двух точек — линии нет вовсе:
-// одна точка формы не рисует, а прямая по ней соврала бы про «ровно».
-function Sparkline({ kpi }: { kpi: Kpi }) {
-  const series = kpi.series;
-  if (!series || series.length < 2) return null;
-  const color = kpi.color ?? "var(--chart-1)";
-  const rows = series.map((v, i) => ({ i, v }));
-  const id = `spark-${kpi.key}`;
-  // mt-auto — линия прижата к низу плитки: у соседей без ряда её нет, и без этого
-  // спарклайны стояли бы на разной высоте.
-  return (
-    <div className="mt-auto h-7 w-full" aria-hidden>
-      <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={rows} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
-          <defs>
-            <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={color} stopOpacity={0.35} />
-              <stop offset="100%" stopColor={color} stopOpacity={0.02} />
-            </linearGradient>
-          </defs>
-          <Area
-            type="monotone"
-            dataKey="v"
-            stroke={color}
-            strokeWidth={1.5}
-            fill={`url(#${id})`}
-            dot={false}
-            isAnimationActive={false}
-          />
-        </AreaChart>
-      </ResponsiveContainer>
+      {/* mt-auto — линия прижата к низу плитки: у соседей без ряда её нет, и без этого
+          спарклайны стояли бы на разной высоте. */}
+      <Sparkline values={kpi.series} color={kpi.color} className="mt-auto" />
     </div>
   );
 }
