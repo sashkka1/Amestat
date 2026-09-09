@@ -26,20 +26,24 @@ import { cn } from "@/lib/utils";
 // (`creators/row-sync-button.tsx`) — иначе два попапа разъедутся в виде. Здесь лежит только
 // внешний вид и склейка слов; какие id, флаги и глубина уходят в базу, решают сами кнопки.
 
-// Группа блоков: короткий заголовок серым и ряд одинаковых по высоте блоков.
+// Группа блоков — ряд одинаковых по высоте блоков. Заголовок группы не рисуется (владелец,
+// 2026-09-09: «без подписей, блоки на одном расстоянии»), но остаётся подписью для читалки.
 export function SyncGroup({
   title,
   cols = 2,
   children,
 }: {
   title: string;
-  cols?: 2 | 3;
+  cols?: 2 | 3 | 4;
   children: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-1">
-      <span className="text-xs leading-tight text-muted-foreground">{title}</span>
-      <div className={cn("grid gap-1.5", cols === 3 ? "grid-cols-3" : "grid-cols-2")}>{children}</div>
+    <div
+      role="group"
+      aria-label={title}
+      className={cn("grid gap-1.5", cols === 4 ? "grid-cols-4" : cols === 3 ? "grid-cols-3" : "grid-cols-2")}
+    >
+      {children}
     </div>
   );
 }
@@ -67,30 +71,23 @@ export function SyncChoiceBlock({
 }) {
   return (
     <span className={cn("flex", className)} title={title}>
+      {/* Пояснение блока не печатается (владелец, 2026-09-09: «без подписей — только названия»),
+          оно живёт во всплывающей подсказке, если нет другой. */}
       <button
         type="button"
         aria-pressed={selected}
         disabled={disabled}
         onClick={onClick}
+        title={title === undefined ? hint : undefined}
         className={cn(
-          "flex w-full flex-col items-start gap-0.5 rounded-lg border px-2 py-1.5 text-left transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50",
+          "flex w-full items-center justify-center gap-1 rounded-md border px-2 py-1.5 text-sm leading-tight font-medium transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50",
           selected
             ? "border-transparent bg-foreground text-background"
             : "border-border bg-background hover:bg-muted dark:bg-input/30 dark:hover:bg-input/50",
         )}
       >
-        <span className="flex items-center gap-1 text-sm leading-tight font-medium">
-          {icon}
-          {label}
-        </span>
-        <span
-          className={cn(
-            "text-xs leading-tight",
-            selected ? "text-background/70" : "text-muted-foreground",
-          )}
-        >
-          {hint}
-        </span>
+        {icon}
+        {label}
       </button>
     </span>
   );
@@ -190,7 +187,7 @@ export function SyncDepthGroup({
 }) {
   const max = todayValue();
   return (
-    <SyncGroup title="Глубина">
+    <SyncGroup title="Глубина" cols={4}>
       <SyncChoiceBlock
         label="Всё"
         hint="весь список видео, долго"
@@ -216,7 +213,7 @@ export function SyncDepthGroup({
         onClick={() => onDepth("range")}
       />
       {depth === "range" && (
-        <div className="col-span-2 flex flex-col gap-1.5">
+        <div className="col-span-4 flex flex-col gap-1.5">
           <div className="grid grid-cols-2 gap-1.5">
             {/* max — сегодня: «по» не позже сегодняшнего дня, и календарь браузера дальше
                 не пускает. Набранную руками будущую дату подрезает resolveSyncRange. */}
@@ -262,7 +259,7 @@ export function SyncMaxVideosGroup({
   onMaxVideos: (next: number | null) => void;
 }) {
   return (
-    <SyncGroup title="Сколько видео">
+    <SyncGroup title="Сколько видео" cols={4}>
       {MAX_VIDEOS_CHOICES.map((n) => (
         <SyncChoiceBlock
           key={n ?? "all"}

@@ -107,7 +107,7 @@ export function RowSyncButton({
           <RefreshCwIcon />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-96 max-w-[calc(100vw-2rem)]">
+      <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)]">
         <SyncDepthGroup depth={depth} onDepth={setDepth} range={range} />
         {/* Сколько видео на креатора — потолок поверх глубины (миграция v19). */}
         <SyncMaxVideosGroup maxVideos={maxVideos} onMaxVideos={setMaxVideos} />

@@ -624,7 +624,7 @@ export function SyncButton({
             Обновить
           </Button>
         </PopoverTrigger>
-        <PopoverContent align="end" className="w-96 max-w-[calc(100vw-2rem)]">
+        <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)]">
           {/* Кого обходить. Блока «Только эта страница» нет, когда страница и так показывает
               всех: выбирать не из чего. */}
           {hasPageRow && (
