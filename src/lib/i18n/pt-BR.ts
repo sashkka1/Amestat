@@ -591,8 +591,6 @@ export const ptBR: Dict = {
 
   syncLog: {
     title: "Andamento da atualização",
-    headError: "não foi possível ler a coleta",
-    headNoRuns: "ainda não houve coletas",
     logError: "Não foi possível ler o log da coleta",
     emptyRunError: "Não foi possível saber qual coleta mostrar.",
     emptyNoRuns: "Ainda não houve coletas — não há log para mostrar.",
@@ -601,10 +599,6 @@ export const ptBR: Dict = {
     showAll: "Mostrar o log inteiro",
     units: "{n} un.",
     left: "restam {amount}",
-    finished: "terminou {time}, coletados {done}",
-    withErrors: ", {n} com erro",
-    progress: "{done} de {total}",
-    since: "desde {time}",
   },
 
   api: {

@@ -6,7 +6,6 @@ import { AuthGate } from "@/components/auth-gate";
 import { Page, PageError, PageSkeleton } from "@/components/page";
 import { PeriodBar } from "@/components/stats/period-bar";
 import { SyncButton } from "@/components/sync-button";
-import { SyncLogPanel } from "@/components/sync-log-panel";
 import { CreatorHeader } from "@/components/creator/creator-header";
 import { CreatorStats } from "@/components/creator/creator-stats";
 import { creatorById, listCreatorManagers, listCreatorTags, listTags } from "@/lib/queries";
@@ -53,7 +52,9 @@ export default function CreatorPage() {
     <AuthGate>
       <Suspense
         fallback={
-          <Page title={t("creator.title")}>
+          // Заголовка нет и здесь: иначе он мигал бы на секунду и исчезал, как только
+          // прочитается адрес.
+          <Page docTitle={t("creator.title")}>
             <PageSkeleton />
           </Page>
         }
@@ -110,9 +111,11 @@ function CreatorView({ id, videoId }: { id: string; videoId: string | null }) {
   const { scope, setScope } = useScope();
 
   return (
+    // Заголовка над страницей нет (владелец, 2026-09-09): имя и хэндл и так стоят в шапке
+    // карточки под аватаром, а вторая такая же строка сверху — повтор. Во вкладке браузера
+    // имя остаётся: его ставит docTitle.
     <Page
-      title={name}
-      subtitle={creator ? `@${creator.handle}` : undefined}
+      docTitle={name}
       actions={<SyncButton scope={id} pageCreatorIds={pageCreatorIds} onDone={refresh} />}
     >
       {/* Полоса периода вместо прежней пилюли в шапке: чем ограничена страница по времени
@@ -124,10 +127,6 @@ function CreatorView({ id, videoId }: { id: string; videoId: string | null }) {
         scope={scope}
         onScope={setScope}
       />
-
-      {/* Ход обновления — только администратору. Обход берётся с учётом scope: тот, что
-          касался этого креатора (его собственный или обход всех), как и время «Обновлено». */}
-      <SyncLogPanel scope={id} />
 
       {error ? (
         <PageError error={error} />

@@ -5,7 +5,6 @@ import { AuthGate } from "@/components/auth-gate";
 import { Page, PageError, PageSkeleton } from "@/components/page";
 import { PlatformSwitch } from "@/components/platform-switch";
 import { SyncButton } from "@/components/sync-button";
-import { SyncLogPanel } from "@/components/sync-log-panel";
 import { KpiRow, totalsToKpis } from "@/components/stats/kpi-row";
 import { OverviewCards } from "@/components/stats/overview-cards";
 import { PeriodBar } from "@/components/stats/period-bar";
@@ -212,11 +211,6 @@ function Dashboard() {
         scope={scope}
         onScope={setScope}
       />
-
-      {/* Ход обновления — только администратору; менеджеру панель не рендерится вовсе.
-          Стоит до содержимого страницы: она читается своими запросами и не должна ждать
-          ни сводки, ни списка видео. */}
-      <SyncLogPanel scope={null} />
 
       {base.error ? (
         <PageError error={base.error} />

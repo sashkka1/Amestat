@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDownIcon } from "lucide-react";
 import { PlatformChip } from "@/components/platform";
 import { Button } from "@/components/ui/button";
 import { fmtTimeSec } from "@/lib/format";
@@ -9,24 +8,23 @@ import { SYNC_LOG_PAGE, latestRun, syncLog } from "@/lib/api/sync";
 import { useT } from "@/lib/i18n";
 import { useIsAdmin } from "@/lib/profile-context";
 import { createClient } from "@/lib/supabase/client";
-import {
-  SYNC_LOG_POLL_MS,
-  runHeadText,
-  splitPlatform,
-  unitsText,
-  useSyncLogOpen,
-} from "@/lib/sync-log";
+import { SYNC_LOG_POLL_MS, splitPlatform, unitsText } from "@/lib/sync-log";
 import type { SyncLogRow, SyncRun } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-// Панель «Ход обновления» — только администратору (владелец, 2026-09-09: «мне нужно больше
+// Лента «Ход обновления» — только администратору (владелец, 2026-09-09: «мне нужно больше
 // лога по обновлению, но только от лица администратора; у менеджеров такого нет»). Строки
 // пишет сборщик в sync_log по мере работы; RLS пускает читать только админа, и у менеджера
-// панель не рендерится вовсе — значит и запросов к таблице он не делает.
+// лента не рендерится вовсе — значит и запросов к таблице он не делает.
 //
-// Роль решается здесь, до всяких состояний: сама панель — отдельный компонент ниже, и у
+// ⚠️ Своей раскладки у ленты нет: она живёт во всплывашке кнопки «Обновить»
+// (`components/sync-button.tsx`, владелец 2026-09-09 — «ход обновления переезжает туда же»).
+// Читает она, пока смонтирована, то есть пока всплывашка открыта: прежняя сворачиваемая
+// панель со своим ключом в localStorage больше не нужна.
+//
+// Роль решается здесь, до всяких состояний: сама лента — отдельный компонент ниже, и у
 // менеджера он не монтируется, а не «монтируется и молчит».
-export function SyncLogPanel({ scope }: { scope: string | null }) {
+export function SyncLogFeed({ scope }: { scope: string | null }) {
   const isAdmin = useIsAdmin();
   if (!isAdmin) return null;
   return <AdminSyncLog scope={scope} />;
@@ -46,11 +44,8 @@ function mergeRows(prev: SyncLogRow[], page: SyncLogRow[]): SyncLogRow[] {
 
 function AdminSyncLog({ scope }: { scope: string | null }) {
   const t = useT();
-  // Свёрнута по умолчанию: панель нужна в момент обновления, а не всё время. Положение
-  // запоминается между заходами (localStorage), как площадка страниц.
-  const { open, toggle } = useSyncLogOpen();
   const [run, setRun] = useState<SyncRun | null>(null);
-  // Первое чтение обхода прошло: до него не пишем ни «обходов ещё не было», ни шапку.
+  // Первое чтение обхода прошло: до него не пишем «обходов ещё не было».
   const [ready, setReady] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const [rows, setRows] = useState<SyncLogRow[]>([]);
@@ -69,13 +64,9 @@ function AdminSyncLog({ scope }: { scope: string | null }) {
   const genRef = useRef(0);
   // Две страницы разом не тянем: событий Realtime приходит по нескольку подряд. Попавший на
   // занятое чтение запрос не теряется, а помечается здесь и повторяется, когда чтение
-  // закончилось: иначе смена обхода посреди чтения оставила бы панель пустой до опроса.
+  // закончилось: иначе смена обхода посреди чтения оставила бы ленту пустой до опроса.
   const busyRef = useRef(false);
   const pendingRef = useRef<boolean | null>(null);
-  const openRef = useRef(false);
-  useEffect(() => {
-    openRef.current = open;
-  }, [open]);
 
   // Какой обход показывать: идущий сейчас, иначе последний завершённый. На карточке креатора
   // — с учётом scope, ровно как выбирает время «Обновлено» кнопка обновления.
@@ -91,7 +82,7 @@ function AdminSyncLog({ scope }: { scope: string | null }) {
     setRun(next);
     const nextId = next?.id ?? null;
     if (nextId === runIdRef.current) return;
-    // Начался новый обход — панель переключается на него сама, журнал прошлого не тащим.
+    // Начался новый обход — лента переключается на него сама, журнал прошлого не тащим.
     runIdRef.current = nextId;
     genRef.current += 1;
     lastIdRef.current = 0;
@@ -169,19 +160,18 @@ function AdminSyncLog({ scope }: { scope: string | null }) {
   const finishedAt = run?.finished_at ?? null;
   const running = run !== null && !run.finished_at;
 
-  // Журнал читается только у раскрытой панели: свёрнутой хватает шапки, а строк у долгого
-  // обхода тысячи. Обход завершился — дочитываем ещё раз: последние строки могли прийти
-  // между предпоследним чтением и концом обхода, а опрос после конца уже не тикает.
+  // Обход завершился — дочитываем ещё раз: последние строки могли прийти между
+  // предпоследним чтением и концом обхода, а опрос после конца уже не тикает.
   useEffect(() => {
-    if (!open || runId === null) return;
+    if (runId === null) return;
     void (async () => {
       await loadLog(false);
     })();
-  }, [open, runId, finishedAt, loadLog]);
+  }, [runId, finishedAt, loadLog]);
 
-  // Новые строки идущего обхода. Фильтр по run_id — чтобы не будить панель чужими вставками.
+  // Новые строки идущего обхода. Фильтр по run_id — чтобы не будить ленту чужими вставками.
   useEffect(() => {
-    if (!open || !running || runId === null) return;
+    if (!running || runId === null) return;
     const supabase = createClient();
     const channel = supabase
       .channel(`sync-log-${runId}`)
@@ -196,15 +186,15 @@ function AdminSyncLog({ scope }: { scope: string | null }) {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [open, running, runId, loadLog]);
+  }, [running, runId, loadLog]);
 
-  // Опрос, пока обход идёт: Realtime днём отваливался, и без опроса панель замирала бы на
-  // середине обхода. Шапку перечитываем всегда, строки — только у раскрытой панели.
+  // Опрос, пока обход идёт: Realtime днём отваливался, и без опроса лента замирала бы на
+  // середине обхода.
   useEffect(() => {
     if (!running) return;
     const timer = setInterval(() => {
       void readRun();
-      if (openRef.current) void loadLog(false);
+      void loadLog(false);
     }, SYNC_LOG_POLL_MS);
     return () => clearInterval(timer);
   }, [running, readRun, loadLog]);
@@ -218,28 +208,19 @@ function AdminSyncLog({ scope }: { scope: string | null }) {
     if (!el) return;
     stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_PX;
   }, []);
-  // Свернули и раскрыли снова — или пошёл новый обход: лента опять ведёт вниз, даже если
-  // в прошлый раз её отлистали вверх.
+  // Пошёл новый обход — лента опять ведёт вниз, даже если её отлистали вверх.
   useEffect(() => {
     stickRef.current = true;
-  }, [open, runId]);
+  }, [runId]);
   useEffect(() => {
     const el = boxRef.current;
     if (!el || !stickRef.current) return;
     el.scrollTop = el.scrollHeight;
-  }, [rows, open]);
+  }, [rows]);
 
   // Кнопка «показать целиком» — у завершённого обхода, журнал которого длиннее страницы.
   // У идущего её нет: там хвост дочитывается сам, по событию и по опросу.
   const canLoadAll = more && run !== null && run.finished_at !== null;
-
-  const head = runError
-    ? t("syncLog.headError")
-    : run
-      ? runHeadText(run)
-      : ready
-        ? t("syncLog.headNoRuns")
-        : t("common.ellipsis");
 
   // Что написать вместо строк журнала. Ошибка чтения обхода важнее пустоты: «обходов ещё не
   // было» при неудачном запросе — прямая неправда.
@@ -254,66 +235,41 @@ function AdminSyncLog({ scope }: { scope: string | null }) {
           : t("syncLog.emptyNothing");
 
   return (
-    <section className="overflow-hidden rounded-xl bg-card text-sm text-card-foreground ring-1 ring-foreground/10">
-      <button
-        type="button"
-        onClick={toggle}
-        aria-expanded={open}
-        className="flex w-full items-center gap-2 px-4 py-2.5 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+    <div className="flex flex-col gap-2">
+      {logError && (
+        <p className="text-xs leading-snug text-destructive" title={logError}>
+          {t("syncLog.logError")}
+        </p>
+      )}
+      <div
+        ref={boxRef}
+        onScroll={onScroll}
+        className="max-h-[320px] overflow-y-auto rounded-lg bg-muted/40 px-3 py-2"
       >
-        <ChevronDownIcon
-          className={cn("size-4 shrink-0 text-muted-foreground transition-transform", !open && "-rotate-90")}
-        />
-        <span className="shrink-0 font-medium">{t("syncLog.title")}</span>
-        <span
-          className={cn(
-            "min-w-0 flex-1 truncate text-right text-xs",
-            runError ? "text-destructive" : "text-muted-foreground",
-          )}
-          title={runError ?? undefined}
-        >
-          {head}
-        </span>
-      </button>
-
-      {open && (
-        <div className="flex flex-col gap-2 px-4 pb-3">
-          {logError && (
-            <p className="text-xs leading-snug text-destructive" title={logError}>
-              {t("syncLog.logError")}
-            </p>
-          )}
-          <div
-            ref={boxRef}
-            onScroll={onScroll}
-            className="max-h-[320px] overflow-y-auto rounded-lg bg-muted/40 px-3 py-2"
+        {rows.length === 0 ? (
+          <p className="text-xs text-muted-foreground">{emptyText}</p>
+        ) : (
+          <ol className="flex flex-col gap-0.5">
+            {rows.map((row) => (
+              <LogLine key={row.id} row={row} />
+            ))}
+          </ol>
+        )}
+      </div>
+      {canLoadAll && (
+        <div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={loadingAll}
+            onClick={() => void loadLog(true)}
           >
-            {rows.length === 0 ? (
-              <p className="text-xs text-muted-foreground">{emptyText}</p>
-            ) : (
-              <ol className="flex flex-col gap-0.5">
-                {rows.map((row) => (
-                  <LogLine key={row.id} row={row} />
-                ))}
-              </ol>
-            )}
-          </div>
-          {canLoadAll && (
-            <div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={loadingAll}
-                onClick={() => void loadLog(true)}
-              >
-                {loadingAll ? t("common.reading") : t("syncLog.showAll")}
-              </Button>
-            </div>
-          )}
+            {loadingAll ? t("common.reading") : t("syncLog.showAll")}
+          </Button>
         </div>
       )}
-    </section>
+    </div>
   );
 }
 

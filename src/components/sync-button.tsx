@@ -6,7 +6,8 @@ import { toast } from "sonner";
 import { LocalTime } from "@/components/local-time";
 import { PlatformIcon } from "@/components/platform";
 import { Button } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { SyncLogFeed } from "@/components/sync-log-feed";
 import { useSyncOptions } from "@/components/sync-options";
 import {
   SyncChoiceBlock,
@@ -30,6 +31,7 @@ import {
   usePlatformFilter,
   type PlatformFilter,
 } from "@/lib/platform-filter";
+import { useIsAdmin } from "@/lib/profile-context";
 import { listCreators } from "@/lib/queries";
 import {
   POLL_MS,
@@ -55,6 +57,10 @@ import { cn } from "@/lib/utils";
 // Столько ждём хоть какого-то ответа. Обычно за это время база сама пишет владельцу в
 // Telegram и ставит notified_at (миграция v8); таймер нужен, если бот не настроен.
 const NO_ANSWER_MS = 3 * 60_000;
+
+// Всплывашка состояния гаснет не сразу: курсор идёт от кнопки к самой всплывашке через
+// зазор, и без задержки она захлопывалась бы по дороге.
+const HINT_HIDE_MS = 300;
 
 // Кого обходить: всех креаторов или только тех, что на этой странице.
 type Target = "all" | "page";
@@ -82,7 +88,11 @@ function newest(runs: SyncRun[]): SyncRun | null {
   }, null);
 }
 
-// Кнопка «Обновить» и время последнего обхода.
+// Кнопка «Обновить». Состояние рядом с ней не висит: время последнего обхода, фаза
+// ожидания и ход показываются во всплывашке по наведению (владелец, 2026-09-09: «текст
+// около кнопки не должен висеть всегда»). Без наведения о ходе говорит сама кнопка —
+// крутящейся иконкой. У администратора в той же всплывашке под статусом — журнал обхода
+// (`components/sync-log-feed.tsx`); у менеджера его нет, RLS его и не отдаёт.
 // scope — чей обход показывать в покое: null — любой последний, иначе id креатора.
 // pageCreatorIds — креаторы этой страницы для блока «Только эта страница»; null значит
 // «на странице все креаторы», и тогда группы «Кого» в попапе нет.
@@ -113,6 +123,11 @@ export function SyncButton({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  // Всплывашка состояния: открыта, пока курсор на кнопке или на ней самой. Клавиатуре и
+  // телефону хватает фокуса — Tab до кнопки открывает её тем же путём.
+  const [hint, setHint] = useState(false);
+  const hideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isAdmin = useIsAdmin();
   // Что снимать: галочки попапа, общие с кнопкой в строке списка.
   const { comments, replies } = useSyncOptions();
   // Третья галочка — «комментарии и у не наших видео». В отличие от двух первых, она не
@@ -391,12 +406,43 @@ export function SyncButton({
     return () => clearTimeout(timer);
   }, [phase, notified, seenAny, askedAt]);
 
+  // Показать и спрятать всплывашку. Прятанье отложено на HINT_HIDE_MS: курсор переходит с
+  // кнопки на саму всплывашку через зазор, и мгновенное закрытие не дало бы до неё дойти.
+  const showHint = useCallback(() => {
+    if (hideRef.current !== null) {
+      clearTimeout(hideRef.current);
+      hideRef.current = null;
+    }
+    setHint(true);
+  }, []);
+  const hideHint = useCallback(() => {
+    if (hideRef.current !== null) clearTimeout(hideRef.current);
+    hideRef.current = setTimeout(() => {
+      hideRef.current = null;
+      setHint(false);
+    }, HINT_HIDE_MS);
+  }, []);
+  // Ушли со страницы, пока таймер тикал, — гасим его: он бы дописал состояние размонтированной
+  // кнопке.
+  useEffect(
+    () => () => {
+      if (hideRef.current !== null) clearTimeout(hideRef.current);
+    },
+    [],
+  );
+
   // Открыли попап: блоки встают в умолчания (площадка — как общий переключатель), список
   // креаторов читается один раз. Не прочитался — при следующем открытии пробуем снова.
   const openChange = useCallback(
     (next: boolean) => {
       setOpen(next);
       if (!next) return;
+      // Попап выбора и всплывашка состояния не висят вместе: открылся выбор — всплывашка ушла.
+      if (hideRef.current !== null) {
+        clearTimeout(hideRef.current);
+        hideRef.current = null;
+      }
+      setHint(false);
       setPlatform(startPlatform);
       // Каждое открытие — с чистого листа: ни «все видео», ни глубина, ни охват, ни потолок
       // видео не наследуются от прошлой просьбы.
@@ -560,150 +606,190 @@ export function SyncButton({
               : phaseText("queued")
           : null;
 
-  return (
-    <div className="flex items-center gap-2">
-      <div className="flex min-w-0 flex-col items-end text-right text-xs leading-tight text-muted-foreground">
-        {/* Чей обход — строкой выше хода: «Обход по расписанию», «Повтор неудавшихся». */}
-        {runTrigger !== null && <span>{runTrigger}</span>}
-        <span>
-          {error ? (
-            <span className="text-destructive" title={error}>
-              {t("sync.stateError")}
-            </span>
-          ) : waitText !== null ? (
-            waitText +
-            platformTail(askedPlatform) +
-            askedDepth +
-            askedMaxVideos +
-            (askedAllVideos ? allVideosText() : "") +
-            (askedVideos === "ours" ? oursOnlyText() : "")
-          ) : run ? (
-            <>
-              {t("sync.updated")} <LocalTime iso={run.finished_at ?? run.started_at} />
-              {/* Повтор через час после неудачи по расписанию — его сборщик заводит сам. */}
-              {run.trigger === "retry" && ` ${t("sync.retryTail")}`}
-              {/* Обход шёл не по всему списку и не по неделе: «· месяц», «· 01.09–09.09».
-                  Свежи только видео этого срока, остальные остались от прошлого раза. */}
-              {depthTail([run])}
-              {/* Обход шёл с потолком видео: «· до 50 видео». Свежи только столько самых
-                  новых видео, остальные остались от прошлого раза (миграция v19). */}
-              {maxVideosTail([run])}
-              {/* Обход шёл без текстов комментариев — счётчики свежие, а тексты остались
-                  от прошлого раза, и знать об этом надо до того, как их станут читать. */}
-              {run.comments === false && ` · ${t("sync.noCommentsTail")}`}
-              {/* Наоборот: обход шёл и по не нашим видео — тексты у них свежие, а это редкость. */}
-              {run.all_videos && allVideosText()}
-              {/* Обход шёл сокращённым охватом: не наши и не жёлтые видео он не смотрел,
-                  и их счётчики остались от прошлого раза (миграция v17). */}
-              {run.videos === "ours" && oursOnlyText()}
-              {run.ok === false && (
-                <span className="text-destructive" title={run.error ?? undefined}>
-                  {` · ${t("sync.errorTail")}`}
-                </span>
-              )}
-            </>
-          ) : (
-            t("sync.never")
-          )}
-        </span>
-      </div>
-      <Popover open={open} onOpenChange={openChange}>
-        <PopoverTrigger asChild>
-          <Button variant="outline" size="sm" disabled={sending || waiting}>
-            <RefreshCwIcon data-icon="inline-start" className={cn(phase === "running" && "animate-spin")} />
-            {t("sync.button")}
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)] gap-3">
-          {/* Кого обходить. Блока «Только эта страница» нет, когда страница и так показывает
-              всех: выбирать не из чего. */}
-          {hasPageRow && (
-            <SyncGroup title={t("sync.groupWho")}>
-              <SyncChoiceBlock
-                label={t("sync.allCreators")}
-                hint={t("sync.allCreatorsHint")}
-                selected={target === "all"}
-                disabled={allBlocked}
-                title={allBlocked && emptyNote ? emptyNote : undefined}
-                onClick={() => setTarget("all")}
-              />
-              <SyncChoiceBlock
-                label={scope !== null ? t("sync.thisCreator") : t("sync.thisPage")}
-                hint={
-                  scope !== null
-                    ? t("sync.thisCreatorHint")
-                    : t("sync.thisPageHint", {
-                        n: pageCount,
-                        creators: t.plural("creators", pageCount),
-                      })
-                }
-                selected={target === "page"}
-                disabled={pageBlocked}
-                title={pageBlocked && emptyNote ? emptyNote : undefined}
-                onClick={() => setTarget("page")}
-              />
-            </SyncGroup>
-          )}
-          {/* Какую площадку обходить. Общий переключатель страниц попап не двигает. На карточке
-              креатора группы нет (владелец, 2026-09-09): площадка у него одна, выбирать нечего. */}
-          {scope === null && (
-          <SyncGroup title={t("sync.groupPlatform")} cols={3}>
-            {PLATFORM_KEYS.map((key) => (
-              <SyncChoiceBlock
-                key={key}
-                label={platformFilterLabel(key)}
-                hint={t(PLATFORM_HINTS[key])}
-                icon={
-                  key === "all" ? undefined : (
-                    <PlatformIcon
-                      platform={key}
-                      className={platform === key ? "text-background/70" : undefined}
-                    />
-                  )
-                }
-                selected={platform === key}
-                onClick={() => setPlatform(key)}
-              />
-            ))}
-          </SyncGroup>
-          )}
-          <SyncDepthAndMax depth={depth} onDepth={setDepth} range={range} maxVideos={maxVideos} onMaxVideos={setMaxVideos} />
-          {/* Охват списка видео: тот же блок, что в попапе строки списка (миграция v17). */}
-          <SyncVideosGroup videos={videos} onVideos={setVideos} />
-          <SyncPickGroup allVideos={allVideos} onAllVideos={setAllVideos} oursOnly={videos === "ours"} />
-          {/* Единственная строка объяснений под блоками: список креаторов не прочитался или
-              у выбранной площадки некого обходить. */}
-          {creatorsError ? (
-            <p className="text-xs leading-snug text-destructive" title={creatorsError}>
-              {t("sync.creatorsListError")}
-            </p>
-          ) : loadingCreators && !ready ? (
-            <p className="text-xs leading-snug text-muted-foreground">{t("sync.readingCreators")}</p>
-          ) : emptyNote ? (
-            <p className="text-xs leading-snug text-muted-foreground">{emptyNote}</p>
-          ) : null}
-          {/* Подтверждение: что именно уйдёт по нажатию — теми же словами, что в хвостах
-              строки состояния. */}
-          <SyncSummary
-            parts={[
-              target === "all"
-                ? t("sync.allCreators")
-                : t("sync.summaryPage", { n: pageCount }),
-              platform === "all" ? null : platformFilterLabel(platform),
-              depthWord(depth, range.range?.from, range.range?.to),
-              maxVideosWord(maxVideos),
-              videosWord(pick.videos),
-              pickWords(pick),
-              pick.allVideos && allVideosWord(),
-            ]}
-          />
-          <SyncLaunchButton
-            disabled={targetBlocked || creatorsError !== null || rangeBlocked}
-            sending={sending}
-            onClick={() => void ask()}
-          />
-        </PopoverContent>
-      </Popover>
+  // Статус для всплывашки: в покое — когда обновляли и чем шёл обход, в ожидании — фаза и
+  // чей это обход. Та же строка, что раньше висела слева от кнопки, слово в слово.
+  const statusNode = (
+    <div className="flex min-w-0 flex-col text-xs leading-tight text-muted-foreground">
+      {/* Чей обход — строкой выше хода: «Обход по расписанию», «Повтор неудавшихся». */}
+      {runTrigger !== null && <span>{runTrigger}</span>}
+      <span>
+        {error ? (
+          <span className="text-destructive" title={error}>
+            {t("sync.stateError")}
+          </span>
+        ) : waitText !== null ? (
+          waitText +
+          platformTail(askedPlatform) +
+          askedDepth +
+          askedMaxVideos +
+          (askedAllVideos ? allVideosText() : "") +
+          (askedVideos === "ours" ? oursOnlyText() : "")
+        ) : run ? (
+          <>
+            {t("sync.updated")} <LocalTime iso={run.finished_at ?? run.started_at} />
+            {/* Повтор через час после неудачи по расписанию — его сборщик заводит сам. */}
+            {run.trigger === "retry" && ` ${t("sync.retryTail")}`}
+            {/* Обход шёл не по всему списку и не по неделе: «· месяц», «· 01.09–09.09».
+                Свежи только видео этого срока, остальные остались от прошлого раза. */}
+            {depthTail([run])}
+            {/* Обход шёл с потолком видео: «· до 50 видео». Свежи только столько самых
+                новых видео, остальные остались от прошлого раза (миграция v19). */}
+            {maxVideosTail([run])}
+            {/* Обход шёл без текстов комментариев — счётчики свежие, а тексты остались
+                от прошлого раза, и знать об этом надо до того, как их станут читать. */}
+            {run.comments === false && ` · ${t("sync.noCommentsTail")}`}
+            {/* Наоборот: обход шёл и по не нашим видео — тексты у них свежие, а это редкость. */}
+            {run.all_videos && allVideosText()}
+            {/* Обход шёл сокращённым охватом: не наши и не жёлтые видео он не смотрел,
+                и их счётчики остались от прошлого раза (миграция v17). */}
+            {run.videos === "ours" && oursOnlyText()}
+            {run.ok === false && (
+              <span className="text-destructive" title={run.error ?? undefined}>
+                {` · ${t("sync.errorTail")}`}
+              </span>
+            )}
+          </>
+        ) : (
+          t("sync.never")
+        )}
+      </span>
     </div>
+  );
+
+  return (
+    // Внешний Popover — всплывашка по наведению: она висит на самой кнопке (PopoverAnchor),
+    // а кнопка остаётся триггером внутреннего попапа выбора. Два корня вложены, а не стоят
+    // рядом, потому что якорь у обоих один и тот же — сама кнопка.
+    <Popover open={hint && !open} onOpenChange={(next) => !next && setHint(false)}>
+      <PopoverAnchor asChild>
+        <span
+          className="inline-flex"
+          onMouseEnter={showHint}
+          onMouseLeave={hideHint}
+          onFocus={showHint}
+          onBlur={hideHint}
+        >
+          <Popover open={open} onOpenChange={openChange}>
+            <PopoverTrigger asChild>
+              <Button variant="outline" size="sm" disabled={sending || waiting}>
+                <RefreshCwIcon data-icon="inline-start" className={cn(phase === "running" && "animate-spin")} />
+                {t("sync.button")}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)] gap-3">
+              {/* Кого обходить. Блока «Только эта страница» нет, когда страница и так показывает
+                  всех: выбирать не из чего. */}
+              {hasPageRow && (
+                <SyncGroup title={t("sync.groupWho")}>
+                  <SyncChoiceBlock
+                    label={t("sync.allCreators")}
+                    hint={t("sync.allCreatorsHint")}
+                    selected={target === "all"}
+                    disabled={allBlocked}
+                    title={allBlocked && emptyNote ? emptyNote : undefined}
+                    onClick={() => setTarget("all")}
+                  />
+                  <SyncChoiceBlock
+                    label={scope !== null ? t("sync.thisCreator") : t("sync.thisPage")}
+                    hint={
+                      scope !== null
+                        ? t("sync.thisCreatorHint")
+                        : t("sync.thisPageHint", {
+                            n: pageCount,
+                            creators: t.plural("creators", pageCount),
+                          })
+                    }
+                    selected={target === "page"}
+                    disabled={pageBlocked}
+                    title={pageBlocked && emptyNote ? emptyNote : undefined}
+                    onClick={() => setTarget("page")}
+                  />
+                </SyncGroup>
+              )}
+              {/* Какую площадку обходить. Общий переключатель страниц попап не двигает. На карточке
+                  креатора группы нет (владелец, 2026-09-09): площадка у него одна, выбирать нечего. */}
+              {scope === null && (
+              <SyncGroup title={t("sync.groupPlatform")} cols={3}>
+                {PLATFORM_KEYS.map((key) => (
+                  <SyncChoiceBlock
+                    key={key}
+                    label={platformFilterLabel(key)}
+                    hint={t(PLATFORM_HINTS[key])}
+                    icon={
+                      key === "all" ? undefined : (
+                        <PlatformIcon
+                          platform={key}
+                          className={platform === key ? "text-background/70" : undefined}
+                        />
+                      )
+                    }
+                    selected={platform === key}
+                    onClick={() => setPlatform(key)}
+                  />
+                ))}
+              </SyncGroup>
+              )}
+              <SyncDepthAndMax depth={depth} onDepth={setDepth} range={range} maxVideos={maxVideos} onMaxVideos={setMaxVideos} />
+              {/* Охват списка видео: тот же блок, что в попапе строки списка (миграция v17). */}
+              <SyncVideosGroup videos={videos} onVideos={setVideos} />
+              <SyncPickGroup allVideos={allVideos} onAllVideos={setAllVideos} oursOnly={videos === "ours"} />
+              {/* Единственная строка объяснений под блоками: список креаторов не прочитался или
+                  у выбранной площадки некого обходить. */}
+              {creatorsError ? (
+                <p className="text-xs leading-snug text-destructive" title={creatorsError}>
+                  {t("sync.creatorsListError")}
+                </p>
+              ) : loadingCreators && !ready ? (
+                <p className="text-xs leading-snug text-muted-foreground">{t("sync.readingCreators")}</p>
+              ) : emptyNote ? (
+                <p className="text-xs leading-snug text-muted-foreground">{emptyNote}</p>
+              ) : null}
+              {/* Подтверждение: что именно уйдёт по нажатию — теми же словами, что в хвостах
+                  строки состояния. */}
+              <SyncSummary
+                parts={[
+                  target === "all"
+                    ? t("sync.allCreators")
+                    : t("sync.summaryPage", { n: pageCount }),
+                  platform === "all" ? null : platformFilterLabel(platform),
+                  depthWord(depth, range.range?.from, range.range?.to),
+                  maxVideosWord(maxVideos),
+                  videosWord(pick.videos),
+                  pickWords(pick),
+                  pick.allVideos && allVideosWord(),
+                ]}
+              />
+              <SyncLaunchButton
+                disabled={targetBlocked || creatorsError !== null || rangeBlocked}
+                sending={sending}
+                onClick={() => void ask()}
+              />
+            </PopoverContent>
+          </Popover>
+        </span>
+      </PopoverAnchor>
+      {/* Сама всплывашка. Фокус ей не отдаём: она открывается по наведению, и утащить
+          каретку со страницы наведение не должно. Пока курсор на ней — она не гаснет. */}
+      <PopoverContent
+        align="end"
+        onOpenAutoFocus={(e) => e.preventDefault()}
+        onMouseEnter={showHint}
+        onMouseLeave={hideHint}
+        className={cn(
+          "max-w-[calc(100vw-2rem)] gap-2",
+          // У администратора внутри ещё и журнал обхода — ему нужна ширина.
+          isAdmin ? "w-[30rem]" : "w-64",
+        )}
+      >
+        {statusNode}
+        {/* Ход обновления — только администратору; менеджеру лента не рендерится вовсе. */}
+        {isAdmin && (
+          <>
+            <p className="text-xs font-medium">{t("syncLog.title")}</p>
+            <SyncLogFeed scope={scope} />
+          </>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }

@@ -591,8 +591,6 @@ export const en: Dict = {
 
   syncLog: {
     title: "Update progress",
-    headError: "could not read the run",
-    headNoRuns: "no runs yet",
     logError: "Could not read the run log",
     emptyRunError: "Could not read which run to show.",
     emptyNoRuns: "No runs yet — there is no log to show.",
@@ -601,10 +599,6 @@ export const en: Dict = {
     showAll: "Show the whole log",
     units: "{n} units",
     left: "{amount} left",
-    finished: "finished {time}, collected {done}",
-    withErrors: ", {n} failed",
-    progress: "{done} of {total}",
-    since: "since {time}",
   },
 
   api: {
