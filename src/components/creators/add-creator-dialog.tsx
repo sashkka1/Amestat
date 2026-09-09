@@ -21,18 +21,18 @@ import { PlatformIcon } from "@/components/platform";
 import { createCreator, setCreatorAvatar } from "@/lib/api/creators";
 import { uploadAvatar } from "@/lib/avatar-upload";
 import { parseHandle } from "@/lib/handle";
+import { useT, type TKey } from "@/lib/i18n";
 import { usePlatformFilter } from "@/lib/platform-filter";
 import type { Platform } from "@/lib/types";
 
-const PLATFORMS: { key: Platform; label: string; placeholder: string }[] = [
-  { key: "tiktok", label: "TikTok", placeholder: "https://www.tiktok.com/@name или @name" },
-  { key: "instagram", label: "Instagram", placeholder: "https://www.instagram.com/name/ или name" },
+// Имена площадок не переводятся, подсказка поля — переводится.
+const PLATFORMS: { key: Platform; label: string; placeholder: TKey }[] = [
+  { key: "tiktok", label: "TikTok", placeholder: "addCreator.tiktokPlaceholder" },
+  { key: "instagram", label: "Instagram", placeholder: "addCreator.instagramPlaceholder" },
 ];
 
-const PARSE_ERROR =
-  "Не понял ссылку или имя. Нужно: https://www.tiktok.com/@name, https://www.instagram.com/name/, @name или name";
-
 export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
+  const t = useT();
   // Площадка при открытии — та, что выбрана переключателем над страницей: стоя на Instagram,
   // владелец нажимал «Добавить» и по привычке заводил тиктокеров, потому что TikTok стоит
   // первым (владелец, 2026-09-08). При «Все» остаётся TikTok.
@@ -71,7 +71,7 @@ export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
     e.preventDefault();
     setError(null);
     if (!parsed) {
-      setError(PARSE_ERROR);
+      setError(t("api.creatorParseError"));
       return;
     }
     setBusy(true);
@@ -100,7 +100,7 @@ export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
       }
 
       // Сборщика отсюда не зовём: данные придут с ближайшим обходом или по кнопке «Обновить».
-      toast.success(`@${created.data.handle} добавлен — данные появятся после ближайшего обхода`);
+      toast.success(t("addCreator.added", { handle: created.data.handle }));
       setOpen(false);
       reset();
       onAdded();
@@ -122,22 +122,19 @@ export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
       <DialogTrigger asChild>
         <Button size="sm">
           <PlusIcon data-icon="inline-start" />
-          Добавить вручную
+          {t("addCreator.button")}
         </Button>
       </DialogTrigger>
       {/* Семь полей не влезают в низкое окно: диалог не выше экрана, внутри прокрутка. */}
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
         <form onSubmit={submit} className="flex flex-col gap-4">
           <DialogHeader>
-            <DialogTitle>Новый креатор</DialogTitle>
-            <DialogDescription>
-              Ссылка на профиль TikTok или Instagram — или имя. Статистика появится после
-              ближайшего обхода.
-            </DialogDescription>
+            <DialogTitle>{t("addCreator.title")}</DialogTitle>
+            <DialogDescription>{t("addCreator.description")}</DialogDescription>
           </DialogHeader>
 
           <div className="flex flex-col gap-1.5">
-            <Label>Площадка</Label>
+            <Label>{t("addCreator.platform")}</Label>
             <div className="flex gap-1.5">
               {PLATFORMS.map((p) => (
                 <Button
@@ -156,36 +153,38 @@ export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="raw">Ссылка или @имя</Label>
+            <Label htmlFor="raw">{t("addCreator.raw")}</Label>
             <Input
               id="raw"
               value={raw}
               onChange={(e) => onRawChange(e.target.value)}
-              placeholder={PLATFORMS.find((p) => p.key === platform)?.placeholder}
+              placeholder={t(
+                PLATFORMS.find((p) => p.key === platform)?.placeholder ?? "addCreator.tiktokPlaceholder",
+              )}
               autoFocus
               required
             />
             {raw.trim() && (
               <p className="text-xs text-muted-foreground">
                 {parsed
-                  ? `Будет @${parsed.handle} · ${parsed.profileUrl}`
-                  : "Не похоже на имя TikTok или Instagram"}
+                  ? t("addCreator.willBe", { handle: parsed.handle, url: parsed.profileUrl })
+                  : t("addCreator.notAHandle")}
               </p>
             )}
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="name">Имя</Label>
+            <Label htmlFor="name">{t("addCreator.name")}</Label>
             <Input
               id="name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder={parsed ? parsed.handle : "как в списке"}
+              placeholder={parsed ? parsed.handle : t("addCreator.namePlaceholder")}
             />
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="description">Описание</Label>
+            <Label htmlFor="description">{t("addCreator.descriptionField")}</Label>
             <Textarea
               id="description"
               value={description}
@@ -203,25 +202,21 @@ export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
             />
             <div className="flex flex-col gap-0.5">
               <Label htmlFor="all-ours" className="cursor-pointer">
-                Все видео этого креатора — наши
+                {t("addCreator.allOurs")}
               </Label>
-              <p className="text-xs text-muted-foreground">
-                Без галочки новые видео в статистику не идут, пока не отметить их «наше» в таблице.
-              </p>
+              <p className="text-xs text-muted-foreground">{t("addCreator.allOursHint")}</p>
             </div>
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="avatar">Картинка</Label>
+            <Label htmlFor="avatar">{t("addCreator.avatar")}</Label>
             <Input
               id="avatar"
               type="file"
               accept="image/jpeg,image/png,image/webp"
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             />
-            <p className="text-xs text-muted-foreground">
-              Необязательно: без неё аватар подтянет сборщик с площадки.
-            </p>
+            <p className="text-xs text-muted-foreground">{t("addCreator.avatarHint")}</p>
           </div>
 
           {error && (
@@ -232,10 +227,10 @@ export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
 
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => setOpen(false)} disabled={busy}>
-              Отмена
+              {t("common.cancel")}
             </Button>
             <Button type="submit" disabled={busy || !parsed}>
-              {busy ? "Добавляем…" : "Добавить"}
+              {busy ? t("addCreator.submitting") : t("addCreator.submit")}
             </Button>
           </DialogFooter>
         </form>

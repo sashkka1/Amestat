@@ -15,6 +15,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { TagPill } from "@/components/tag-pill";
 import { createTag, deleteTag, updateTag } from "@/lib/api/tags";
+import { useT } from "@/lib/i18n";
 import { useProfile } from "@/lib/profile-context";
 import type { Tag } from "@/lib/types";
 
@@ -23,6 +24,7 @@ const DEFAULT_COLOR = "#6B7280";
 // Теги у каждого свои (v2): создаём их на вошедшего, чужих он и не увидит.
 export function TagsDialog({ tags, onChanged }: { tags: Tag[]; onChanged: () => void }) {
   const profile = useProfile();
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState(DEFAULT_COLOR);
@@ -46,16 +48,14 @@ export function TagsDialog({ tags, onChanged }: { tags: Tag[]; onChanged: () => 
       <DialogTrigger asChild>
         <Button variant="outline">
           <TagsIcon data-icon="inline-start" />
-          Теги
+          {t("tags.button")}
         </Button>
       </DialogTrigger>
       {/* Список тегов растёт: диалог не выше экрана, внутри прокрутка. */}
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Теги</DialogTitle>
-          <DialogDescription>
-            Имя и цвет. Теги свои у каждого: чужие не видны. Удаление снимает тег со всех креаторов.
-          </DialogDescription>
+          <DialogTitle>{t("tags.title")}</DialogTitle>
+          <DialogDescription>{t("tags.description")}</DialogDescription>
         </DialogHeader>
 
         <form onSubmit={create} className="flex items-center gap-2">
@@ -64,21 +64,21 @@ export function TagsDialog({ tags, onChanged }: { tags: Tag[]; onChanged: () => 
             value={newColor}
             onChange={(e) => setNewColor(e.target.value)}
             className="size-8 shrink-0 cursor-pointer rounded-md border bg-transparent p-0.5"
-            aria-label="Цвет нового тега"
+            aria-label={t("tags.newColorAria")}
           />
           <Input
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            placeholder="Новый тег"
-            aria-label="Имя нового тега"
+            placeholder={t("tags.newNamePlaceholder")}
+            aria-label={t("tags.newNameAria")}
           />
           <Button type="submit" disabled={pending || !newName.trim()}>
-            Создать
+            {t("common.create")}
           </Button>
         </form>
 
         {tags.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Тегов пока нет.</p>
+          <p className="text-sm text-muted-foreground">{t("tags.empty")}</p>
         ) : (
           <ul className="flex flex-col divide-y">
             {tags.map((t) => (
@@ -92,6 +92,7 @@ export function TagsDialog({ tags, onChanged }: { tags: Tag[]; onChanged: () => 
 }
 
 function TagRow({ tag, onChanged }: { tag: Tag; onChanged: () => void }) {
+  const t = useT();
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(tag.name);
   const [color, setColor] = useState(tag.color);
@@ -134,7 +135,7 @@ function TagRow({ tag, onChanged }: { tag: Tag; onChanged: () => void }) {
         value={color}
         onChange={(e) => (editing ? setColor(e.target.value) : recolor(e.target.value))}
         className="size-7 shrink-0 cursor-pointer rounded-md border bg-transparent p-0.5"
-        aria-label={`Цвет тега ${tag.name}`}
+        aria-label={t("tags.colorAria", { name: tag.name })}
       />
       {editing ? (
         <>
@@ -148,7 +149,7 @@ function TagRow({ tag, onChanged }: { tag: Tag; onChanged: () => void }) {
               if (e.key === "Escape") setEditing(false);
             }}
           />
-          <Button size="icon-sm" variant="ghost" onClick={save} disabled={pending} title="Сохранить">
+          <Button size="icon-sm" variant="ghost" onClick={save} disabled={pending} title={t("common.save")}>
             <CheckIcon />
           </Button>
           <Button
@@ -159,19 +160,19 @@ function TagRow({ tag, onChanged }: { tag: Tag; onChanged: () => void }) {
               setName(tag.name);
               setColor(tag.color);
             }}
-            title="Отмена"
+            title={t("common.cancel")}
           >
             <XIcon />
           </Button>
         </>
       ) : confirmDelete ? (
         <>
-          <span className="flex-1 text-sm">Удалить «{tag.name}»?</span>
+          <span className="flex-1 text-sm">{t("tags.confirmDelete", { name: tag.name })}</span>
           <Button size="sm" variant="destructive" onClick={remove} disabled={pending}>
-            Удалить
+            {t("common.delete")}
           </Button>
           <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(false)}>
-            Нет
+            {t("common.no")}
           </Button>
         </>
       ) : (
@@ -179,14 +180,14 @@ function TagRow({ tag, onChanged }: { tag: Tag; onChanged: () => void }) {
           <span className="flex-1">
             <TagPill name={tag.name} color={color} />
           </span>
-          <Button size="icon-sm" variant="ghost" onClick={() => setEditing(true)} title="Переименовать">
+          <Button size="icon-sm" variant="ghost" onClick={() => setEditing(true)} title={t("common.rename")}>
             <PencilIcon />
           </Button>
           <Button
             size="icon-sm"
             variant="ghost"
             onClick={() => setConfirmDelete(true)}
-            title="Удалить"
+            title={t("common.delete")}
             className="text-destructive"
           >
             <Trash2Icon />

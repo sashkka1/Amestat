@@ -22,9 +22,10 @@ import {
   type VideoRow,
 } from "@/lib/queries";
 import { earliestAdded, publishedIn, toPosts, toTableRows } from "@/lib/video-rows";
+import { useT } from "@/lib/i18n";
 import {
-  PLATFORM_FILTER_LABELS,
   matchesPlatform,
+  platformFilterLabel,
   usePlatformFilter,
 } from "@/lib/platform-filter";
 import { useIsAdmin } from "@/lib/profile-context";
@@ -48,6 +49,7 @@ export default function HomePage() {
 }
 
 function Dashboard() {
+  const t = useT();
   const base = useLoader(loadBase, []);
   const allCreators = useMemo(() => base.data?.creators ?? [], [base.data]);
 
@@ -125,11 +127,11 @@ function Dashboard() {
 
   return (
     <Page
-      title="Дашборд"
+      title={t("nav.dashboard")}
       subtitle={
         platformFilter === "all"
-          ? "Сводка по всем креаторам"
-          : `Сводка по ${PLATFORM_FILTER_LABELS[platformFilter]}`
+          ? t("dashboard.subtitleAll")
+          : t("dashboard.subtitlePlatform", { platform: platformFilterLabel(platformFilter) })
       }
       actions={
         <>
@@ -170,14 +172,16 @@ function Dashboard() {
             <TopCreators
               rows={buildCreatorRows(creators, nowRows)}
               countLabel={
-                platformFilter === "all" ? "Все креаторы" : PLATFORM_FILTER_LABELS[platformFilter]
+                platformFilter === "all"
+                  ? t("topCreators.countAll")
+                  : platformFilterLabel(platformFilter)
               }
             />
           ) : (
             <Skeleton className="h-56 w-full" />
           )}
 
-          <VideosTable rows={tableRows} title="Новые видео" defaultSort="published" />
+          <VideosTable rows={tableRows} title={t("dashboard.newVideos")} defaultSort="published" />
         </>
       )}
     </Page>

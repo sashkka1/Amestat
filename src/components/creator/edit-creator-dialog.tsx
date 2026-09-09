@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { setCreatorAvatar, updateCreator } from "@/lib/api/creators";
 import { uploadAvatar } from "@/lib/avatar-upload";
+import { useT } from "@/lib/i18n";
 import type { Creator } from "@/lib/types";
 
 // Имя, описание и своя картинка. Галочка «все видео наши» и удаление живут в шапке.
@@ -28,6 +29,7 @@ export function EditCreatorDialog({
   creator: Creator;
   onSaved: () => void;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(creator.display_name);
   const [description, setDescription] = useState(creator.description);
@@ -65,7 +67,7 @@ export function EditCreatorDialog({
           if (!set.ok) toast.error(set.error);
         }
       }
-      toast.success("Сохранено");
+      toast.success(t("common.saved"));
       setOpen(false);
       onSaved();
     } finally {
@@ -76,7 +78,12 @@ export function EditCreatorDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogTrigger asChild>
-        <Button variant="ghost" size="icon-sm" title="Редактировать" aria-label="Редактировать">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          title={t("editCreator.button")}
+          aria-label={t("editCreator.button")}
+        >
           <PencilIcon />
         </Button>
       </DialogTrigger>
@@ -84,16 +91,16 @@ export function EditCreatorDialog({
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
         <form onSubmit={save} className="flex flex-col gap-4">
           <DialogHeader>
-            <DialogTitle>Креатор @{creator.handle}</DialogTitle>
-            <DialogDescription>Имя, описание и своя картинка.</DialogDescription>
+            <DialogTitle>{t("editCreator.title", { handle: creator.handle })}</DialogTitle>
+            <DialogDescription>{t("editCreator.description")}</DialogDescription>
           </DialogHeader>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="edit-name">Имя</Label>
+            <Label htmlFor="edit-name">{t("editCreator.name")}</Label>
             <Input id="edit-name" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="edit-description">Описание</Label>
+            <Label htmlFor="edit-description">{t("editCreator.descriptionField")}</Label>
             <Textarea
               id="edit-description"
               value={description}
@@ -102,7 +109,7 @@ export function EditCreatorDialog({
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="edit-avatar">Заменить картинку</Label>
+            <Label htmlFor="edit-avatar">{t("editCreator.avatar")}</Label>
             <Input
               id="edit-avatar"
               type="file"
@@ -110,16 +117,16 @@ export function EditCreatorDialog({
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             />
             {creator.avatar_custom && (
-              <p className="text-xs text-muted-foreground">Сейчас стоит своя картинка.</p>
+              <p className="text-xs text-muted-foreground">{t("editCreator.customAvatar")}</p>
             )}
           </div>
 
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => setOpen(false)} disabled={busy}>
-              Отмена
+              {t("common.cancel")}
             </Button>
             <Button type="submit" disabled={busy}>
-              {busy ? "Сохраняем…" : "Сохранить"}
+              {busy ? t("common.saving") : t("common.save")}
             </Button>
           </DialogFooter>
         </form>

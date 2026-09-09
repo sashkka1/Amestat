@@ -7,6 +7,7 @@ import { PlatformIcon } from "@/components/platform";
 import { Input } from "@/components/ui/input";
 import { Panel, PanelHead, Empty } from "./panel";
 import { fmtCompact, fmtDayAxis, fmtNum } from "@/lib/format";
+import { useT } from "@/lib/i18n";
 import type { Platform } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -27,7 +28,7 @@ type Sort = "views" | "new";
 // «Лучшие видео»: полоса обложек с прокруткой вбок.
 export function TopPosts({
   posts,
-  title = "Лучшие видео",
+  title,
   limit = 10,
   showCreator = true,
 }: {
@@ -36,6 +37,7 @@ export function TopPosts({
   limit?: number;
   showCreator?: boolean;
 }) {
+  const t = useT();
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<Sort>("views");
 
@@ -53,29 +55,29 @@ export function TopPosts({
 
   return (
     <Panel>
-      <PanelHead title={title}>
+      <PanelHead title={title ?? t("topPosts.title")}>
         <div className="relative w-44">
           <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Поиск по подписи"
+            placeholder={t("topPosts.searchPlaceholder")}
             className="h-8 pl-8 text-xs"
-            aria-label="Поиск по подписи"
+            aria-label={t("topPosts.searchPlaceholder")}
           />
         </div>
         <div className="flex items-center gap-0.5 rounded-lg border p-0.5 text-xs">
           <SortButton active={sort === "views"} onClick={() => setSort("views")}>
-            Больше просмотров
+            {t("topPosts.sortViews")}
           </SortButton>
           <SortButton active={sort === "new"} onClick={() => setSort("new")}>
-            Новые
+            {t("topPosts.sortNew")}
           </SortButton>
         </div>
       </PanelHead>
 
       {shown.length === 0 ? (
-        <Empty>Видео за этот срок нет.</Empty>
+        <Empty>{t("topPosts.empty")}</Empty>
       ) : (
         <ul className="flex gap-3 overflow-x-auto px-4 pb-4">
           {shown.map((p, i) => (
@@ -94,7 +96,7 @@ export function TopPosts({
                   </span>
                 </div>
                 <p className="mt-2 line-clamp-2 text-xs group-hover:underline" title={p.caption}>
-                  {p.caption || "без подписи"}
+                  {p.caption || t("common.noCaption")}
                 </p>
               </a>
               <div className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
@@ -102,7 +104,7 @@ export function TopPosts({
                 <span className="truncate">@{p.handle}</span>
               </div>
               <p className="text-[11px] text-muted-foreground">
-                {p.publishedAt ? fmtDayAxis(p.publishedAt) : "дата неизвестна"}
+                {p.publishedAt ? fmtDayAxis(p.publishedAt) : t("topPosts.noDate")}
                 {showCreator && p.creatorName ? ` · ${p.creatorName}` : ""}
               </p>
             </li>

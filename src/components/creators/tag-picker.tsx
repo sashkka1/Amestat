@@ -8,6 +8,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { TagPill } from "@/components/tag-pill";
 import { setCreatorTag } from "@/lib/api/creators";
+import { useT } from "@/lib/i18n";
 import type { Tag } from "@/lib/types";
 
 // Поповер с галочками: какие теги висят на креаторе.
@@ -22,6 +23,7 @@ export function TagPicker({
   selected: Set<string>;
   onChange?: (tagId: string, on: boolean) => void;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [, startTransition] = useTransition();
 
@@ -39,13 +41,13 @@ export function TagPicker({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="icon-sm" title="Теги" aria-label="Теги">
+        <Button variant="ghost" size="icon-sm" title={t("tags.button")} aria-label={t("tags.button")}>
           <TagIcon />
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-56 p-2">
         {tags.length === 0 ? (
-          <p className="p-2 text-sm text-muted-foreground">Тегов пока нет — заведите их кнопкой «Теги».</p>
+          <p className="p-2 text-sm text-muted-foreground">{t("tags.pickerEmpty")}</p>
         ) : (
           <ul className="flex flex-col gap-1">
             {tags.map((t) => {

@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/client";
+import { tr } from "@/lib/i18n";
 import type { Tag } from "@/lib/types";
 import { fail, UNIQUE_VIOLATION, type ActionResult } from "./result";
 
@@ -12,9 +13,9 @@ function normalizeColor(color: string): string | null {
 // Теги у каждого свои (v2): owner_id обязателен и совпадает с вошедшим — RLS иначе откажет.
 export async function createTag(name: string, color: string, ownerId: string): Promise<ActionResult<Tag>> {
   const n = name.trim();
-  if (!n) return fail("Имя тега пустое");
+  if (!n) return fail(tr("api.tagEmptyName"));
   const c = normalizeColor(color);
-  if (!c) return fail("Цвет должен быть вида #RRGGBB");
+  if (!c) return fail(tr("api.tagBadColor"));
 
   const { data, error } = await createClient()
     .from("tags")
@@ -22,8 +23,8 @@ export async function createTag(name: string, color: string, ownerId: string): P
     .select()
     .single();
   if (error) {
-    if (error.code === UNIQUE_VIOLATION) return fail("Тег с таким именем уже есть");
-    return fail(`Не удалось создать тег: ${error.message}`);
+    if (error.code === UNIQUE_VIOLATION) return fail(tr("api.tagExists"));
+    return fail(tr("api.tagCreateFailed", { message: error.message }));
   }
   return { ok: true, data };
 }
@@ -35,24 +36,24 @@ export async function updateTag(
   const update: { name?: string; color?: string } = {};
   if (patch.name !== undefined) {
     const n = patch.name.trim();
-    if (!n) return fail("Имя тега пустое");
+    if (!n) return fail(tr("api.tagEmptyName"));
     update.name = n;
   }
   if (patch.color !== undefined) {
     const c = normalizeColor(patch.color);
-    if (!c) return fail("Цвет должен быть вида #RRGGBB");
+    if (!c) return fail(tr("api.tagBadColor"));
     update.color = c;
   }
   const { error } = await createClient().from("tags").update(update).eq("id", id);
   if (error) {
-    if (error.code === UNIQUE_VIOLATION) return fail("Тег с таким именем уже есть");
-    return fail(`Не удалось сохранить тег: ${error.message}`);
+    if (error.code === UNIQUE_VIOLATION) return fail(tr("api.tagExists"));
+    return fail(tr("api.tagSaveFailed", { message: error.message }));
   }
   return { ok: true, data: undefined };
 }
 
 export async function deleteTag(id: string): Promise<ActionResult> {
   const { error } = await createClient().from("tags").delete().eq("id", id);
-  if (error) return fail(`Не удалось удалить тег: ${error.message}`);
+  if (error) return fail(tr("api.tagDeleteFailed", { message: error.message }));
   return { ok: true, data: undefined };
 }

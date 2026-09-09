@@ -42,6 +42,7 @@ import {
 } from "@/lib/api/profiles";
 import { listCreatorManagers, listCreators } from "@/lib/queries";
 import { fmtNum } from "@/lib/format";
+import { useT } from "@/lib/i18n";
 import { matchesPlatform, usePlatformFilter } from "@/lib/platform-filter";
 import { useLoader } from "@/lib/use-loader";
 import type { Creator, Profile } from "@/lib/types";
@@ -64,9 +65,16 @@ async function loadData(id: string): Promise<Data> {
 }
 
 export default function ManagerPage() {
+  const t = useT();
   return (
     <AuthGate role="admin">
-      <Suspense fallback={<Page title="Менеджер"><PageSkeleton blocks={1} /></Page>}>
+      <Suspense
+        fallback={
+          <Page title={t("manager.title")}>
+            <PageSkeleton blocks={1} />
+          </Page>
+        }
+      >
         <ManagerRoute />
       </Suspense>
     </AuthGate>
@@ -74,12 +82,13 @@ export default function ManagerPage() {
 }
 
 function ManagerRoute() {
+  const t = useT();
   const params = useSearchParams();
   const id = params.get("id") ?? "";
   if (!UUID_RE.test(id)) {
     return (
-      <Page title="Менеджер">
-        <p className="text-sm text-muted-foreground">В адресе нет id менеджера.</p>
+      <Page title={t("manager.title")}>
+        <p className="text-sm text-muted-foreground">{t("manager.noId")}</p>
       </Page>
     );
   }
@@ -87,6 +96,7 @@ function ManagerRoute() {
 }
 
 function ManagerView({ id }: { id: string }) {
+  const t = useT();
   const router = useRouter();
   const { data, error, loading, reload } = useLoader(() => loadData(id), [id]);
   const manager = data?.manager ?? null;
@@ -131,7 +141,7 @@ function ManagerView({ id }: { id: string }) {
       toast.error(res.error);
       return;
     }
-    toast.success("Имя сохранено");
+    toast.success(t("manager.nameSaved"));
     setName(null);
     reload();
   }
@@ -163,13 +173,13 @@ function ManagerView({ id }: { id: string }) {
       toast.error(res.error);
       return;
     }
-    toast.success("Менеджер удалён");
+    toast.success(t("manager.deleted"));
     router.replace("/managers/");
   }
 
   return (
     <Page
-      title={manager ? profileName(manager) : "Менеджер"}
+      title={manager ? profileName(manager) : t("manager.title")}
       subtitle={manager ? manager.login : undefined}
       actions={
         manager ? (
@@ -178,7 +188,7 @@ function ManagerView({ id }: { id: string }) {
             <PasswordDialog manager={manager} />
             <Button variant="destructive" size="sm" onClick={() => setConfirmDelete(true)}>
               <Trash2Icon data-icon="inline-start" />
-              Удалить менеджера
+              {t("manager.deleteButton")}
             </Button>
           </>
         ) : undefined
@@ -189,21 +199,20 @@ function ManagerView({ id }: { id: string }) {
       ) : loading && !data ? (
         <PageSkeleton blocks={1} />
       ) : !manager ? (
-        <p className="text-sm text-muted-foreground">Такого менеджера нет — возможно, он удалён.</p>
+        <p className="text-sm text-muted-foreground">{t("manager.notFound")}</p>
       ) : (
         <>
           {confirmDelete && (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-destructive/40 bg-destructive/5 p-3">
               <p className="text-sm">
-                Удалить менеджера {profileName(manager)}? Он потеряет доступ к сайту, привязки
-                к креаторам уйдут. Сами креаторы останутся.
+                {t("manager.confirmDelete", { name: profileName(manager) })}
               </p>
               <div className="flex gap-2">
                 <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(false)} disabled={deleting}>
-                  Нет
+                  {t("common.no")}
                 </Button>
                 <Button variant="destructive" size="sm" onClick={remove} disabled={deleting}>
-                  {deleting ? "Удаляем…" : "Да, удалить"}
+                  {deleting ? t("common.deleting") : t("common.yesDelete")}
                 </Button>
               </div>
             </div>
@@ -212,7 +221,7 @@ function ManagerView({ id }: { id: string }) {
           <Panel className="p-4">
             <div className="flex flex-wrap items-end gap-3">
               <div className="flex min-w-[240px] flex-1 flex-col gap-1.5">
-                <Label htmlFor="manager-name">Имя</Label>
+                <Label htmlFor="manager-name">{t("manager.nameLabel")}</Label>
                 <Input
                   id="manager-name"
                   value={displayName}
@@ -225,27 +234,30 @@ function ManagerView({ id }: { id: string }) {
                 onClick={saveName}
                 disabled={savingName || name === null || name === manager.display_name}
               >
-                {savingName ? "Сохраняем…" : "Сохранить"}
+                {savingName ? t("common.saving") : t("common.save")}
               </Button>
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
-              Логин <span className="font-mono">{manager.login}</span> менять нельзя: по нему менеджер
-              входит. Зарегистрирован <LocalTime iso={manager.created_at} mode="date" />.
+              {t("manager.loginPrefix")} <span className="font-mono">{manager.login}</span>{" "}
+              {t("manager.loginSuffix")} <LocalTime iso={manager.created_at} mode="date" />.
             </p>
           </Panel>
 
           <Panel>
-            <PanelHead title="Креаторы менеджера" subtitle={`${fmtNum(assignedList.length)} привязано`}>
+            <PanelHead
+              title={t("manager.creatorsPanel")}
+              subtitle={t("manager.attached", { n: fmtNum(assignedList.length) })}
+            >
               <Select value={pick} onValueChange={(v) => void attach(v)}>
                 <SelectTrigger size="sm" className="w-56">
-                  <SelectValue placeholder="Привязать креатора" />
+                  <SelectValue placeholder={t("manager.attachPlaceholder")} />
                 </SelectTrigger>
                 <SelectContent>
                   {free.length === 0 ? (
                     <SelectItem value="none" disabled>
                       {freeAll.length === 0
-                        ? "Все креаторы уже привязаны"
-                        : "На этой площадке свободных нет"}
+                        ? t("manager.allAttached")
+                        : t("manager.noFreeOnPlatform")}
                     </SelectItem>
                   ) : (
                     free.map((c) => (
@@ -261,15 +273,15 @@ function ManagerView({ id }: { id: string }) {
             {assignedList.length === 0 ? (
               <Empty>
                 {assignedAll.length === 0
-                  ? "Креаторов пока нет — привяжите их выбором справа сверху."
-                  : "На этой площадке привязанных нет."}
+                  ? t("manager.emptyNone")
+                  : t("manager.emptyPlatform")}
               </Empty>
             ) : (
               <Table className="text-[13px]">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="text-muted-foreground">Креатор</TableHead>
-                    <TableHead className="text-muted-foreground">Площадка</TableHead>
+                    <TableHead className="text-muted-foreground">{t("table.creator")}</TableHead>
+                    <TableHead className="text-muted-foreground">{t("table.platform")}</TableHead>
                     <TableHead className="w-10" />
                   </TableRow>
                 </TableHeader>
@@ -297,7 +309,7 @@ function ManagerView({ id }: { id: string }) {
                             className="text-destructive"
                             onClick={() => void detach(c.id)}
                           >
-                            Отвязать
+                            {t("manager.detach")}
                           </Button>
                         </TableCell>
                       </TableRow>
@@ -315,6 +327,7 @@ function ManagerView({ id }: { id: string }) {
 
 // Пароль ставит база функцией admin_set_password: старого админ не видит.
 function PasswordDialog({ manager }: { manager: Profile }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [first, setFirst] = useState("");
   const [second, setSecond] = useState("");
@@ -334,7 +347,7 @@ function PasswordDialog({ manager }: { manager: Profile }) {
     e.preventDefault();
     setError(null);
     if (first !== second) {
-      setError("Пароли не совпадают");
+      setError(t("common.passwordsDiffer"));
       return;
     }
     setBusy(true);
@@ -344,7 +357,7 @@ function PasswordDialog({ manager }: { manager: Profile }) {
       setError(res.error);
       return;
     }
-    toast.success("Пароль изменён");
+    toast.success(t("manager.passwordChanged"));
     setOpen(false);
   }
 
@@ -353,19 +366,17 @@ function PasswordDialog({ manager }: { manager: Profile }) {
       <DialogTrigger asChild>
         <Button variant="outline" size="sm">
           <KeyRoundIcon data-icon="inline-start" />
-          Сменить пароль
+          {t("manager.passwordButton")}
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-sm">
         <form onSubmit={submit} className="flex flex-col gap-4">
           <DialogHeader>
-            <DialogTitle>Новый пароль для {profileName(manager)}</DialogTitle>
-            <DialogDescription>
-              Старый пароль не показывается и не нужен. Передайте новый менеджеру сами.
-            </DialogDescription>
+            <DialogTitle>{t("manager.passwordTitle", { name: profileName(manager) })}</DialogTitle>
+            <DialogDescription>{t("manager.passwordDescription")}</DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="pwd1">Пароль</Label>
+            <Label htmlFor="pwd1">{t("manager.passwordFirst")}</Label>
             <Input
               id="pwd1"
               type="password"
@@ -377,7 +388,7 @@ function PasswordDialog({ manager }: { manager: Profile }) {
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="pwd2">Ещё раз</Label>
+            <Label htmlFor="pwd2">{t("manager.passwordSecond")}</Label>
             <Input
               id="pwd2"
               type="password"
@@ -395,10 +406,10 @@ function PasswordDialog({ manager }: { manager: Profile }) {
           )}
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => setOpen(false)} disabled={busy}>
-              Отмена
+              {t("common.cancel")}
             </Button>
             <Button type="submit" disabled={busy}>
-              {busy ? "Ставим…" : "Сменить"}
+              {busy ? t("manager.passwordSubmitting") : t("manager.passwordSubmit")}
             </Button>
           </DialogFooter>
         </form>

@@ -10,7 +10,7 @@ export const ProfileProvider = ProfileContext.Provider;
 
 export function useProfile(): Profile {
   const p = useContext(ProfileContext);
-  if (!p) throw new Error("useProfile вне AuthGate");
+  if (!p) throw new Error("useProfile called outside AuthGate");
   return p;
 }
 

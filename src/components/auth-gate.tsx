@@ -5,7 +5,9 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { createClient } from "@/lib/supabase/client";
+import { LangSwitch } from "@/components/lang-switch";
 import { logout } from "@/lib/api/auth";
+import { useT } from "@/lib/i18n";
 import { myProfile } from "@/lib/api/profiles";
 import { ProfileProvider } from "@/lib/profile-context";
 import type { Profile, Role } from "@/lib/types";
@@ -22,6 +24,7 @@ type State =
 // profiles нет — «Доступ не выдан»; роль не подходит странице — «Только для администратора».
 export function AuthGate({ children, role }: { children: React.ReactNode; role?: Role }) {
   const router = useRouter();
+  const t = useT();
   const [state, setState] = useState<State>({ kind: "checking" });
 
   useEffect(() => {
@@ -67,24 +70,21 @@ export function AuthGate({ children, role }: { children: React.ReactNode; role?:
     case "ok":
       return <ProfileProvider value={state.profile}>{children}</ProfileProvider>;
     case "no-profile":
-      return (
-        <Blocked title="Доступ не выдан">
-          Вход прошёл, но для этого пользователя нет роли. Попросите администратора выдать доступ.
-        </Blocked>
-      );
+      return <Blocked title={t("auth.noProfileTitle")}>{t("auth.noProfileText")}</Blocked>;
     case "forbidden":
       return (
-        <Blocked title="Только для администратора" home>
-          Эта страница менеджеру недоступна.
+        <Blocked title={t("auth.forbiddenTitle")} home>
+          {t("auth.forbiddenText")}
         </Blocked>
       );
     case "error":
-      return <Blocked title="Не удалось проверить доступ">{state.message}</Blocked>;
+      return <Blocked title={t("auth.errorTitle")}>{state.message}</Blocked>;
   }
 }
 
 function Blocked({ title, children, home }: { title: string; children: React.ReactNode; home?: boolean }) {
   const router = useRouter();
+  const t = useT();
   const [busy, setBusy] = useState(false);
   async function onLogout() {
     setBusy(true);
@@ -96,18 +96,19 @@ function Blocked({ title, children, home }: { title: string; children: React.Rea
     }
   }
   return (
-    <main className="flex flex-1 items-center justify-center p-4">
+    <main className="relative flex flex-1 items-center justify-center p-4">
+      <LangSwitch className="absolute right-4 top-4" />
       <div className="w-full max-w-sm rounded-xl border bg-card p-6 text-center shadow-sm">
         <h1 className="mb-2 text-xl font-semibold tracking-tight">{title}</h1>
         <p className="mb-5 text-sm text-muted-foreground">{children}</p>
         <div className="flex justify-center gap-2">
           {home && (
             <Button variant="outline" onClick={() => router.replace("/")}>
-              На главную
+              {t("common.home")}
             </Button>
           )}
           <Button variant={home ? "ghost" : "default"} onClick={onLogout} disabled={busy}>
-            Выйти
+            {t("common.logout")}
           </Button>
         </div>
       </div>

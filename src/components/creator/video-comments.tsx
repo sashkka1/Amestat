@@ -15,6 +15,7 @@ import {
 } from "@/lib/queries";
 import { fmtNum } from "@/lib/format";
 import { profileUrl } from "@/lib/handle";
+import { useT } from "@/lib/i18n";
 import type { Platform, VideoComment } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -71,6 +72,7 @@ export function VideoComments({
   // Меняется после обхода — список перечитывается.
   refreshKey: number;
 }) {
+  const t = useT();
   const [sort, setSort] = useState<CommentSort>("likes");
   const [search, setSearch] = useState("");
   const [loaded, setLoaded] = useState<Loaded | null>(null);
@@ -125,16 +127,18 @@ export function VideoComments({
     <div>
       <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
         <div className="min-w-0">
-          <h3 className="text-xs font-medium text-muted-foreground">Комментарии · {fmtNum(total)}</h3>
+          <h3 className="text-xs font-medium text-muted-foreground">
+            {t("comments.head")} · {fmtNum(total)}
+          </h3>
           <p className="text-xs text-muted-foreground">
             {!current ? (
-              "…"
+              t("common.ellipsis")
             ) : current.syncedAt ? (
               <>
-                сняты <LocalTime iso={current.syncedAt} />
+                {t("comments.takenAt")} <LocalTime iso={current.syncedAt} />
               </>
             ) : (
-              "тексты ещё не снимались"
+              t("comments.neverTaken")
             )}
           </p>
         </div>
@@ -144,24 +148,24 @@ export function VideoComments({
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Поиск по тексту и автору"
+              placeholder={t("comments.searchPlaceholder")}
               className="h-8 pl-8 text-xs"
-              aria-label="Поиск по комментариям"
+              aria-label={t("comments.searchAria")}
             />
           </div>
           <div className="flex items-center gap-0.5 rounded-lg border p-0.5 text-xs">
             <SortButton active={sort === "likes"} onClick={() => setSort("likes")}>
-              Популярные
+              {t("comments.sortPopular")}
             </SortButton>
             <SortButton active={sort === "newest"} onClick={() => setSort("newest")}>
-              Новые
+              {t("comments.sortNew")}
             </SortButton>
           </div>
         </div>
       </div>
 
       {error ? (
-        <p className="text-xs text-destructive">Не удалось прочитать комментарии: {error}</p>
+        <p className="text-xs text-destructive">{t("comments.readError", { error })}</p>
       ) : !current ? (
         <Skeleton className="h-24 w-full" />
       ) : current.rows.length === 0 ? (
@@ -170,16 +174,11 @@ export function VideoComments({
               выглядела бы поломкой, а это правило. Сняли по особой просьбе — строки есть,
               и сюда мы уже не попадаем. */}
           {!ours && current.count === 0 && !current.syncedAt ? (
-            <p className="text-sm text-muted-foreground">
-              У не наших видео тексты комментариев не снимаются. Нужны — в матрице обновления
-              поставь «Комментарии и у не наших видео».
-            </p>
+            <p className="text-sm text-muted-foreground">{t("comments.notOursNote")}</p>
           ) : (
             <>
-              <p className="text-sm text-muted-foreground">Комментариев в базе нет</p>
-              <p className="text-xs text-muted-foreground">
-                тексты снимаются для видео за последние 7 дней
-              </p>
+              <p className="text-sm text-muted-foreground">{t("comments.emptyTitle")}</p>
+              <p className="text-xs text-muted-foreground">{t("comments.emptyHint")}</p>
             </>
           )}
         </div>
@@ -224,6 +223,7 @@ function CommentList({
 }) {
   // Какие ветки развёрнуты и что в них загружено. Свёрнутая ветка помнит ответы —
   // второй раз в базу не ходим.
+  const t = useT();
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [branches, setBranches] = useState<Record<string, Branch>>({});
 
@@ -260,7 +260,11 @@ function CommentList({
   }
 
   if (shown.length === 0) {
-    return <p className="px-4 py-6 text-center text-sm text-muted-foreground">Ничего не нашлось.</p>;
+    return (
+      <p className="px-4 py-6 text-center text-sm text-muted-foreground">
+        {t("comments.nothingFound")}
+      </p>
+    );
   }
 
   return (
@@ -284,7 +288,7 @@ function CommentList({
                         aria-expanded={expanded}
                         className="font-medium underline-offset-4 hover:text-foreground hover:underline"
                       >
-                        Ответы · {fmtNum(c.replies)}
+                        {t("comments.replies")} · {fmtNum(c.replies)}
                       </button>
                     </>
                   )
@@ -300,7 +304,7 @@ function CommentList({
       {more > 0 && (
         <div className="pt-2">
           <Button size="sm" variant="outline" disabled={busy} onClick={onMore}>
-            {busy ? "Читаю…" : `Показать ещё · осталось ${fmtNum(more)}`}
+            {busy ? t("comments.reading") : t("comments.more", { n: fmtNum(more) })}
           </Button>
         </div>
       )}
@@ -324,6 +328,7 @@ function CommentRow({
   tail?: React.ReactNode;
   children?: React.ReactNode;
 }) {
+  const t = useT();
   return (
     <div className="flex gap-2.5">
       <div
@@ -347,14 +352,16 @@ function CommentRow({
                 @{c.author_handle}
               </a>
             ) : (
-              <span className="font-semibold text-foreground">{c.author_name || "без имени"}</span>
+              <span className="font-semibold text-foreground">
+                {c.author_name || t("comments.noName")}
+              </span>
             )}
             {c.author_handle && c.author_name && <span className="ml-1.5">{c.author_name}</span>}
           </p>
           {c.likes !== null && (
             <span
               className="flex shrink-0 items-center gap-1 text-xs tabular-nums text-muted-foreground"
-              title={`лайков: ${fmtNum(c.likes)}`}
+              title={t("comments.likesTitle", { n: fmtNum(c.likes) })}
             >
               <HeartIcon className="size-3" />
               {fmtNum(c.likes)}
@@ -385,14 +392,17 @@ function Replies({
   platform: Platform;
   total: number;
 }) {
+  const t = useT();
   return (
     <div className="mt-2 border-l pl-3">
       {branch === undefined || branch.status === "loading" ? (
         <Skeleton className="h-10 w-full" />
       ) : branch.status === "error" ? (
-        <p className="text-xs text-destructive">Не удалось прочитать ответы: {branch.error}</p>
+        <p className="text-xs text-destructive">
+          {t("comments.repliesError", { error: branch.error })}
+        </p>
       ) : branch.rows.length === 0 ? (
-        <p className="text-[11px] text-muted-foreground">ответы ещё не сняты</p>
+        <p className="text-[11px] text-muted-foreground">{t("comments.repliesNotTaken")}</p>
       ) : (
         <>
           <ul className="space-y-2.5">
@@ -404,7 +414,7 @@ function Replies({
           </ul>
           {branch.rows.length < total && (
             <p className="pt-2 text-[11px] text-muted-foreground">
-              показано {fmtNum(branch.rows.length)} из {fmtNum(total)}: остальное не снято
+              {t("comments.shownOf", { shown: fmtNum(branch.rows.length), total: fmtNum(total) })}
             </p>
           )}
         </>

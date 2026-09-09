@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useSyncExternalStore } from "react";
+import { tr } from "@/lib/i18n";
 import type { Platform } from "./types";
 
 // Переключатель площадки над страницей: «Все» / «TikTok» / «Instagram» (владелец, 2026-09-08).
@@ -13,11 +14,10 @@ export type PlatformFilter = "all" | "tiktok" | "instagram";
 export const PLATFORM_FILTER_KEY = "amestat.platform";
 
 // Подписи кнопок переключателя. «Все» без значка — площадки у него нет.
-export const PLATFORM_FILTER_LABELS: Record<PlatformFilter, string> = {
-  all: "Все",
-  tiktok: "TikTok",
-  instagram: "Instagram",
-};
+// ⚠️ Имена площадок не переводятся: TikTok и Instagram зовутся так на любом языке.
+export function platformFilterLabel(filter: PlatformFilter): string {
+  return filter === "all" ? tr("platform.all") : filter === "tiktok" ? "TikTok" : "Instagram";
+}
 
 // Проходит ли строка через фильтр. Чистая: ею фильтруются и креаторы, и всё, что за них
 // цепляется — сводка, видео, лучшие креаторы.

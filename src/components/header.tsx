@@ -4,29 +4,33 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { LogOutIcon } from "lucide-react";
+import { LangSwitch } from "@/components/lang-switch";
 import { Button } from "@/components/ui/button";
 import { logout } from "@/lib/api/auth";
+import { useT, type TKey } from "@/lib/i18n";
 import { useProfile } from "@/lib/profile-context";
 import { profileName } from "@/lib/api/profiles";
 import { cn } from "@/lib/utils";
 
-const ADMIN_NAV = [
-  { href: "/", label: "Дашборд" },
-  { href: "/creators/", label: "Креаторы" },
-  { href: "/managers/", label: "Креатор-менеджеры" },
-  { href: "/archive/", label: "Архив" },
+const ADMIN_NAV: { href: string; label: TKey }[] = [
+  { href: "/", label: "nav.dashboard" },
+  { href: "/creators/", label: "nav.creators" },
+  { href: "/managers/", label: "nav.managers" },
+  { href: "/archive/", label: "nav.archive" },
 ];
 
-const MANAGER_NAV = [
-  { href: "/", label: "Дашборд" },
-  { href: "/creators/", label: "Креаторы" },
+const MANAGER_NAV: { href: string; label: TKey }[] = [
+  { href: "/", label: "nav.dashboard" },
+  { href: "/creators/", label: "nav.creators" },
 ];
 
 // Шапка со вкладками. Что видно, решает роль: архив и менеджеры — только админу.
+// Переключатель языка стоит в правом верхнем углу, рядом с именем и выходом.
 export function Header() {
   const router = useRouter();
   const pathname = usePathname();
   const profile = useProfile();
+  const t = useT();
   const [busy, setBusy] = useState(false);
 
   const nav = profile.role === "admin" ? ADMIN_NAV : MANAGER_NAV;
@@ -61,18 +65,19 @@ export function Header() {
                     : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
                 )}
               >
-                {item.label}
+                {t(item.label)}
               </Link>
             );
           })}
         </nav>
         <span className="hidden text-xs text-muted-foreground sm:inline">
           {profileName(profile)}
-          {profile.role === "admin" ? " · админ" : " · менеджер"}
+          {` · ${profile.role === "admin" ? t("nav.admin") : t("nav.manager")}`}
         </span>
-        <Button variant="ghost" size="sm" title="Выйти" onClick={onLogout} disabled={busy}>
+        <LangSwitch />
+        <Button variant="ghost" size="sm" title={t("common.logout")} onClick={onLogout} disabled={busy}>
           <LogOutIcon data-icon="inline-start" />
-          <span className="hidden sm:inline">Выйти</span>
+          <span className="hidden sm:inline">{t("common.logout")}</span>
         </Button>
       </div>
     </header>

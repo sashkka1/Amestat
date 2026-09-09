@@ -11,6 +11,7 @@ import { CreatorHeader } from "@/components/creator/creator-header";
 import { CreatorStats } from "@/components/creator/creator-stats";
 import { creatorById, listCreatorManagers, listCreatorTags, listTags } from "@/lib/queries";
 import { listManagers } from "@/lib/api/profiles";
+import { useT } from "@/lib/i18n";
 import { useLoader } from "@/lib/use-loader";
 import { usePeriod } from "@/lib/use-period";
 import type { Creator, Profile, Tag } from "@/lib/types";
@@ -46,9 +47,16 @@ async function loadCreator(id: string): Promise<Data> {
 // Статика не умеет /creators/[id], поэтому адрес — /creator/?id=<uuid>.
 // useSearchParams требует Suspense при статической сборке.
 export default function CreatorPage() {
+  const t = useT();
   return (
     <AuthGate>
-      <Suspense fallback={<Page title="Креатор"><PageSkeleton /></Page>}>
+      <Suspense
+        fallback={
+          <Page title={t("creator.title")}>
+            <PageSkeleton />
+          </Page>
+        }
+      >
         <CreatorRoute />
       </Suspense>
     </AuthGate>
@@ -56,12 +64,13 @@ export default function CreatorPage() {
 }
 
 function CreatorRoute() {
+  const t = useT();
   const params = useSearchParams();
   const id = params.get("id") ?? "";
   if (!UUID_RE.test(id)) {
     return (
-      <Page title="Креатор">
-        <p className="text-sm text-muted-foreground">В адресе нет id креатора.</p>
+      <Page title={t("creator.title")}>
+        <p className="text-sm text-muted-foreground">{t("creator.noId")}</p>
       </Page>
     );
   }
@@ -69,6 +78,7 @@ function CreatorRoute() {
 }
 
 function CreatorView({ id }: { id: string }) {
+  const t = useT();
   const { data, error, loading, reload } = useLoader(() => loadCreator(id), [id]);
   // Креатора отредактировали — перечитать и шапку, и статистику.
   const [version, setVersion] = useState(0);
@@ -86,7 +96,7 @@ function CreatorView({ id }: { id: string }) {
     [creator, fallbackEarliest],
   );
   const period = usePeriod(earliest);
-  const name = creator ? creator.display_name || creator.handle : "Креатор";
+  const name = creator ? creator.display_name || creator.handle : t("creator.title");
   // «Только эта страница» на карточке — это один креатор.
   const pageCreatorIds = useMemo(() => [id], [id]);
 
@@ -110,7 +120,7 @@ function CreatorView({ id }: { id: string }) {
       ) : loading && !data ? (
         <PageSkeleton />
       ) : !creator ? (
-        <p className="text-sm text-muted-foreground">Такого креатора нет — возможно, он удалён.</p>
+        <p className="text-sm text-muted-foreground">{t("creator.notFound")}</p>
       ) : data ? (
         <>
           <CreatorHeader

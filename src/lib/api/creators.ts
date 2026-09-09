@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/client";
 import { parseHandle } from "@/lib/handle";
+import { tr } from "@/lib/i18n";
 import type { Platform } from "@/lib/types";
 import { fail, UNIQUE_VIOLATION, type ActionResult } from "./result";
 
@@ -13,9 +14,7 @@ export async function createCreator(input: {
 }): Promise<ActionResult<{ id: string; handle: string }>> {
   const parsed = parseHandle(input.raw, input.platform);
   if (!parsed) {
-    return fail(
-      "Не понял ссылку или имя. Нужно: https://www.tiktok.com/@name, https://www.instagram.com/name/, @name или name",
-    );
+    return fail(tr("api.creatorParseError"));
   }
 
   const supabase = createClient();
@@ -45,8 +44,8 @@ export async function createCreator(input: {
     .single();
 
   if (error) {
-    if (error.code === UNIQUE_VIOLATION) return fail("Такой креатор уже есть");
-    return fail(`Не удалось добавить: ${error.message}`);
+    if (error.code === UNIQUE_VIOLATION) return fail(tr("api.creatorExists"));
+    return fail(tr("api.creatorAddFailed", { message: error.message }));
   }
   return { ok: true, data: { id: data.id, handle: data.handle } };
 }
@@ -56,7 +55,7 @@ export async function setCreatorAvatar(id: string, avatarUrl: string): Promise<A
     .from("creators")
     .update({ avatar_url: avatarUrl, avatar_custom: true })
     .eq("id", id);
-  if (error) return fail(`Не удалось сохранить картинку: ${error.message}`);
+  if (error) return fail(tr("api.creatorAvatarFailed", { message: error.message }));
   return { ok: true, data: undefined };
 }
 
@@ -72,7 +71,7 @@ export async function updateCreator(
       all_videos_ours: patch.all_videos_ours,
     })
     .eq("id", id);
-  if (error) return fail(`Не удалось сохранить: ${error.message}`);
+  if (error) return fail(tr("api.creatorSaveFailed", { message: error.message }));
   return { ok: true, data: undefined };
 }
 
@@ -90,7 +89,7 @@ export async function deleteCreator(id: string): Promise<ActionResult> {
   }
 
   const { error } = await supabase.from("creators").delete().eq("id", id);
-  if (error) return fail(`Не удалось удалить: ${error.message}`);
+  if (error) return fail(tr("api.creatorDeleteFailed", { message: error.message }));
   return { ok: true, data: undefined };
 }
 
@@ -103,6 +102,7 @@ export async function setCreatorTag(
   const { error } = on
     ? await supabase.from("creator_tags").insert({ creator_id: creatorId, tag_id: tagId })
     : await supabase.from("creator_tags").delete().match({ creator_id: creatorId, tag_id: tagId });
-  if (error && error.code !== UNIQUE_VIOLATION) return fail(`Тег не сохранился: ${error.message}`);
+  if (error && error.code !== UNIQUE_VIOLATION)
+    return fail(tr("api.creatorTagFailed", { message: error.message }));
   return { ok: true, data: undefined };
 }

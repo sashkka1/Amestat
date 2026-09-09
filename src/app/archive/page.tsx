@@ -11,7 +11,8 @@ import { Panel, PanelHead, Empty } from "@/components/stats/panel";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { listArchive } from "@/lib/queries";
 import { fmtNum } from "@/lib/format";
-import { matchesPlatform, PLATFORM_FILTER_LABELS, usePlatformFilter } from "@/lib/platform-filter";
+import { useT } from "@/lib/i18n";
+import { matchesPlatform, platformFilterLabel, usePlatformFilter } from "@/lib/platform-filter";
 import { useLoader } from "@/lib/use-loader";
 
 export default function ArchivePage() {
@@ -25,6 +26,7 @@ export default function ArchivePage() {
 // Архив пишет триггер при удалении креатора: строка помнит, кто удалил и каким менеджерам
 // креатор принадлежал. Снимки и видео уходят каскадом — вернуть креатора отсюда нельзя.
 function ArchiveScreen() {
+  const t = useT();
   const { data, error, loading } = useLoader(listArchive, []);
   // Переключатель тот же, что на дашборде и в «Креаторах»: положение общее через localStorage.
   const platform = usePlatformFilter();
@@ -38,11 +40,11 @@ function ArchiveScreen() {
 
   return (
     <Page
-      title="Архив"
+      title={t("archive.title")}
       subtitle={
         platformFilter === "all"
-          ? "Удалённые креаторы: кто и когда"
-          : `Удалённые креаторы: кто и когда · ${PLATFORM_FILTER_LABELS[platformFilter]}`
+          ? t("archive.subtitle")
+          : t("archive.subtitlePlatform", { platform: platformFilterLabel(platformFilter) })
       }
       actions={<PlatformSwitch state={platform} />}
     >
@@ -52,21 +54,27 @@ function ArchiveScreen() {
         <PageSkeleton blocks={1} />
       ) : data ? (
         <Panel>
-          <PanelHead title="Удалённые" subtitle={`${fmtNum(list.length)} записей`} />
+          <PanelHead
+            title={t("archive.panelTitle")}
+            subtitle={t("archive.count", {
+              n: fmtNum(list.length),
+              records: t.plural("records", list.length),
+            })}
+          />
           {list.length === 0 ? (
             <Empty>
-              {data.length === 0 ? "Никого не удаляли." : "На этой площадке удалённых нет."}
+              {data.length === 0 ? t("archive.emptyNone") : t("archive.emptyPlatform")}
             </Empty>
           ) : (
             <Table className="text-[13px]">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="text-muted-foreground">Креатор</TableHead>
-                  <TableHead className="text-muted-foreground">Площадка</TableHead>
-                  <TableHead className="text-muted-foreground">Был у менеджеров</TableHead>
-                  <TableHead className="text-muted-foreground">Добавлен</TableHead>
-                  <TableHead className="text-muted-foreground">Удалён</TableHead>
-                  <TableHead className="text-muted-foreground">Кто удалил</TableHead>
+                  <TableHead className="text-muted-foreground">{t("table.creator")}</TableHead>
+                  <TableHead className="text-muted-foreground">{t("table.platform")}</TableHead>
+                  <TableHead className="text-muted-foreground">{t("archive.wasWithManagers")}</TableHead>
+                  <TableHead className="text-muted-foreground">{t("archive.added")}</TableHead>
+                  <TableHead className="text-muted-foreground">{t("archive.deleted")}</TableHead>
+                  <TableHead className="text-muted-foreground">{t("archive.deletedBy")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -92,7 +100,7 @@ function ArchiveScreen() {
                         <PlatformChip platform={a.platform} />
                       </TableCell>
                       <TableCell className="text-muted-foreground">
-                        {a.managers.length > 0 ? a.managers.join(", ") : "ни у кого"}
+                        {a.managers.length > 0 ? a.managers.join(", ") : t("archive.noManagers")}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         <LocalTime iso={a.added_at} mode="date" />
@@ -100,7 +108,7 @@ function ArchiveScreen() {
                       <TableCell className="text-muted-foreground">
                         <LocalTime iso={a.deleted_at} />
                       </TableCell>
-                      <TableCell>{a.deleted_by_login || "неизвестно"}</TableCell>
+                      <TableCell>{a.deleted_by_login || t("archive.unknown")}</TableCell>
                     </TableRow>
                   );
                 })}

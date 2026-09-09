@@ -5,8 +5,9 @@ import { CalendarIcon, ChevronDownIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { PERIOD_LABELS, type PeriodKey } from "@/lib/period";
+import { periodLabel, type PeriodKey } from "@/lib/period";
 import { fmtDayYear } from "@/lib/format";
+import { useT } from "@/lib/i18n";
 import type { PeriodState } from "@/lib/use-period";
 import { cn } from "@/lib/utils";
 
@@ -14,10 +15,11 @@ const KEYS: PeriodKey[] = ["today", "7d", "30d", "all", "custom"];
 
 // Пилюля срока «10 авг 2026 → 8 сен 2026» с готовыми сроками внутри.
 export function PeriodChip({ period, className }: { period: PeriodState; className?: string }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const label = period.range
     ? `${fmtDayYear(period.range.from)} → ${fmtDayYear(period.range.to)}`
-    : "Укажите даты";
+    : t("period.pickDates");
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -43,7 +45,7 @@ export function PeriodChip({ period, className }: { period: PeriodState; classNa
                   period.key === k && "bg-muted font-medium",
                 )}
               >
-                {PERIOD_LABELS[k]}
+                {periodLabel(k)}
               </button>
             </li>
           ))}
@@ -55,17 +57,17 @@ export function PeriodChip({ period, className }: { period: PeriodState; classNa
               value={period.customFrom}
               onChange={(e) => period.setCustom(e.target.value, period.customTo)}
               className="h-8 dark:[color-scheme:dark]"
-              aria-label="С какого дня"
+              aria-label={t("period.fromAria")}
             />
             <Input
               type="date"
               value={period.customTo}
               onChange={(e) => period.setCustom(period.customFrom, e.target.value)}
               className="h-8 dark:[color-scheme:dark]"
-              aria-label="По какой день"
+              aria-label={t("period.toAria")}
             />
             {!period.range && (
-              <p className="text-xs text-destructive">Начало должно быть не позже конца.</p>
+              <p className="text-xs text-destructive">{t("period.badRange")}</p>
             )}
           </div>
         )}

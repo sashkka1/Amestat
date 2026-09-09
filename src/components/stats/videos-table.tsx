@@ -13,6 +13,7 @@ import { VideoStateToggle } from "@/components/video-state-toggle";
 import { Panel, PanelHead, Empty } from "./panel";
 import { SortHead, nextSort, type SortDir } from "./sort-head";
 import { engagementPct, fmtDayAxis, fmtNum } from "@/lib/format";
+import { useT, type TKey } from "@/lib/i18n";
 import { STATE_ROW_CLASS, type VideoState } from "@/lib/video-state";
 import type { Platform } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -43,11 +44,11 @@ type Key = "views" | "likes" | "comments" | "shares" | "saves" | "engagement" | 
 // одно видео, поэтому свои, а не stateLabel: «Наши», а не «Наше».
 type StateFilter = VideoState | "all";
 const FILTER_KEYS: StateFilter[] = ["all", "ours", "watch", "none"];
-const FILTER_LABELS: Record<StateFilter, string> = {
-  all: "Все",
-  ours: "Наши",
-  watch: "Смотрим",
-  none: "Не наши",
+const FILTER_LABELS: Record<StateFilter, TKey> = {
+  all: "videosTable.filterAll",
+  ours: "videosTable.filterOurs",
+  watch: "videosTable.filterWatch",
+  none: "videosTable.filterNone",
 };
 
 const PAGE = 20;
@@ -66,7 +67,7 @@ function value(r: VideoTableRow, k: Key): number {
 // Таблица видео: и «Новые видео» на дашборде, и полный список у креатора.
 export function VideosTable({
   rows,
-  title = "Видео",
+  title,
   showCreator = true,
   defaultSort = "published",
   onSetState,
@@ -82,6 +83,7 @@ export function VideosTable({
   onRowClick?: (videoId: string) => void;
   selectedId?: string | null;
 }) {
+  const t = useT();
   const [search, setSearch] = useState("");
   // Фильтр по состоянию живёт только в таблице и нигде не сохраняется: это взгляд на список
   // сейчас, а не настройка страницы.
@@ -120,7 +122,13 @@ export function VideosTable({
 
   return (
     <Panel>
-      <PanelHead title={title} subtitle={`${fmtNum(filtered.length)} видео`}>
+      <PanelHead
+        title={title ?? t("videosTable.title")}
+        subtitle={t("videosTable.count", {
+          n: fmtNum(filtered.length),
+          videos: t.plural("videos", filtered.length),
+        })}
+      >
         {/* Чипы состояния — рядом с поиском: тот же ряд управления таблицей. */}
         <div className="flex flex-wrap items-center gap-1">
           {FILTER_KEYS.map((key) => (
@@ -135,7 +143,7 @@ export function VideosTable({
                 setPage(0);
               }}
             >
-              {FILTER_LABELS[key]}
+              {t(FILTER_LABELS[key])}
             </Button>
           ))}
         </div>
@@ -147,30 +155,34 @@ export function VideosTable({
               setSearch(e.target.value);
               setPage(0);
             }}
-            placeholder="Поиск по подписи"
+            placeholder={t("videosTable.searchPlaceholder")}
             className="h-8 pl-8 text-xs"
-            aria-label="Поиск по видео"
+            aria-label={t("videosTable.searchAria")}
           />
         </div>
       </PanelHead>
 
       {shown.length === 0 ? (
-        <Empty>Видео нет.</Empty>
+        <Empty>{t("videosTable.empty")}</Empty>
       ) : (
         <>
           <Table className="text-[13px]">
             <TableHeader>
               <TableRow>
-                {showCreator && <TableHead className="text-muted-foreground">Креатор</TableHead>}
-                <TableHead className="text-muted-foreground">Видео</TableHead>
-                <SortHead k="views" label="Просмотры" sortKey={sortKey} dir={dir} onSort={onSort} />
-                <SortHead k="likes" label="Лайки" sortKey={sortKey} dir={dir} onSort={onSort} />
-                <SortHead k="comments" label="Комментарии" sortKey={sortKey} dir={dir} onSort={onSort} />
-                <SortHead k="shares" label="Репосты" sortKey={sortKey} dir={dir} onSort={onSort} />
-                <SortHead k="saves" label="Сохранения" sortKey={sortKey} dir={dir} onSort={onSort} />
-                <SortHead k="engagement" label="Вовл. %" sortKey={sortKey} dir={dir} onSort={onSort} />
-                <SortHead k="published" label="Дата" sortKey={sortKey} dir={dir} onSort={onSort} />
-                {onSetState && <TableHead className="text-center text-muted-foreground">Состояние</TableHead>}
+                {showCreator && (
+                  <TableHead className="text-muted-foreground">{t("table.creator")}</TableHead>
+                )}
+                <TableHead className="text-muted-foreground">{t("metric.videos")}</TableHead>
+                <SortHead k="views" label={t("metric.views")} sortKey={sortKey} dir={dir} onSort={onSort} />
+                <SortHead k="likes" label={t("metric.likes")} sortKey={sortKey} dir={dir} onSort={onSort} />
+                <SortHead k="comments" label={t("metric.comments")} sortKey={sortKey} dir={dir} onSort={onSort} />
+                <SortHead k="shares" label={t("metric.shares")} sortKey={sortKey} dir={dir} onSort={onSort} />
+                <SortHead k="saves" label={t("metric.saves")} sortKey={sortKey} dir={dir} onSort={onSort} />
+                <SortHead k="engagement" label={t("videosTable.engagementShort")} sortKey={sortKey} dir={dir} onSort={onSort} />
+                <SortHead k="published" label={t("table.date")} sortKey={sortKey} dir={dir} onSort={onSort} />
+                {onSetState && (
+                  <TableHead className="text-center text-muted-foreground">{t("table.status")}</TableHead>
+                )}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -205,7 +217,7 @@ export function VideosTable({
                         className="max-w-[18rem] truncate hover:underline"
                         title={r.caption}
                       >
-                        {r.caption || "без подписи"}
+                        {r.caption || t("common.noCaption")}
                       </a>
                     </div>
                   </TableCell>
@@ -232,12 +244,10 @@ export function VideosTable({
 
           {pages > 1 && (
             <div className="flex items-center justify-between gap-2 border-t px-4 py-2 text-xs text-muted-foreground">
-              <span>
-                Страница {current + 1} из {pages}
-              </span>
+              <span>{t("videosTable.page", { current: current + 1, total: pages })}</span>
               <div className="flex gap-1">
                 <Button size="xs" variant="outline" disabled={current === 0} onClick={() => setPage(current - 1)}>
-                  Назад
+                  {t("common.back")}
                 </Button>
                 <Button
                   size="xs"
@@ -245,7 +255,7 @@ export function VideosTable({
                   disabled={current >= pages - 1}
                   onClick={() => setPage(current + 1)}
                 >
-                  Вперёд
+                  {t("common.forward")}
                 </Button>
               </div>
             </div>

@@ -13,16 +13,17 @@ import { VideoComments } from "./video-comments";
 import { videoHistory } from "@/lib/queries";
 import { describeVsMedian } from "@/lib/stats";
 import { fmtDateTime, fmtDelta, fmtNum } from "@/lib/format";
+import { useT, type TKey } from "@/lib/i18n";
 import type { VideoState } from "@/lib/video-state";
 import type { Platform, VideoStats } from "@/lib/types";
 
 export const PANEL_METRICS = [
-  { key: "views", label: "Просмотры" },
-  { key: "likes", label: "Лайки" },
-  { key: "comments", label: "Комментарии" },
-  { key: "shares", label: "Репосты" },
-  { key: "saves", label: "Сохранения" },
-] as const;
+  { key: "views", label: "metric.views" },
+  { key: "likes", label: "metric.likes" },
+  { key: "comments", label: "metric.comments" },
+  { key: "shares", label: "metric.shares" },
+  { key: "saves", label: "metric.saves" },
+] as const satisfies readonly { key: string; label: TKey }[];
 export type MetricKey = (typeof PANEL_METRICS)[number]["key"];
 
 // Выбранное видео: сравнение с медианой креатора за срок и своя история по снимкам.
@@ -47,6 +48,7 @@ export function VideoPanel({
   refreshKey: number;
   onClose: () => void;
 }) {
+  const t = useT();
   // История помнит, чьё она видео: сменилась строка — до ответа показываем скелет.
   const [loaded, setLoaded] = useState<{
     videoId: string;
@@ -79,8 +81,14 @@ export function VideoPanel({
         <Cover src={row.cover_url} width={56} />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex items-start justify-between gap-2">
-            <p className="text-sm font-medium">{row.caption || "без подписи"}</p>
-            <Button variant="ghost" size="icon-sm" onClick={onClose} title="Закрыть" aria-label="Закрыть">
+            <p className="text-sm font-medium">{row.caption || t("common.noCaption")}</p>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={onClose}
+              title={t("common.close")}
+              aria-label={t("common.close")}
+            >
               <XIcon />
             </Button>
           </div>
@@ -90,23 +98,25 @@ export function VideoPanel({
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
           >
-            Открыть на площадке
+            {t("videoPanel.openOnPlatform")}
             <ExternalLinkIcon className="size-3" />
           </a>
-          <p className="text-xs text-muted-foreground">опубликовано: {fmtDateTime(row.published_at)}</p>
+          <p className="text-xs text-muted-foreground">
+            {t("videoPanel.published", { date: fmtDateTime(row.published_at) })}
+          </p>
           <VideoStateToggle state={state} onChange={onState} withLabels className="self-start" />
         </div>
       </div>
 
       <div>
-        <h3 className="mb-2 text-xs font-medium text-muted-foreground">Сравнение с медианой за срок</h3>
+        <h3 className="mb-2 text-xs font-medium text-muted-foreground">{t("videoPanel.vsMedian")}</h3>
         <Table className="text-[13px]">
           <TableHeader>
             <TableRow>
-              <TableHead className="text-muted-foreground">Счётчик</TableHead>
-              <TableHead className="text-right text-muted-foreground">Это видео</TableHead>
-              <TableHead className="text-right text-muted-foreground">Медиана</TableHead>
-              <TableHead className="text-right text-muted-foreground">Итог</TableHead>
+              <TableHead className="text-muted-foreground">{t("videoPanel.counter")}</TableHead>
+              <TableHead className="text-right text-muted-foreground">{t("videoPanel.thisVideo")}</TableHead>
+              <TableHead className="text-right text-muted-foreground">{t("videoPanel.median")}</TableHead>
+              <TableHead className="text-right text-muted-foreground">{t("videoPanel.result")}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -115,10 +125,13 @@ export function VideoPanel({
               const now = row[`${m.key}_now`];
               return (
                 <TableRow key={m.key}>
-                  <TableCell>{m.label}</TableCell>
+                  <TableCell>{t(m.label)}</TableCell>
                   <TableCell className="text-right tabular-nums">
                     {fmtDelta(value)}
-                    <span className="text-muted-foreground"> · всего {fmtNum(now)}</span>
+                    <span className="text-muted-foreground">
+                      {" · "}
+                      {t("videoPanel.total", { n: fmtNum(now) })}
+                    </span>
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{fmtNum(medians[m.key])}</TableCell>
                   <TableCell className="text-right">{describeVsMedian(value, medians[m.key])}</TableCell>
@@ -130,9 +143,13 @@ export function VideoPanel({
       </div>
 
       <div>
-        <h3 className="mb-2 text-xs font-medium text-muted-foreground">Просмотры по снимкам</h3>
+        <h3 className="mb-2 text-xs font-medium text-muted-foreground">
+          {t("videoPanel.viewsBySnapshots")}
+        </h3>
         {current?.error ? (
-          <p className="text-xs text-destructive">Не удалось прочитать снимки: {current.error}</p>
+          <p className="text-xs text-destructive">
+            {t("videoPanel.snapshotsError", { error: current.error })}
+          </p>
         ) : current?.data ? (
           <VideoHistoryChart data={current.data} />
         ) : (

@@ -12,7 +12,8 @@ import {
   toDateInputValue,
   type PeriodRange,
 } from "@/lib/period";
-import { RANGE_REQUIRED } from "@/lib/sync-phase";
+import { tr, useT } from "@/lib/i18n";
+import { rangeRequired } from "@/lib/sync-phase";
 import type { SyncDepth, SyncPick, SyncVideos } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -185,30 +186,31 @@ export function SyncDepthGroup({
   onDepth: (next: SyncDepth) => void;
   range: SyncRangeState;
 }) {
+  const t = useT();
   const max = todayValue();
   return (
-    <SyncGroup title="Глубина" cols={4}>
+    <SyncGroup title={t("syncChoice.depthGroup")} cols={4}>
       <SyncChoiceBlock
-        label="Всё"
-        hint="весь список видео, долго"
+        label={t("syncChoice.depthAll")}
+        hint={t("syncChoice.depthAllHint")}
         selected={depth === "all"}
         onClick={() => onDepth("all")}
       />
       <SyncChoiceBlock
-        label="Неделя"
-        hint="видео за 7 дней"
+        label={t("syncChoice.depthWeek")}
+        hint={t("syncChoice.depthWeekHint")}
         selected={depth === "week"}
         onClick={() => onDepth("week")}
       />
       <SyncChoiceBlock
-        label="Месяц"
-        hint="видео за 30 дней"
+        label={t("syncChoice.depthMonth")}
+        hint={t("syncChoice.depthMonthHint")}
         selected={depth === "month"}
         onClick={() => onDepth("month")}
       />
       <SyncChoiceBlock
-        label="Период"
-        hint="выбрать даты"
+        label={t("syncChoice.depthRange")}
+        hint={t("syncChoice.depthRangeHint")}
         selected={depth === "range"}
         onClick={() => onDepth("range")}
       />
@@ -218,15 +220,15 @@ export function SyncDepthGroup({
             {/* max — сегодня: «по» не позже сегодняшнего дня, и календарь браузера дальше
                 не пускает. Набранную руками будущую дату подрезает resolveSyncRange. */}
             <SyncDateField
-              label="с"
-              aria="С какого дня"
+              label={t("syncChoice.from")}
+              aria={t("period.fromAria")}
               value={range.from}
               max={max}
               onChange={range.setFrom}
             />
             <SyncDateField
-              label="по"
-              aria="По какой день"
+              label={t("syncChoice.to")}
+              aria={t("period.toAria")}
               value={range.to}
               max={max}
               onChange={range.setTo}
@@ -234,7 +236,7 @@ export function SyncDepthGroup({
           </div>
           {/* Кнопка внизу в это время выключена — без строки было бы непонятно, почему. */}
           {range.range === null && (
-            <p className="text-xs leading-snug text-destructive">{RANGE_REQUIRED}</p>
+            <p className="text-xs leading-snug text-destructive">{rangeRequired()}</p>
           )}
         </div>
       )}
@@ -258,13 +260,14 @@ export function SyncMaxVideosGroup({
   maxVideos: number | null;
   onMaxVideos: (next: number | null) => void;
 }) {
+  const t = useT();
   return (
-    <SyncGroup title="Сколько видео" cols={4}>
+    <SyncGroup title={t("syncChoice.maxVideosGroup")} cols={4}>
       {MAX_VIDEOS_CHOICES.map((n) => (
         <SyncChoiceBlock
           key={n ?? "all"}
-          label={n === null ? "Все" : String(n)}
-          hint={n === null ? "без потолка" : "самых новых в пределах глубины"}
+          label={n === null ? t("syncChoice.maxAll") : String(n)}
+          hint={n === null ? t("syncChoice.maxAllHint") : t("syncChoice.maxHint")}
           selected={maxVideos === n}
           onClick={() => onMaxVideos(n)}
         />
@@ -280,7 +283,9 @@ export function SyncMaxVideosGroup({
 //
 // 🔴 Слова группы и хвостов живут здесь и в `lib/sync-phase.ts` по одному разу: попап кнопки
 // над страницей, попап строки списка и очередь строк обязаны называть охват одинаково.
-export const VIDEOS_WORD: Record<SyncVideos, string> = { all: "все видео", ours: "только наши" };
+export function videosWord(videos: SyncVideos): string {
+  return tr(videos === "all" ? "syncChoice.wordVideosAll" : "syncChoice.wordVideosOurs");
+}
 
 export function SyncVideosGroup({
   videos,
@@ -289,17 +294,18 @@ export function SyncVideosGroup({
   videos: SyncVideos;
   onVideos: (next: SyncVideos) => void;
 }) {
+  const t = useT();
   return (
-    <SyncGroup title="Видео">
+    <SyncGroup title={t("syncChoice.videosGroup")}>
       <SyncChoiceBlock
-        label="Всё"
-        hint="весь список, как в ежедневном обходе"
+        label={t("syncChoice.videosAll")}
+        hint={t("syncChoice.videosAllHint")}
         selected={videos === "all"}
         onClick={() => onVideos("all")}
       />
       <SyncChoiceBlock
-        label="Только наши"
-        hint="наши и жёлтые видео, остальное не смотрим — быстрее"
+        label={t("syncChoice.videosOurs")}
+        hint={t("syncChoice.videosOursHint")}
         selected={videos === "ours"}
         onClick={() => onVideos("ours")}
       />
@@ -309,9 +315,6 @@ export function SyncVideosGroup({
 
 // Что снимать. Первые два блока запоминаются (`useSyncOptions`), третий приходит параметрами
 // и гаснет при каждом открытии попапа — правило не изменилось, изменился только вид.
-const NO_COMMENTS_TITLE = "Без комментариев снимать нечего";
-const OURS_ONLY_TITLE = "При охвате «Только наши» не наши видео не открываются";
-
 export function SyncPickGroup({
   allVideos,
   onAllVideos,
@@ -323,7 +326,10 @@ export function SyncPickGroup({
   // из чего — блок гаснет, а не молчаливо противоречит сводке.
   oursOnly?: boolean;
 }) {
+  const t = useT();
   const { comments, replies, setComments, setReplies } = useSyncOptions();
+  const noCommentsTitle = t("syncChoice.noCommentsTitle");
+  const oursOnlyTitle = t("syncChoice.oursOnlyTitle");
 
   // Сняли «Комментарии» — гаснут оба нижних блока: без текстов снимать нечего ни в ветках,
   // ни у не наших видео. `replies` гасит сам стор, а третий — вот эта строка.
@@ -334,28 +340,28 @@ export function SyncPickGroup({
   }
 
   return (
-    <SyncGroup title="Что снимать">
+    <SyncGroup title={t("syncChoice.pickGroup")}>
       <SyncChoiceBlock
-        label="Комментарии"
-        hint="тексты комментариев у наших видео"
+        label={t("syncChoice.comments")}
+        hint={t("syncChoice.commentsHint")}
         selected={comments}
         onClick={toggleComments}
       />
       <SyncChoiceBlock
-        label="Ветки ответов"
-        hint="раскрывать ответы под комментариями"
+        label={t("syncChoice.replies")}
+        hint={t("syncChoice.repliesHint")}
         selected={comments && replies}
         disabled={!comments}
-        title={comments ? undefined : NO_COMMENTS_TITLE}
+        title={comments ? undefined : noCommentsTitle}
         onClick={() => setReplies(!replies)}
       />
       <SyncChoiceBlock
         className="col-span-2"
-        label="И у не наших видео"
-        hint="тексты и у не помеченных, долго"
+        label={t("syncChoice.allVideos")}
+        hint={t("syncChoice.allVideosHint")}
         selected={comments && !oursOnly && allVideos}
         disabled={!comments || oursOnly}
-        title={!comments ? NO_COMMENTS_TITLE : oursOnly ? OURS_ONLY_TITLE : undefined}
+        title={!comments ? noCommentsTitle : oursOnly ? oursOnlyTitle : undefined}
         onClick={() => onAllVideos(!allVideos)}
       />
     </SyncGroup>
@@ -369,14 +375,16 @@ export function SyncPickGroup({
 // и строки состояния, и тосты очереди.
 
 export function pickWords(pick: SyncPick): string {
-  if (!pick.comments) return "без комментариев";
-  return pick.replies ? "комментарии и ветки" : "комментарии";
+  if (!pick.comments) return tr("syncChoice.wordNoComments");
+  return tr(pick.replies ? "syncChoice.wordCommentsReplies" : "syncChoice.wordComments");
 }
 
 // Слово блока «И у не наших видео» в сводке. Раньше было «все видео», но так теперь зовётся
 // охват списка (VIDEOS_WORD.all) — одно и то же слово о двух разных вещах в одной строке
 // сводки читалось бы как противоречие: «только наши · все видео».
-export const ALL_VIDEOS_WORD = "тексты у не наших";
+export function allVideosWord(): string {
+  return tr("syncChoice.wordAllVideos");
+}
 
 // Сводка выбора одной строкой: «Все креаторы · TikTok · неделя · комментарии и ветки».
 // Пустые куски выпадают — площадки «Все» в строке нет, как нет её и в хвосте состояния.
@@ -395,10 +403,11 @@ export function SyncLaunchButton({
   sending: boolean;
   onClick: () => void;
 }) {
+  const t = useT();
   return (
     <Button type="button" className="w-full" disabled={disabled || sending} onClick={onClick}>
       <RefreshCwIcon data-icon="inline-start" className={cn(sending && "animate-spin")} />
-      {sending ? "Отправляем…" : "Запустить обновление"}
+      {sending ? t("syncChoice.sending") : t("syncChoice.launch")}
     </Button>
   );
 }

@@ -3,12 +3,14 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { login } from "@/lib/api/auth";
+import { useT } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 export function LoginForm() {
   const router = useRouter();
+  const t = useT();
   const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -33,7 +35,7 @@ export function LoginForm() {
   return (
     <form onSubmit={submit} className="flex flex-col gap-4">
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="account">Логин или почта</Label>
+        <Label htmlFor="account">{t("login.account")}</Label>
         <Input
           id="account"
           name="account"
@@ -46,7 +48,7 @@ export function LoginForm() {
         />
       </div>
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="password">Пароль</Label>
+        <Label htmlFor="password">{t("login.password")}</Label>
         <Input
           id="password"
           name="password"
@@ -63,7 +65,7 @@ export function LoginForm() {
         </p>
       )}
       <Button type="submit" disabled={pending} size="lg">
-        {pending ? "Входим…" : "Войти"}
+        {pending ? t("login.submitting") : t("login.submit")}
       </Button>
     </form>
   );

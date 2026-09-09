@@ -16,6 +16,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { createInvite } from "@/lib/api/invites";
+import { useT } from "@/lib/i18n";
 import { useProfile } from "@/lib/profile-context";
 import { fmtDate } from "@/lib/format";
 
@@ -23,6 +24,7 @@ import { fmtDate } from "@/lib/format";
 // Письма не шлём (почта Supabase на бесплатном тарифе ограничена) — админ отправляет сам.
 export function InviteDialog({ onCreated }: { onCreated: () => void }) {
   const profile = useProfile();
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -57,41 +59,35 @@ export function InviteDialog({ onCreated }: { onCreated: () => void }) {
       <DialogTrigger asChild>
         <Button size="sm">
           <LinkIcon data-icon="inline-start" />
-          Сгенерировать ссылку регистрации
+          {t("invites.button")}
         </Button>
       </DialogTrigger>
       {/* На низком экране кнопки не должны уезжать за край: не выше экрана, внутри прокрутка. */}
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Ссылка регистрации менеджера</DialogTitle>
-          <DialogDescription>
-            Ссылка одноразовая: по ней менеджер сам задаст логин и пароль. Отправьте её как удобно —
-            писем сайт не шлёт.
-          </DialogDescription>
+          <DialogTitle>{t("invites.dialogTitle")}</DialogTitle>
+          <DialogDescription>{t("invites.dialogDescription")}</DialogDescription>
         </DialogHeader>
 
         {result ? (
           <div className="flex flex-col gap-2">
-            <CopyField value={result.url} label="Ссылка регистрации" />
+            <CopyField value={result.url} label={t("invites.linkLabel")} />
             <p className="text-xs text-muted-foreground">
-              Действует до {fmtDate(result.expires_at)}. Больше эта ссылка нигде не покажется целиком —
-              скопируйте сейчас.
+              {t("invites.validUntil", { date: fmtDate(result.expires_at) })}
             </p>
           </div>
         ) : (
           <form onSubmit={generate} className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="invite-note">Заметка (кому)</Label>
+              <Label htmlFor="invite-note">{t("invites.noteLabel")}</Label>
               <Input
                 id="invite-note"
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
-                placeholder="Например: Оля, менеджер по бьюти"
+                placeholder={t("invites.notePlaceholder")}
                 autoFocus
               />
-              <p className="text-xs text-muted-foreground">
-                Необязательно — нужна только вам, чтобы понимать в журнале, кому ссылка ушла.
-              </p>
+              <p className="text-xs text-muted-foreground">{t("invites.noteHint")}</p>
             </div>
             {error && (
               <p className="text-sm text-destructive" role="alert">
@@ -100,10 +96,10 @@ export function InviteDialog({ onCreated }: { onCreated: () => void }) {
             )}
             <DialogFooter>
               <Button type="button" variant="ghost" onClick={() => setOpen(false)} disabled={busy}>
-                Отмена
+                {t("common.cancel")}
               </Button>
               <Button type="submit" disabled={busy}>
-                {busy ? "Готовим…" : "Сгенерировать"}
+                {busy ? t("invites.submitting") : t("invites.submit")}
               </Button>
             </DialogFooter>
           </form>

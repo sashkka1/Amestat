@@ -1,9 +1,13 @@
 import type { SyncDepth, SyncRequest, SyncRun, SyncTrigger } from "@/lib/types";
+import { tr } from "@/lib/i18n";
 
 // Общая часть двух мест, которые ждут обход: кнопки «Обновить» над страницей
 // (`components/sync-button.tsx`) и очереди строк списка (`lib/use-sync-queue.ts`).
 // Правила «в какой фазе просьба» и слова, которыми фаза называется, должны совпадать —
 // иначе кнопка и строка того же креатора рассказывают о состоянии разное.
+//
+// ⚠️ Слова берутся словарём (`lib/i18n`) через `tr`, а не хуком: эти функции зовут и не-React
+// модули. Перерисовку при смене языка обеспечивает страница — она подписана через useT.
 
 // Покой → в очереди → принято резидентом → идёт обход → снова покой, с новым временем.
 export type Phase = "idle" | "queued" | "seen" | "running";
@@ -12,33 +16,36 @@ export type Phase = "idle" | "queued" | "seen" | "running";
 export const POLL_MS = 15_000;
 
 // Подписи фаз: строка рядом с кнопкой и подсказка (title) у крутящейся иконки в строке.
-export const PHASE_TEXT: Record<Exclude<Phase, "idle">, string> = {
-  queued: "В очереди…",
-  seen: "Принято, ждёт очереди…",
-  // Слова обхода без счётчиков: пока сборщик не отобрал список, сказать «3 из 10» нечем.
-  running: "Обновляем…",
-};
+// Слова обхода без счётчиков: пока сборщик не отобрал список, сказать «3 из 10» нечем.
+export function phaseText(phase: Exclude<Phase, "idle">): string {
+  return phase === "queued"
+    ? tr("sync.phaseQueued")
+    : phase === "seen"
+      ? tr("sync.phaseSeen")
+      : tr("sync.phaseRunning");
+}
 
 // Чей обход идёт (владелец, 2026-09-09: «чтобы понимать, чей обход, когда сам ничего не
 // просил»). Подпись серым над строкой хода — и у кнопки, и в подсказке строки списка.
-export const TRIGGER_TEXT: Record<SyncTrigger, string> = {
-  schedule: "Обход по расписанию",
-  catchup: "Догон пропущенного слота",
-  retry: "Повтор неудавшихся",
-  manual: "Обновление по просьбе",
+const TRIGGER_KEY: Record<SyncTrigger, "sync.triggerSchedule" | "sync.triggerCatchup" | "sync.triggerRetry" | "sync.triggerManual"> = {
+  schedule: "sync.triggerSchedule",
+  catchup: "sync.triggerCatchup",
+  retry: "sync.triggerRetry",
+  manual: "sync.triggerManual",
 };
 
 // Подпись пачки: сборщик сводит просьбы в один обход, поэтому берём первый — у сведённых
 // обходов повод один и тот же.
 export function triggerText(runs: SyncRun[]): string | null {
   const first = runs[0];
-  return first ? TRIGGER_TEXT[first.trigger] : null;
+  return first ? tr(TRIGGER_KEY[first.trigger]) : null;
 }
 
 // Сколько сделано из скольких и кого собираем прямо сейчас (миграция v14):
 // «Обновляем 3 из 10 · @npodcast123 · @julia.snkvch, ошибок 2».
 // Общее у кнопки «Обновить» и у строк списка — иначе два места считают ход по-разному.
 // Пачка складывается: сборщик мог завести по обходу на площадку.
+// ⚠️ Хэндлы в строке — из базы (`current_handles`), и они не переводятся.
 export function progressText(runs: SyncRun[]): string {
   let total = 0;
   let known = false;
@@ -56,19 +63,23 @@ export function progressText(runs: SyncRun[]): string {
     for (const h of r.current_handles) if (!handles.includes(h)) handles.push(h);
   }
   // Список ещё не отобран — считать не из чего, остаются прежние слова.
-  if (!known) return PHASE_TEXT.running;
+  if (!known) return tr("sync.phaseRunning");
   const who = handles.length > 0 ? ` · ${handles.join(" · ")}` : "";
-  const bad = failed > 0 ? `, ошибок ${failed}` : "";
+  const bad = failed > 0 ? tr("sync.progressErrors", { n: failed }) : "";
   // Пачка могла собраться из обхода со списком и обхода без него — «11 из 10» не пишем.
-  return `Обновляем ${Math.min(done, total)} из ${total}${who}${bad}`;
+  return tr("sync.progress", { done: Math.min(done, total), total }) + who + bad;
 }
 
 // База сама написала владельцу в Telegram: просьбу никто не принял за три минуты.
 // Формулировки две, потому что места разные: у кнопки — целая строка рядом, места хватает;
 // в строке списка — короткая подсказка на иконке.
-export const UNAVAILABLE_TEXT =
-  "Обновление в настоящий момент недоступно, сообщение отправлено, в ближайшее время обновим";
-export const UNAVAILABLE_TITLE = "Обновление сейчас недоступно, сообщение владельцу отправлено";
+export function unavailableText(): string {
+  return tr("sync.unavailableText");
+}
+
+export function unavailableTitle(): string {
+  return tr("sync.unavailableTitle");
+}
 
 // Состояние пачки просьб: решает слабейшее звено — пока хоть одна не принята, вся пачка
 // в очереди. seenAny и notified смотрят на всю пачку сразу: хоть где-то есть — значит есть.
@@ -92,35 +103,41 @@ export function stage(reqs: SyncRequest[]): { phase: Phase; seenAny: boolean; no
 // и у очереди строк списка — как и сам тост.
 // ⚠️ Слова не «все видео»: так теперь называется охват списка (миграция v17), и рядом в
 // одной строке два одинаковых слова о разном сбивали бы с толку.
-export const ALL_VIDEOS_TEXT = " · тексты у не наших";
+export function allVideosText(): string {
+  return ` · ${tr("sync.wordTextsNotOurs")}`;
+}
 
 export function allVideosTail(runs: SyncRun[]): string {
-  return runs.some((r) => r.all_videos) ? ALL_VIDEOS_TEXT : "";
+  return runs.some((r) => r.all_videos) ? allVideosText() : "";
 }
 
 // Хвост «· только наши»: обход шёл с охватом videos = 'ours' — лишние видео не смотрели
 // (миграция v17). Ежедневные обходы идут с 'all', и хвоста у них нет.
-export const OURS_ONLY_TEXT = " · только наши";
+export function oursOnlyText(): string {
+  return ` · ${tr("sync.wordOursOnly")}`;
+}
 
 // ⚠️ Здесь `every`, а не `some`, как у all_videos: сокращённый охват — это обещание «лишнее
 // не смотрели», и в пачке, где хоть один обход шёл по всему списку, оно неверно.
 export function videosTail(runs: SyncRun[]): string {
-  return runs.length > 0 && runs.every((r) => r.videos === "ours") ? OURS_ONLY_TEXT : "";
+  return runs.length > 0 && runs.every((r) => r.videos === "ours") ? oursOnlyText() : "";
 }
 
 // 🔴 Слова глубины живут здесь по одному разу (миграции v7 и v18): их зовут сводка попапа
 // («… · месяц · …»), строка состояния кнопки, строка «Обновлено» и тосты очереди строк.
 // Разъедутся — два места назовут одну и ту же просьбу по-разному.
-export const DEPTH_WORD: Record<SyncDepth, string> = {
-  all: "всё",
-  week: "неделя",
-  month: "месяц",
-  range: "период",
+const DEPTH_KEY: Record<SyncDepth, "sync.depthAll" | "sync.depthWeek" | "sync.depthMonth" | "sync.depthRange"> = {
+  all: "sync.depthAll",
+  week: "sync.depthWeek",
+  month: "sync.depthMonth",
+  range: "sync.depthRange",
 };
 
 // Единственный текст про незаполненный период: он же под полями дат в попапе, он же ответ
 // requestSync, если просьба с depth = 'range' всё-таки ушла без границ.
-export const RANGE_REQUIRED = "Укажи период: «с» раньше «по»";
+export function rangeRequired(): string {
+  return tr("sync.rangeRequired");
+}
 
 function two(n: number): string {
   return String(n).padStart(2, "0");
@@ -145,9 +162,9 @@ export function depthWord(
   from?: string | Date | null,
   to?: string | Date | null,
 ): string {
-  if (depth !== "range") return DEPTH_WORD[depth];
+  if (depth !== "range") return tr(DEPTH_KEY[depth]);
   const w = from && to ? rangeWord(from, to) : null;
-  return w ?? DEPTH_WORD.range;
+  return w ?? tr(DEPTH_KEY.range);
 }
 
 // Строка и просьба, и обхода: обе несут depth с границами (миграции v7, v18).
@@ -168,7 +185,7 @@ export function depthTail(rows: DepthRow[]): string {
 // тосты очереди строк. null — потолка нет, и слова тоже нет: обычный обход не должен
 // обрастать хвостами.
 export function maxVideosWord(max: number | null): string | null {
-  return max === null ? null : `до ${max} видео`;
+  return max === null ? null : tr("sync.wordMaxVideos", { n: max });
 }
 
 // Строка и просьбы, и обхода: обе несут max_videos (миграция v19).
@@ -184,7 +201,10 @@ export function maxVideosTail(rows: MaxVideosRow[]): string {
 
 // Чем кончилась пачка обходов — одной строкой для тоста. Не удался хоть один — показываем
 // первую же ошибку: разбираться, какой именно креатор упал, идут в карточку.
+// ⚠️ `run.error` пишет сборщик — этот текст показывается как есть и не переводится.
 export function runsResult(runs: SyncRun[]): { ok: boolean; text: string } {
   const bad = runs.find((r) => r.ok === false);
-  return bad ? { ok: false, text: bad.error || "Обход не удался" } : { ok: true, text: "Обновлено" };
+  return bad
+    ? { ok: false, text: bad.error || tr("sync.runFailed") }
+    : { ok: true, text: tr("sync.updated") };
 }

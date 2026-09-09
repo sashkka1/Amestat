@@ -1,4 +1,7 @@
-// Чистая арифметика для статистики. Без зависимостей.
+// Арифметика для статистики. Из зависимостей — только словарь: последняя функция здесь
+// складывает фразу для человека.
+
+import { getLang, localeOf, tr } from "@/lib/i18n";
 
 export function sum(values: Iterable<number | null | undefined>): number {
   let total = 0;
@@ -26,11 +29,11 @@ export function percentOfMedian(value: number, med: number | null): number | nul
 // ниже или около — «x% от медианы», заметно выше — «в N раз выше».
 export function describeVsMedian(value: number, med: number | null): string {
   const pct = percentOfMedian(value, med);
-  if (pct === null) return med === 0 && value > 0 ? "медиана — 0" : "—";
+  if (pct === null) return med === 0 && value > 0 ? tr("stats.medianZero") : "—";
   if (pct >= 200) {
     const times = value / (med as number);
     const rounded = times >= 10 ? Math.round(times) : Math.round(times * 10) / 10;
-    return `в ${rounded.toLocaleString("ru-RU")} раз выше`;
+    return tr("stats.timesHigher", { n: rounded.toLocaleString(localeOf(getLang())) });
   }
-  return `${Math.round(pct)}% от медианы`;
+  return tr("stats.pctOfMedian", { n: Math.round(pct) });
 }

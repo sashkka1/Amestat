@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useSyncOptions } from "@/components/sync-options";
 import {
-  ALL_VIDEOS_WORD,
   SyncChoiceBlock,
   SyncDepthGroup,
   SyncGroup,
@@ -18,34 +17,36 @@ import {
   SyncPickGroup,
   SyncSummary,
   SyncVideosGroup,
-  VIDEOS_WORD,
+  allVideosWord,
   pickWords,
+  videosWord,
   useSyncRange,
 } from "@/components/sync-choice";
 import { createClient } from "@/lib/supabase/client";
 import { latestRun, openRequests, requestsByIds, requestSync, runsByIds } from "@/lib/api/sync";
+import { useT, type TKey } from "@/lib/i18n";
 import {
-  PLATFORM_FILTER_LABELS,
   matchesPlatform,
+  platformFilterLabel,
   usePlatformFilter,
   type PlatformFilter,
 } from "@/lib/platform-filter";
 import { listCreators } from "@/lib/queries";
 import {
-  ALL_VIDEOS_TEXT,
-  OURS_ONLY_TEXT,
-  PHASE_TEXT,
   POLL_MS,
-  UNAVAILABLE_TEXT,
   allVideosTail,
+  allVideosText,
   depthTail,
   depthWord,
   maxVideosTail,
   maxVideosWord,
+  oursOnlyText,
+  phaseText,
   progressText,
   runsResult,
   stage,
   triggerText,
+  unavailableText,
   videosTail,
   type Phase,
 } from "@/lib/sync-phase";
@@ -63,25 +64,15 @@ type Target = "all" | "page";
 const PLATFORM_KEYS: PlatformFilter[] = ["all", "tiktok", "instagram"];
 
 // Подсказка внутри блока площадки: одной строкой, что именно он сузит.
-const PLATFORM_HINTS: Record<PlatformFilter, string> = {
-  all: "обе площадки",
-  tiktok: "только TikTok",
-  instagram: "только Instagram",
+const PLATFORM_HINTS: Record<PlatformFilter, TKey> = {
+  all: "sync.platformHintAll",
+  tiktok: "sync.platformHintTiktok",
+  instagram: "sync.platformHintInstagram",
 };
-
-// «4 креатора на странице» — подсказка блока «Только эта страница».
-function creatorsWord(n: number): string {
-  const tens = n % 100;
-  if (tens >= 11 && tens <= 14) return "креаторов";
-  const ones = n % 10;
-  if (ones === 1) return "креатор";
-  if (ones >= 2 && ones <= 4) return "креатора";
-  return "креаторов";
-}
 
 // Хвост «· TikTok» к строке состояния и к тосту: у «Все» площадки нет — хвоста тоже.
 function platformTail(filter: PlatformFilter): string {
-  return filter === "all" ? "" : ` · ${PLATFORM_FILTER_LABELS[filter]}`;
+  return filter === "all" ? "" : ` · ${platformFilterLabel(filter)}`;
 }
 
 // Последний по времени обход из пачки — его время идёт в строку «Обновлено …».
@@ -108,6 +99,7 @@ export function SyncButton({
   pageCreatorIds: string[] | null;
   onDone: () => void;
 }) {
+  const t = useT();
   const [run, setRun] = useState<SyncRun | null>(null);
   // Обходы, которые идут прямо сейчас: из них строка хода — «Обновляем 3 из 10 · @…»
   // (миграция v14). Их несколько, когда сборщик развёл площадки по полосам.
@@ -530,11 +522,11 @@ export function SyncButton({
   // пуста и на странице.
   const allEmpty = ready && allIds !== null && allIds.length === 0;
   const pageEmpty = ready && hasPageRow && pageTargetIds !== null && pageTargetIds.length === 0;
-  const platformName = platform === "all" ? "" : PLATFORM_FILTER_LABELS[platform];
+  const platformName = platform === "all" ? "" : platformFilterLabel(platform);
   const emptyNote = allEmpty
-    ? `Нет креаторов ${platformName}`
+    ? t("sync.noCreatorsPlatform", { platform: platformName })
     : pageEmpty
-      ? `На этой странице нет креаторов ${platformName}`
+      ? t("sync.noCreatorsPagePlatform", { platform: platformName })
       : null;
   // Пока список креаторов не прочитан, площадку применить не к чему.
   const allBlocked = !ready || allEmpty;
@@ -559,14 +551,14 @@ export function SyncButton({
     phase === "running"
       ? progressText(running)
       : phase === "seen"
-        ? PHASE_TEXT.seen
+        ? phaseText("seen")
         : phase === "queued"
           ? // Молчание сборщика — не ошибка пользователя: цвет обычный, просьба сохранена.
             notified
-            ? UNAVAILABLE_TEXT
+            ? unavailableText()
             : late
-              ? "Сборщик не отвечает, просьба сохранена: обновим, как только он проснётся"
-              : PHASE_TEXT.queued
+              ? t("sync.collectorSilent")
+              : phaseText("queued")
           : null;
 
   return (
@@ -577,20 +569,20 @@ export function SyncButton({
         <span>
           {error ? (
             <span className="text-destructive" title={error}>
-              Не удалось прочитать состояние
+              {t("sync.stateError")}
             </span>
           ) : waitText !== null ? (
             waitText +
             platformTail(askedPlatform) +
             askedDepth +
             askedMaxVideos +
-            (askedAllVideos ? ALL_VIDEOS_TEXT : "") +
-            (askedVideos === "ours" ? OURS_ONLY_TEXT : "")
+            (askedAllVideos ? allVideosText() : "") +
+            (askedVideos === "ours" ? oursOnlyText() : "")
           ) : run ? (
             <>
-              Обновлено <LocalTime iso={run.finished_at ?? run.started_at} />
+              {t("sync.updated")} <LocalTime iso={run.finished_at ?? run.started_at} />
               {/* Повтор через час после неудачи по расписанию — его сборщик заводит сам. */}
-              {run.trigger === "retry" && " (повтор)"}
+              {run.trigger === "retry" && ` ${t("sync.retryTail")}`}
               {/* Обход шёл не по всему списку и не по неделе: «· месяц», «· 01.09–09.09».
                   Свежи только видео этого срока, остальные остались от прошлого раза. */}
               {depthTail([run])}
@@ -599,21 +591,20 @@ export function SyncButton({
               {maxVideosTail([run])}
               {/* Обход шёл без текстов комментариев — счётчики свежие, а тексты остались
                   от прошлого раза, и знать об этом надо до того, как их станут читать. */}
-              {run.comments === false && " · без комментариев"}
+              {run.comments === false && ` · ${t("sync.noCommentsTail")}`}
               {/* Наоборот: обход шёл и по не нашим видео — тексты у них свежие, а это редкость. */}
-              {run.all_videos && ALL_VIDEOS_TEXT}
+              {run.all_videos && allVideosText()}
               {/* Обход шёл сокращённым охватом: не наши и не жёлтые видео он не смотрел,
                   и их счётчики остались от прошлого раза (миграция v17). */}
-              {run.videos === "ours" && OURS_ONLY_TEXT}
+              {run.videos === "ours" && oursOnlyText()}
               {run.ok === false && (
                 <span className="text-destructive" title={run.error ?? undefined}>
-                  {" "}
-                  · ошибка
+                  {` · ${t("sync.errorTail")}`}
                 </span>
               )}
             </>
           ) : (
-            "ещё не обновлялось"
+            t("sync.never")
           )}
         </span>
       </div>
@@ -621,25 +612,32 @@ export function SyncButton({
         <PopoverTrigger asChild>
           <Button variant="outline" size="sm" disabled={sending || waiting}>
             <RefreshCwIcon data-icon="inline-start" className={cn(phase === "running" && "animate-spin")} />
-            Обновить
+            {t("sync.button")}
           </Button>
         </PopoverTrigger>
         <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)]">
           {/* Кого обходить. Блока «Только эта страница» нет, когда страница и так показывает
               всех: выбирать не из чего. */}
           {hasPageRow && (
-            <SyncGroup title="Кого">
+            <SyncGroup title={t("sync.groupWho")}>
               <SyncChoiceBlock
-                label="Все креаторы"
-                hint="все, кого видно"
+                label={t("sync.allCreators")}
+                hint={t("sync.allCreatorsHint")}
                 selected={target === "all"}
                 disabled={allBlocked}
                 title={allBlocked && emptyNote ? emptyNote : undefined}
                 onClick={() => setTarget("all")}
               />
               <SyncChoiceBlock
-                label={scope !== null ? "Только этот креатор" : "Только эта страница"}
-                hint={scope !== null ? "без остальных" : `${pageCount} ${creatorsWord(pageCount)} на странице`}
+                label={scope !== null ? t("sync.thisCreator") : t("sync.thisPage")}
+                hint={
+                  scope !== null
+                    ? t("sync.thisCreatorHint")
+                    : t("sync.thisPageHint", {
+                        n: pageCount,
+                        creators: t.plural("creators", pageCount),
+                      })
+                }
                 selected={target === "page"}
                 disabled={pageBlocked}
                 title={pageBlocked && emptyNote ? emptyNote : undefined}
@@ -650,12 +648,12 @@ export function SyncButton({
           {/* Какую площадку обходить. Общий переключатель страниц попап не двигает. На карточке
               креатора группы нет (владелец, 2026-09-09): площадка у него одна, выбирать нечего. */}
           {scope === null && (
-          <SyncGroup title="Площадка" cols={3}>
+          <SyncGroup title={t("sync.groupPlatform")} cols={3}>
             {PLATFORM_KEYS.map((key) => (
               <SyncChoiceBlock
                 key={key}
-                label={PLATFORM_FILTER_LABELS[key]}
-                hint={PLATFORM_HINTS[key]}
+                label={platformFilterLabel(key)}
+                hint={t(PLATFORM_HINTS[key])}
                 icon={
                   key === "all" ? undefined : (
                     <PlatformIcon
@@ -680,10 +678,10 @@ export function SyncButton({
               у выбранной площадки некого обходить. */}
           {creatorsError ? (
             <p className="text-xs leading-snug text-destructive" title={creatorsError}>
-              Не удалось прочитать список креаторов — площадку выбрать не из чего
+              {t("sync.creatorsListError")}
             </p>
           ) : loadingCreators && !ready ? (
-            <p className="text-xs leading-snug text-muted-foreground">Читаем список креаторов…</p>
+            <p className="text-xs leading-snug text-muted-foreground">{t("sync.readingCreators")}</p>
           ) : emptyNote ? (
             <p className="text-xs leading-snug text-muted-foreground">{emptyNote}</p>
           ) : null}
@@ -691,13 +689,15 @@ export function SyncButton({
               строки состояния. */}
           <SyncSummary
             parts={[
-              target === "all" ? "Все креаторы" : `Эта страница (${pageCount})`,
-              platform === "all" ? null : PLATFORM_FILTER_LABELS[platform],
+              target === "all"
+                ? t("sync.allCreators")
+                : t("sync.summaryPage", { n: pageCount }),
+              platform === "all" ? null : platformFilterLabel(platform),
               depthWord(depth, range.range?.from, range.range?.to),
               maxVideosWord(maxVideos),
-              VIDEOS_WORD[pick.videos],
+              videosWord(pick.videos),
               pickWords(pick),
-              pick.allVideos && ALL_VIDEOS_WORD,
+              pick.allVideos && allVideosWord(),
             ]}
           />
           <SyncLaunchButton

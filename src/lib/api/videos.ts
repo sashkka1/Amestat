@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/client";
+import { tr } from "@/lib/i18n";
 import { stateColumns, type VideoState } from "@/lib/video-state";
 import { fail, type ActionResult } from "./result";
 
@@ -6,7 +7,7 @@ import { fail, type ActionResult } from "./result";
 // колонки разом — `ours` и `watch` порознь смысла не имеют, и «наше» обязано гасить жёлтое.
 export async function setVideoState(videoId: string, state: VideoState): Promise<ActionResult> {
   const { error } = await createClient().from("videos").update(stateColumns(state)).eq("id", videoId);
-  if (error) return fail(`Не удалось отметить видео: ${error.message}`);
+  if (error) return fail(tr("api.videoStateFailed", { message: error.message }));
   return { ok: true, data: undefined };
 }
 
@@ -18,6 +19,6 @@ export async function markCreatorVideosOurs(creatorId: string): Promise<ActionRe
     .from("videos")
     .update({ ours: true, watch: false })
     .eq("creator_id", creatorId);
-  if (error) return fail(`Видео не отмечены нашими: ${error.message}`);
+  if (error) return fail(tr("api.videoMarkOursFailed", { message: error.message }));
   return { ok: true, data: undefined };
 }

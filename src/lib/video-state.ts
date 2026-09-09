@@ -6,6 +6,8 @@
 // 🔴 `watch` имеет смысл только при `ours = false`. Свести пару к состоянию можно только
 // здесь: разъехавшиеся правила дали бы у таблицы один цвет, у карточки — другой.
 
+import { tr } from "@/lib/i18n";
+
 export type VideoState = "none" | "watch" | "ours";
 
 // Порядок сегментов переключателя — от «не наше» к «наше», слева направо.
@@ -20,25 +22,28 @@ export function stateColumns(state: VideoState): { ours: boolean; watch: boolean
   return { ours: state === "ours", watch: state === "watch" };
 }
 
-const LABELS: Record<VideoState, string> = {
-  none: "Не наше",
-  watch: "Смотрим",
-  ours: "Наше",
+const LABEL_KEY: Record<VideoState, "videoState.none" | "videoState.watch" | "videoState.ours"> = {
+  none: "videoState.none",
+  watch: "videoState.watch",
+  ours: "videoState.ours",
 };
 
 export function stateLabel(state: VideoState): string {
-  return LABELS[state];
+  return tr(LABEL_KEY[state]);
 }
 
 // Подсказка сегмента: что случится по нажатию. Одни слова на таблицу и карточку видео.
-const HINTS: Record<VideoState, string> = {
-  none: "Не наше: в списке есть, подробности не снимаем",
-  watch: "Смотрим: не наше, но историю счётчиков собираем",
-  ours: "Наше: снимаем подробности, тексты комментариев",
+const HINT_KEY: Record<
+  VideoState,
+  "videoState.hintNone" | "videoState.hintWatch" | "videoState.hintOurs"
+> = {
+  none: "videoState.hintNone",
+  watch: "videoState.hintWatch",
+  ours: "videoState.hintOurs",
 };
 
 export function stateHint(state: VideoState): string {
-  return HINTS[state];
+  return tr(HINT_KEY[state]);
 }
 
 // Цвет строки таблицы. Зелёная полоса — наше, жёлтая — смотрим, приглушено — не наше.

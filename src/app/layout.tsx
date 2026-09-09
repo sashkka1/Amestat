@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { LangHtml } from "@/components/lang-switch";
 import { Toaster } from "@/components/ui/sonner";
+import { ru } from "@/lib/i18n/ru";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -13,9 +15,12 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+// ⚠️ `metadata` и `<html lang>` статика печатает при сборке, когда языка ещё нет: там всегда
+// русский, основной язык сайта. Выбранный язык проставляет `LangHtml` уже в браузере, а
+// заголовок вкладки — `useDocumentTitle` в `components/page.tsx` и на отдельных страницах.
 export const metadata: Metadata = {
-  title: "Amestat",
-  description: "Статистика креаторов",
+  title: ru.meta.title,
+  description: ru.meta.description,
 };
 
 export const viewport: Viewport = {
@@ -30,6 +35,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-background text-foreground">
+        <LangHtml />
         {children}
         <Toaster position="top-center" richColors />
       </body>

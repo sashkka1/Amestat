@@ -6,6 +6,7 @@ import { PlatformChip } from "@/components/platform";
 import { Button } from "@/components/ui/button";
 import { fmtTimeSec } from "@/lib/format";
 import { SYNC_LOG_PAGE, latestRun, syncLog } from "@/lib/api/sync";
+import { useT } from "@/lib/i18n";
 import { useIsAdmin } from "@/lib/profile-context";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -44,6 +45,7 @@ function mergeRows(prev: SyncLogRow[], page: SyncLogRow[]): SyncLogRow[] {
 }
 
 function AdminSyncLog({ scope }: { scope: string | null }) {
+  const t = useT();
   // Свёрнута по умолчанию: панель нужна в момент обновления, а не всё время. Положение
   // запоминается между заходами (localStorage), как площадка страниц.
   const { open, toggle } = useSyncLogOpen();
@@ -232,24 +234,24 @@ function AdminSyncLog({ scope }: { scope: string | null }) {
   const canLoadAll = more && run !== null && run.finished_at !== null;
 
   const head = runError
-    ? "не удалось прочитать обход"
+    ? t("syncLog.headError")
     : run
       ? runHeadText(run)
       : ready
-        ? "обходов ещё не было"
-        : "…";
+        ? t("syncLog.headNoRuns")
+        : t("common.ellipsis");
 
   // Что написать вместо строк журнала. Ошибка чтения обхода важнее пустоты: «обходов ещё не
   // было» при неудачном запросе — прямая неправда.
   const emptyText = runError
-    ? "Не удалось прочитать, какой обход показывать."
+    ? t("syncLog.emptyRunError")
     : !ready
-      ? "Читаем…"
+      ? t("common.reading")
       : run === null
-        ? "Обходов ещё не было — журналу неоткуда взяться."
+        ? t("syncLog.emptyNoRuns")
         : loading
-          ? "Читаем журнал…"
-          : "Сборщик пока ничего не записал.";
+          ? t("syncLog.emptyReadingLog")
+          : t("syncLog.emptyNothing");
 
   return (
     <section className="overflow-hidden rounded-xl bg-card text-sm text-card-foreground ring-1 ring-foreground/10">
@@ -262,7 +264,7 @@ function AdminSyncLog({ scope }: { scope: string | null }) {
         <ChevronDownIcon
           className={cn("size-4 shrink-0 text-muted-foreground transition-transform", !open && "-rotate-90")}
         />
-        <span className="shrink-0 font-medium">Ход обновления</span>
+        <span className="shrink-0 font-medium">{t("syncLog.title")}</span>
         <span
           className={cn(
             "min-w-0 flex-1 truncate text-right text-xs",
@@ -278,7 +280,7 @@ function AdminSyncLog({ scope }: { scope: string | null }) {
         <div className="flex flex-col gap-2 px-4 pb-3">
           {logError && (
             <p className="text-xs leading-snug text-destructive" title={logError}>
-              Не удалось прочитать журнал обхода
+              {t("syncLog.logError")}
             </p>
           )}
           <div
@@ -305,7 +307,7 @@ function AdminSyncLog({ scope }: { scope: string | null }) {
                 disabled={loadingAll}
                 onClick={() => void loadLog(true)}
               >
-                {loadingAll ? "Читаем…" : "Показать журнал целиком"}
+                {loadingAll ? t("common.reading") : t("syncLog.showAll")}
               </Button>
             </div>
           )}

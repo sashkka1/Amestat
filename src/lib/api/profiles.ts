@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/client";
+import { tr } from "@/lib/i18n";
 import type { Profile } from "@/lib/types";
 import { fail, type ActionResult } from "./result";
 
@@ -45,18 +46,18 @@ export async function updateDisplayName(userId: string, displayName: string): Pr
     .from("profiles")
     .update({ display_name: displayName.trim() })
     .eq("user_id", userId);
-  if (error) return fail(`Не удалось сохранить имя: ${error.message}`);
+  if (error) return fail(tr("api.profileNameFailed", { message: error.message }));
   return { ok: true, data: undefined };
 }
 
 // Пароль менеджеру ставит база: старого админ не видит, новый уходит в auth.users.
 export async function setManagerPassword(userId: string, password: string): Promise<ActionResult> {
-  if (password.length < 8) return fail("Пароль короче 8 символов");
+  if (password.length < 8) return fail(tr("api.authPasswordShort"));
   const { error } = await createClient().rpc("admin_set_password", {
     p_user: userId,
     p_password: password,
   });
-  if (error) return fail(`Не удалось сменить пароль: ${error.message}`);
+  if (error) return fail(tr("api.profilePasswordFailed", { message: error.message }));
   return { ok: true, data: undefined };
 }
 
@@ -64,7 +65,7 @@ export async function setManagerPassword(userId: string, password: string): Prom
 // остаётся, но без профиля на сайт не попадёт — увидит «Доступ не выдан».
 export async function deleteManager(userId: string): Promise<ActionResult> {
   const { error } = await createClient().from("profiles").delete().eq("user_id", userId);
-  if (error) return fail(`Не удалось удалить менеджера: ${error.message}`);
+  if (error) return fail(tr("api.profileDeleteFailed", { message: error.message }));
   return { ok: true, data: undefined };
 }
 

@@ -1,15 +1,24 @@
 // Срок → границы p_from/p_to. Считается в часовом поясе того, кто вызывает
 // (в браузере — местный), поэтому «сегодня» — с начала местных суток.
 
+import { tr } from "@/lib/i18n";
+
 export type PeriodKey = "today" | "7d" | "30d" | "all" | "custom";
 
-export const PERIOD_LABELS: Record<PeriodKey, string> = {
-  today: "Сегодня",
-  "7d": "7 дней",
-  "30d": "30 дней",
-  all: "Всё время",
-  custom: "Свой срок",
+const LABEL_KEY: Record<
+  PeriodKey,
+  "period.today" | "period.7d" | "period.30d" | "period.all" | "period.custom"
+> = {
+  today: "period.today",
+  "7d": "period.7d",
+  "30d": "period.30d",
+  all: "period.all",
+  custom: "period.custom",
 };
+
+export function periodLabel(key: PeriodKey): string {
+  return tr(LABEL_KEY[key]);
+}
 
 export type PeriodRange = { from: Date; to: Date };
 

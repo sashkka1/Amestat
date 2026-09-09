@@ -2,6 +2,7 @@
 
 import { useCallback, useSyncExternalStore } from "react";
 import { fmtTime } from "@/lib/format";
+import { getLang, localeOf, tr } from "@/lib/i18n";
 import { triggerText } from "@/lib/sync-phase";
 import type { Platform, SyncLogRow, SyncRun } from "@/lib/types";
 
@@ -80,11 +81,12 @@ export function splitPlatform(text: string): { platform: Platform | null; text: 
 
 // Единицы аккаунта: у EnsembleData — свои единицы в день, у Apify — доллары в месяц.
 function unitsAmount(value: number, kind: string | null): string {
+  const locale = localeOf(getLang());
   if (kind === "usd") {
-    return `$${value.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return `$${value.toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   }
   const n = Number.isInteger(value) ? value : Math.round(value * 100) / 100;
-  return `${n.toLocaleString("ru-RU")} ед.`;
+  return tr("syncLog.units", { n: n.toLocaleString(locale) });
 }
 
 // Хвост строки журнала про деньги: «ED#1 · −12 ед. · осталось 340». Ради него и заведены
@@ -94,7 +96,8 @@ export function unitsText(row: SyncLogRow): string | null {
   const bits: string[] = [];
   if (row.account) bits.push(row.account);
   if (row.units_spent !== null) bits.push(`−${unitsAmount(row.units_spent, row.units_kind)}`);
-  if (row.units_left !== null) bits.push(`осталось ${unitsAmount(row.units_left, row.units_kind)}`);
+  if (row.units_left !== null)
+    bits.push(tr("syncLog.left", { amount: unitsAmount(row.units_left, row.units_kind) }));
   return bits.length > 0 ? bits.join(" · ") : null;
 }
 
@@ -106,18 +109,20 @@ export function runHeadText(run: SyncRun): string {
   const trigger = triggerText([run]);
   if (trigger) parts.push(trigger);
   if (run.finished_at) {
-    const bad = run.creators_failed > 0 ? `, с ошибкой ${run.creators_failed}` : "";
-    parts.push(`завершён ${fmtTime(run.finished_at)}, собрано ${run.creators_done}${bad}`);
+    const bad = run.creators_failed > 0 ? tr("syncLog.withErrors", { n: run.creators_failed }) : "";
+    parts.push(
+      tr("syncLog.finished", { time: fmtTime(run.finished_at), done: run.creators_done }) + bad,
+    );
     return parts.join(" · ");
   }
   // Список ещё не отобран — «N из M» сказать нечем, а время начала уже есть.
   if (run.creators_total !== null) {
     const done = Math.min(run.creators_done + run.creators_failed, run.creators_total);
-    parts.push(`${done} из ${run.creators_total}`);
+    parts.push(tr("syncLog.progress", { done, total: run.creators_total }));
   }
   // Строка может быть и не хэндлом: сборщик пишет сюда «пауза TikTok до 13:05». Показываем
   // как есть — это и есть ответ на вопрос «что сейчас происходит».
   if (run.current_handles.length > 0) parts.push(run.current_handles.join(" · "));
-  parts.push(`с ${fmtTime(run.started_at)}`);
+  parts.push(tr("syncLog.since", { time: fmtTime(run.started_at) }));
   return parts.join(" · ");
 }

@@ -15,6 +15,7 @@ import { deleteInvite, daysAgoText, inviteState, listInvites } from "@/lib/api/i
 import { listManagers, listProfiles } from "@/lib/api/profiles";
 import { listCreatorManagers } from "@/lib/queries";
 import { fmtDate, fmtNum } from "@/lib/format";
+import { useT } from "@/lib/i18n";
 import { useLoader } from "@/lib/use-loader";
 import type { CreatorManager, Invite, Profile } from "@/lib/types";
 
@@ -44,6 +45,7 @@ export default function ManagersPage() {
 }
 
 function ManagersScreen() {
+  const t = useT();
   const { data, error, loading, reload } = useLoader(loadData, []);
 
   const counts = useMemo(() => {
@@ -59,8 +61,8 @@ function ManagersScreen() {
 
   return (
     <Page
-      title="Креатор-менеджеры"
-      subtitle="Кто ведёт креаторов и по каким ссылкам зарегистрировался"
+      title={t("managers.title")}
+      subtitle={t("managers.subtitle")}
       actions={<InviteDialog onCreated={reload} />}
     >
       {error ? (
@@ -70,17 +72,27 @@ function ManagersScreen() {
       ) : data ? (
         <>
           <Panel>
-            <PanelHead title="Менеджеры" subtitle={`${fmtNum(data.managers.length)} человек`} />
+            <PanelHead
+              title={t("managers.panelTitle")}
+              subtitle={t("managers.count", {
+                n: fmtNum(data.managers.length),
+                people: t.plural("people", data.managers.length),
+              })}
+            />
             {data.managers.length === 0 ? (
-              <Empty>Менеджеров пока нет — выпустите ссылку регистрации.</Empty>
+              <Empty>{t("managers.empty")}</Empty>
             ) : (
               <Table className="text-[13px]">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="text-muted-foreground">Логин</TableHead>
-                    <TableHead className="text-muted-foreground">Имя</TableHead>
-                    <TableHead className="text-right text-muted-foreground">Креаторов</TableHead>
-                    <TableHead className="text-right text-muted-foreground">Зарегистрирован</TableHead>
+                    <TableHead className="text-muted-foreground">{t("table.login")}</TableHead>
+                    <TableHead className="text-muted-foreground">{t("table.name")}</TableHead>
+                    <TableHead className="text-right text-muted-foreground">
+                      {t("managers.creatorsCount")}
+                    </TableHead>
+                    <TableHead className="text-right text-muted-foreground">
+                      {t("managers.registered")}
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -123,6 +135,7 @@ function InvitesPanel({
   loginById: Map<string, string>;
   onChanged: () => void;
 }) {
+  const t = useT();
   const [busyId, setBusyId] = useState<string | null>(null);
 
   async function remove(id: string) {
@@ -133,22 +146,25 @@ function InvitesPanel({
       toast.error(res.error);
       return;
     }
-    toast.success("Ссылка удалена");
+    toast.success(t("invites.deleted"));
     onChanged();
   }
 
   return (
     <Panel>
-      <PanelHead title="Журнал ссылок" subtitle={`${fmtNum(invites.length)} выпущено`} />
+      <PanelHead
+        title={t("invites.panelTitle")}
+        subtitle={t("invites.issued", { n: fmtNum(invites.length) })}
+      />
       {invites.length === 0 ? (
-        <Empty>Ссылок пока не выпускали.</Empty>
+        <Empty>{t("invites.empty")}</Empty>
       ) : (
         <Table className="text-[13px]">
           <TableHeader>
             <TableRow>
-              <TableHead className="text-muted-foreground">Заметка</TableHead>
-              <TableHead className="text-muted-foreground">Когда отправлена</TableHead>
-              <TableHead className="text-muted-foreground">Состояние</TableHead>
+              <TableHead className="text-muted-foreground">{t("invites.note")}</TableHead>
+              <TableHead className="text-muted-foreground">{t("invites.sentWhen")}</TableHead>
+              <TableHead className="text-muted-foreground">{t("table.status")}</TableHead>
               <TableHead className="w-10" />
             </TableRow>
           </TableHeader>
@@ -157,17 +173,23 @@ function InvitesPanel({
               const state = inviteState(inv, loginById);
               return (
                 <TableRow key={inv.id}>
-                  <TableCell>{inv.note.trim() || <span className="text-muted-foreground">без заметки</span>}</TableCell>
+                  <TableCell>
+                    {inv.note.trim() || (
+                      <span className="text-muted-foreground">{t("invites.noNote")}</span>
+                    )}
+                  </TableCell>
                   <TableCell className="text-muted-foreground">{daysAgoText(inv.created_at)}</TableCell>
                   <TableCell>
                     {state.kind === "used" ? (
                       <span className="text-[var(--up)]">
-                        использована: {state.login}, {fmtDate(state.at)}
+                        {t("invites.used", { login: state.login, date: fmtDate(state.at) })}
                       </span>
                     ) : state.kind === "expired" ? (
-                      <span className="text-muted-foreground">истекла {fmtDate(inv.expires_at)}</span>
+                      <span className="text-muted-foreground">
+                        {t("invites.expired", { date: fmtDate(inv.expires_at) })}
+                      </span>
                     ) : (
-                      <span>не использована, годна до {fmtDate(inv.expires_at)}</span>
+                      <span>{t("invites.open", { date: fmtDate(inv.expires_at) })}</span>
                     )}
                   </TableCell>
                   <TableCell>
@@ -175,8 +197,8 @@ function InvitesPanel({
                       variant="ghost"
                       size="icon-sm"
                       className="text-destructive"
-                      title="Удалить ссылку"
-                      aria-label="Удалить ссылку"
+                      title={t("invites.deleteTitle")}
+                      aria-label={t("invites.deleteTitle")}
                       disabled={busyId === inv.id}
                       onClick={() => void remove(inv.id)}
                     >

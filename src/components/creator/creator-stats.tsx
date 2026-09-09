@@ -21,6 +21,7 @@ import { setVideoState } from "@/lib/api/videos";
 import { videoState, type VideoState } from "@/lib/video-state";
 import { median, sum } from "@/lib/stats";
 import { changeVs, fmtCompact, fmtNum } from "@/lib/format";
+import { useT } from "@/lib/i18n";
 import { publishedIn } from "@/lib/video-rows";
 import type { PeriodRange } from "@/lib/period";
 import type { PeriodState } from "@/lib/use-period";
@@ -95,6 +96,7 @@ export function CreatorStats({
   // Меняется снаружи (креатора отредактировали) — данные перечитываются.
   refreshKey: number;
 }) {
+  const t = useT();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [failed, setFailed] = useState<{ key: string; error: string } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -223,7 +225,7 @@ export function CreatorStats({
     });
 
   if (range === null) {
-    return <p className="text-sm text-muted-foreground">Укажите обе даты: начало не позже конца.</p>;
+    return <p className="text-sm text-muted-foreground">{t("creatorStats.needBothDates")}</p>;
   }
   if (error) return <PageError error={error} />;
   if (!loaded || !summary) return <StatsSkeleton />;
@@ -237,7 +239,7 @@ export function CreatorStats({
         <div className="flex flex-col gap-4">
           <Tile
             icon={UsersIcon}
-            label="Подписчики"
+            label={t("metric.followers")}
             value={fmtCompact(loaded.followersNow)}
             title={fmtNum(loaded.followersNow)}
             hint={
@@ -246,26 +248,29 @@ export function CreatorStats({
                     loaded.followersNow ?? 0,
                     (loaded.followersNow ?? 0) - summary.followersDelta,
                   ).text
-                : "нет снимков за срок"
+                : t("creatorStats.noSnapshots")
             }
           />
           <Tile
             icon={SigmaIcon}
-            label="Медиана просмотров за срок"
+            label={t("creatorStats.medianViews")}
             value={fmtCompact(summary.medians.views)}
             title={fmtNum(summary.medians.views)}
-            hint={`видео в счёт: ${summary.activeCount}`}
+            hint={t("creatorStats.videosCounted", { n: summary.activeCount })}
           />
           <Tile
             icon={VideoIcon}
-            label="С подробностями"
+            label={t("creatorStats.detailed")}
             value={fmtNum(summary.detailedCount)}
-            hint={`всего собрано: ${loaded.rows.length} · смотрим: ${summary.watchCount}`}
+            hint={t("creatorStats.collectedWatch", {
+              total: loaded.rows.length,
+              watch: summary.watchCount,
+            })}
           />
         </div>
       </div>
 
-      <TopPosts posts={posts} title="Лучшие видео за срок" showCreator={false} />
+      <TopPosts posts={posts} title={t("creatorStats.topVideos")} showCreator={false} />
 
       {selected && (
         <VideoPanel
@@ -281,7 +286,7 @@ export function CreatorStats({
 
       <VideosTable
         rows={tableRows}
-        title="Видео"
+        title={t("metric.videos")}
         showCreator={false}
         onSetState={(id, next) => void changeState(id, next, stateOf(id))}
         onRowClick={(id) => setSelectedId((prev) => (prev === id ? null : id))}

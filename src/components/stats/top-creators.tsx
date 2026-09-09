@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Panel, PanelHead, Empty } from "./panel";
 import { SortHead, nextSort, type SortDir } from "./sort-head";
 import { fmtNum } from "@/lib/format";
+import { useT } from "@/lib/i18n";
 import type { Creator, CreatorOverview } from "@/lib/types";
 
 export type CreatorRow = {
@@ -41,12 +42,13 @@ export function buildCreatorRows(creators: Creator[], overview: CreatorOverview[
 export function TopCreators({
   rows,
   limit,
-  countLabel = "Все креаторы",
+  countLabel,
 }: {
   rows: CreatorRow[];
   limit?: number;
   countLabel?: string;
 }) {
+  const t = useT();
   const [sortKey, setSortKey] = useState<Key>("views");
   const [dir, setDir] = useState<SortDir>("desc");
 
@@ -64,20 +66,23 @@ export function TopCreators({
 
   return (
     <Panel>
-      <PanelHead title="Лучшие креаторы" subtitle={`${countLabel}: ${rows.length}`} />
+      <PanelHead
+        title={t("topCreators.title")}
+        subtitle={`${countLabel ?? t("topCreators.countAll")}: ${rows.length}`}
+      />
       {sorted.length === 0 ? (
-        <Empty>Креаторов пока нет.</Empty>
+        <Empty>{t("topCreators.empty")}</Empty>
       ) : (
         <Table className="text-[13px]">
           <TableHeader>
             <TableRow>
-              <TableHead className="w-12 text-muted-foreground">Ранг</TableHead>
-              <TableHead className="text-muted-foreground">Креатор</TableHead>
-              <TableHead className="text-muted-foreground">Платформа</TableHead>
-              <SortHead k="views" label="Просмотры" sortKey={sortKey} dir={dir} onSort={onSort} />
-              <SortHead k="engagement" label="Вовлечённость" sortKey={sortKey} dir={dir} onSort={onSort} />
-              <SortHead k="videos" label="Видео" sortKey={sortKey} dir={dir} onSort={onSort} />
-              <SortHead k="avgViews" label="Ср. просмотров/видео" sortKey={sortKey} dir={dir} onSort={onSort} />
+              <TableHead className="w-12 text-muted-foreground">{t("topCreators.rank")}</TableHead>
+              <TableHead className="text-muted-foreground">{t("table.creator")}</TableHead>
+              <TableHead className="text-muted-foreground">{t("topCreators.platform")}</TableHead>
+              <SortHead k="views" label={t("metric.views")} sortKey={sortKey} dir={dir} onSort={onSort} />
+              <SortHead k="engagement" label={t("metric.engagement")} sortKey={sortKey} dir={dir} onSort={onSort} />
+              <SortHead k="videos" label={t("metric.videos")} sortKey={sortKey} dir={dir} onSort={onSort} />
+              <SortHead k="avgViews" label={t("topCreators.avgViews")} sortKey={sortKey} dir={dir} onSort={onSort} />
             </TableRow>
           </TableHeader>
           <TableBody>

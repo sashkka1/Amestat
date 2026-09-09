@@ -10,6 +10,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { changeVs, fmtCompact, fmtNum } from "@/lib/format";
+import { tr } from "@/lib/i18n";
 import type { Totals } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
@@ -58,11 +59,11 @@ function Tile({ kpi }: { kpi: Kpi }) {
 // Шесть счётчиков сводки в том порядке, в каком они стоят на макете.
 export function totalsToKpis(now: Totals, prev: Totals): Kpi[] {
   return [
-    { key: "views", label: "Просмотры", icon: EyeIcon, value: now.views, prev: prev.views },
-    { key: "eng", label: "Вовлечённость", icon: FlameIcon, value: now.engagement, prev: prev.engagement },
-    { key: "likes", label: "Лайки", icon: HeartIcon, value: now.likes, prev: prev.likes },
-    { key: "comments", label: "Комментарии", icon: MessageCircleIcon, value: now.comments, prev: prev.comments },
-    { key: "shares", label: "Репосты", icon: Share2Icon, value: now.shares, prev: prev.shares },
-    { key: "videos", label: "Видео", icon: VideoIcon, value: now.videos, prev: prev.videos },
+    { key: "views", label: tr("metric.views"), icon: EyeIcon, value: now.views, prev: prev.views },
+    { key: "eng", label: tr("metric.engagement"), icon: FlameIcon, value: now.engagement, prev: prev.engagement },
+    { key: "likes", label: tr("metric.likes"), icon: HeartIcon, value: now.likes, prev: prev.likes },
+    { key: "comments", label: tr("metric.comments"), icon: MessageCircleIcon, value: now.comments, prev: prev.comments },
+    { key: "shares", label: tr("metric.shares"), icon: Share2Icon, value: now.shares, prev: prev.shares },
+    { key: "videos", label: tr("metric.videos"), icon: VideoIcon, value: now.videos, prev: prev.videos },
   ];
 }

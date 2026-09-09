@@ -2,8 +2,11 @@
 
 import { Header } from "@/components/header";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useDocumentTitle, useT } from "@/lib/i18n";
 
 // Общая раскладка внутренних страниц: шапка со вкладками, строка заголовка, содержимое.
+// Заголовок вкладки браузера ставится отсюда же: статика печатает его заранее и по-русски,
+// поэтому язык проставляется уже в браузере.
 export function Page({
   title,
   subtitle,
@@ -15,6 +18,7 @@ export function Page({
   actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
+  useDocumentTitle(title);
   return (
     <>
       <Header />
@@ -33,9 +37,10 @@ export function Page({
 }
 
 export function PageError({ error }: { error: string }) {
+  const t = useT();
   return (
     <p className="rounded-xl border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
-      Не удалось прочитать базу: {error}
+      {t("page.readError", { error })}
     </p>
   );
 }

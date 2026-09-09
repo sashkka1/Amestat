@@ -27,7 +27,8 @@ import {
   listTags,
 } from "@/lib/queries";
 import { fmtNum } from "@/lib/format";
-import { matchesPlatform, PLATFORM_FILTER_LABELS, usePlatformFilter } from "@/lib/platform-filter";
+import { useT } from "@/lib/i18n";
+import { matchesPlatform, platformFilterLabel, usePlatformFilter } from "@/lib/platform-filter";
 import { useLoader } from "@/lib/use-loader";
 import { useSyncQueue } from "@/lib/use-sync-queue";
 import { useProfile } from "@/lib/profile-context";
@@ -68,6 +69,7 @@ export default function CreatorsPage() {
 type Key = "name" | "followers" | "videos" | "views" | "synced";
 
 function CreatorsScreen() {
+  const t = useT();
   const profile = useProfile();
   const { data, error, loading, reload } = useLoader(loadData, []);
   // Переключатель тот же, что на дашборде: положение общее через localStorage.
@@ -147,7 +149,7 @@ function CreatorsScreen() {
           return (
             (a.creator.display_name || a.creator.handle).localeCompare(
               b.creator.display_name || b.creator.handle,
-              "ru",
+              t.lang,
             ) * sign
           );
         case "followers":
@@ -164,7 +166,8 @@ function CreatorsScreen() {
           );
       }
     });
-  }, [rows, search, selectedTags, sortKey, dir]);
+    // t.lang в списке нарочно: сортировка по имени идёт по правилам выбранного языка.
+  }, [rows, search, selectedTags, sortKey, dir, t.lang]);
 
   function onSort(k: Key) {
     const next = nextSort(sortKey, dir, k);
@@ -183,15 +186,17 @@ function CreatorsScreen() {
 
   return (
     <Page
-      title="Креаторы"
+      title={t("creators.title")}
       subtitle={
         platformFilter === "all"
           ? profile.role === "admin"
-            ? "Все креаторы"
-            : "Привязанные к вам креаторы"
+            ? t("creators.subtitleAllAdmin")
+            : t("creators.subtitleAllManager")
           : profile.role === "admin"
-            ? `Только ${PLATFORM_FILTER_LABELS[platformFilter]}`
-            : `Привязанные к вам креаторы · ${PLATFORM_FILTER_LABELS[platformFilter]}`
+            ? t("creators.subtitleOnly", { platform: platformFilterLabel(platformFilter) })
+            : t("creators.subtitleManagerPlatform", {
+                platform: platformFilterLabel(platformFilter),
+              })
       }
       actions={
         <>
@@ -208,15 +213,17 @@ function CreatorsScreen() {
       ) : data ? (
         <Panel>
           <PanelHead
-            title="Список"
+            title={t("creators.listTitle")}
             subtitle={
               <>
-                {fmtNum(visible.length)} из {fmtNum(rows.length)}
+                {t("creators.countOf", {
+                  shown: fmtNum(visible.length),
+                  total: fmtNum(rows.length),
+                })}
                 {/* Молчать об этом нельзя: строки просто перестали бы показывать очередь. */}
                 {queue.error && (
                   <span className="text-destructive" title={queue.error}>
-                    {" "}
-                    · очередь обновления не читается
+                    {` · ${t("creators.queueUnreadable")}`}
                   </span>
                 )}
               </>
@@ -227,9 +234,9 @@ function CreatorsScreen() {
               <Input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Поиск по имени или @имени"
+                placeholder={t("creators.searchPlaceholder")}
                 className="h-8 pl-8 text-xs"
-                aria-label="Поиск"
+                aria-label={t("common.search")}
               />
             </div>
           </PanelHead>
@@ -248,7 +255,7 @@ function CreatorsScreen() {
               ))}
               {selectedTags.size > 0 && (
                 <Button variant="ghost" size="xs" onClick={() => setSelectedTags(new Set())}>
-                  Сбросить
+                  {t("common.reset")}
                 </Button>
               )}
             </div>
@@ -257,26 +264,35 @@ function CreatorsScreen() {
           {visible.length === 0 ? (
             <Empty>
               {rows.length > 0
-                ? "Никто не подходит под поиск и фильтр."
+                ? t("creators.emptyFiltered")
                 : platformFilter === "all"
-                  ? "Креаторов пока нет."
-                  : "На этой площадке креаторов нет."}
+                  ? t("creators.emptyNone")
+                  : t("creators.emptyPlatform")}
             </Empty>
           ) : (
             <Table className="text-[13px]">
               <TableHeader>
                 <TableRow>
-                  <SortHead k="name" label="Креатор" sortKey={sortKey} dir={dir} onSort={onSort} align="left" />
-                  <TableHead className="text-muted-foreground">Теги</TableHead>
+                  <SortHead
+                    k="name"
+                    label={t("table.creator")}
+                    sortKey={sortKey}
+                    dir={dir}
+                    onSort={onSort}
+                    align="left"
+                  />
+                  <TableHead className="text-muted-foreground">{t("table.tags")}</TableHead>
                   {/* Галочка «все видео наши» — только показать (владелец, 2026-09-08: «пометка,
                       все ли данного креатора мы считаем своими, которую нельзя снимать»);
                       меняется она в карточке креатора. */}
-                  <TableHead className="text-center text-muted-foreground">Все наши</TableHead>
-                  <SortHead k="followers" label="Подписчики" sortKey={sortKey} dir={dir} onSort={onSort} />
-                  <SortHead k="videos" label="Видео" sortKey={sortKey} dir={dir} onSort={onSort} />
-                  <SortHead k="views" label="Просмотры за 7 дней" sortKey={sortKey} dir={dir} onSort={onSort} />
-                  <SortHead k="synced" label="Обновлено" sortKey={sortKey} dir={dir} onSort={onSort} />
-                  <TableHead className="text-muted-foreground">Состояние</TableHead>
+                  <TableHead className="text-center text-muted-foreground">
+                    {t("creators.allOursHead")}
+                  </TableHead>
+                  <SortHead k="followers" label={t("metric.followers")} sortKey={sortKey} dir={dir} onSort={onSort} />
+                  <SortHead k="videos" label={t("metric.videos")} sortKey={sortKey} dir={dir} onSort={onSort} />
+                  <SortHead k="views" label={t("creators.views7d")} sortKey={sortKey} dir={dir} onSort={onSort} />
+                  <SortHead k="synced" label={t("table.updated")} sortKey={sortKey} dir={dir} onSort={onSort} />
+                  <TableHead className="text-muted-foreground">{t("table.status")}</TableHead>
                   <TableHead className="w-10" />
                 </TableRow>
               </TableHeader>
@@ -316,11 +332,15 @@ function CreatorsScreen() {
                         <Checkbox
                           checked={r.creator.all_videos_ours}
                           disabled
-                          aria-label={r.creator.all_videos_ours ? "Все видео наши" : "Наши только помеченные видео"}
+                          aria-label={
+                            r.creator.all_videos_ours
+                              ? t("creators.allOursAria")
+                              : t("creators.someOursAria")
+                          }
                           title={
                             r.creator.all_videos_ours
-                              ? "Все видео креатора считаются нашими"
-                              : "Наши только помеченные видео — меняется в карточке креатора"
+                              ? t("creators.allOursTitle")
+                              : t("creators.someOursTitle")
                           }
                           className="disabled:opacity-100 disabled:cursor-default"
                         />
@@ -357,8 +377,9 @@ function CreatorsScreen() {
 }
 
 function Status({ creator }: { creator: Creator }) {
+  const t = useT();
   if (creator.needs_reconnect) {
-    return <span className="text-[var(--down)]">нужно переподключить</span>;
+    return <span className="text-[var(--down)]">{t("creators.statusNeedsReconnect")}</span>;
   }
   if (creator.sync_error) {
     return (
@@ -367,6 +388,7 @@ function Status({ creator }: { creator: Creator }) {
       </span>
     );
   }
-  if (!creator.last_synced_at) return <span className="text-muted-foreground">ещё не обновлялся</span>;
-  return <span className="text-[var(--up)]">в порядке</span>;
+  if (!creator.last_synced_at)
+    return <span className="text-muted-foreground">{t("creators.statusNever")}</span>;
+  return <span className="text-[var(--up)]">{t("creators.statusOk")}</span>;
 }

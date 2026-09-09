@@ -12,18 +12,19 @@ import {
 } from "recharts";
 import { Panel, PanelHead, Empty } from "./panel";
 import { fmtCompact, fmtDayAxis, fmtNum } from "@/lib/format";
+import { useT, type TKey } from "@/lib/i18n";
 import type { DailyViews } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Mode = "daily" | "total";
 
 const SERIES = [
-  { key: "views", label: "Просмотры", color: "var(--chart-1)" },
-  { key: "likes", label: "Лайки", color: "var(--chart-3)" },
-  { key: "comments", label: "Комментарии", color: "var(--chart-4)" },
-  { key: "shares", label: "Репосты", color: "var(--chart-5)" },
-  { key: "saves", label: "Сохранения", color: "var(--chart-2)" },
-] as const;
+  { key: "views", label: "metric.views", color: "var(--chart-1)" },
+  { key: "likes", label: "metric.likes", color: "var(--chart-3)" },
+  { key: "comments", label: "metric.comments", color: "var(--chart-4)" },
+  { key: "shares", label: "metric.shares", color: "var(--chart-5)" },
+  { key: "saves", label: "metric.saves", color: "var(--chart-2)" },
+] as const satisfies readonly { key: string; label: TKey; color: string }[];
 type SeriesKey = (typeof SERIES)[number]["key"];
 
 // «Динамика»: пять рядов по дням (миграция v4). База отдаёт накопительные счётчики на
@@ -32,12 +33,13 @@ type SeriesKey = (typeof SERIES)[number]["key"];
 export function PerformanceChart({
   data,
   right,
-  title = "Динамика",
+  title,
 }: {
   data: DailyViews[];
   right?: React.ReactNode;
   title?: string;
 }) {
+  const t = useT();
   const [mode, setMode] = useState<Mode>("daily");
   const [hidden, setHidden] = useState<Set<SeriesKey>>(() => new Set());
 
@@ -65,14 +67,14 @@ export function PerformanceChart({
 
   return (
     <Panel>
-      <PanelHead title={title}>
+      <PanelHead title={title ?? t("chart.title")}>
         {right}
         <div className="flex items-center gap-0.5 rounded-lg border p-0.5 text-xs">
           <ModeButton active={mode === "daily"} onClick={() => setMode("daily")}>
-            По дням
+            {t("chart.byDay")}
           </ModeButton>
           <ModeButton active={mode === "total"} onClick={() => setMode("total")}>
-            Накопительно
+            {t("chart.cumulative")}
           </ModeButton>
         </div>
       </PanelHead>
@@ -91,14 +93,14 @@ export function PerformanceChart({
               )}
             >
               <span className="size-2 rounded-full" style={{ background: s.color }} />
-              {s.label}
+              {t(s.label)}
             </button>
           );
         })}
       </div>
 
       {rows.length === 0 ? (
-        <Empty>За этот срок данных нет.</Empty>
+        <Empty>{t("chart.empty")}</Empty>
       ) : (
         <div className="h-64 w-full px-2 pb-3 sm:h-72">
           <ResponsiveContainer width="100%" height="100%">
@@ -143,7 +145,7 @@ export function PerformanceChart({
                   key={s.key}
                   type="monotone"
                   dataKey={s.key}
-                  name={s.label}
+                  name={t(s.label)}
                   stackId="1"
                   stroke={s.color}
                   strokeWidth={1.5}

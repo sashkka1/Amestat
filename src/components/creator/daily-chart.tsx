@@ -10,11 +10,17 @@ import {
   YAxis,
 } from "recharts";
 import { fmtCompact, fmtDayAxis, fmtNum } from "@/lib/format";
+import { getLang, localeOf, useT } from "@/lib/i18n";
 
 // История одного видео: просмотры по снимкам. Ряды по дням рисует PerformanceChart.
 export function VideoHistoryChart({ data }: { data: { t: string; views: number }[] }) {
+  const t = useT();
   if (data.length < 2) {
-    return <p className="py-6 text-center text-xs text-muted-foreground">Снимков пока мало для графика.</p>;
+    return (
+      <p className="py-6 text-center text-xs text-muted-foreground">
+        {t("videoPanel.fewSnapshots")}
+      </p>
+    );
   }
   return (
     <div className="h-36 w-full">
@@ -37,8 +43,8 @@ export function VideoHistoryChart({ data }: { data: { t: string; views: number }
             width={44}
           />
           <Tooltip
-            formatter={(v) => [fmtNum(Number(v)), "Просмотры"]}
-            labelFormatter={(l) => new Date(String(l)).toLocaleString("ru-RU")}
+            formatter={(v) => [fmtNum(Number(v)), t("metric.views")]}
+            labelFormatter={(l) => new Date(String(l)).toLocaleString(localeOf(getLang()))}
             contentStyle={{
               borderRadius: 10,
               border: "1px solid var(--border)",

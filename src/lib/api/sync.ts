@@ -7,7 +7,8 @@ import type {
   SyncRequestInsert,
   SyncRun,
 } from "@/lib/types";
-import { RANGE_REQUIRED } from "@/lib/sync-phase";
+import { rangeRequired } from "@/lib/sync-phase";
+import { tr } from "@/lib/i18n";
 import { fail, type ActionResult } from "./result";
 
 // Мост «сайт → сборщик дома». Сервера нет: сайт кладёт просьбу в sync_requests, сборщик
@@ -36,16 +37,16 @@ export async function requestSync({
   pick: SyncPick;
   maxVideos: number | null;
 }): Promise<ActionResult<{ ids: number[] }>> {
-  if (creatorIds !== null && creatorIds.length === 0) return fail("На этой странице нет креаторов");
+  if (creatorIds !== null && creatorIds.length === 0) return fail(tr("api.syncNoCreatorsOnPage"));
   // Без границ просьбу отобьёт проверка базы (миграция v18) — говорим это словами человека,
   // а не текстом ошибки Postgres.
-  if (depth === "range" && (!range || range.from >= range.to)) return fail(RANGE_REQUIRED);
+  if (depth === "range" && (!range || range.from >= range.to)) return fail(rangeRequired());
   const supabase = createClient();
 
   // requested_by обязателен и должен совпадать с вошедшим — RLS иначе откажет.
   const { data: auth, error: authError } = await supabase.auth.getUser();
-  if (authError) return fail(`Не удалось попросить обход: ${authError.message}`);
-  if (!auth.user) return fail("Сессия кончилась — войдите заново");
+  if (authError) return fail(tr("api.syncAskFailed", { message: authError.message }));
+  if (!auth.user) return fail(tr("api.syncSessionExpired"));
 
   const requestedBy = auth.user.id;
   // Имена колонок базы, а не полей попапа: all_videos — тот же флаг, что pick.allVideos,
@@ -77,10 +78,10 @@ export async function requestSync({
         }));
 
   const { data, error } = await supabase.from("sync_requests").insert(rows).select("id");
-  if (error) return fail(`Не удалось попросить обход: ${error.message}`);
+  if (error) return fail(tr("api.syncAskFailed", { message: error.message }));
   const ids = (data ?? []).map((r) => r.id);
   // Вставка прошла, а строк не вернулось — следить не за чем, и молчать об этом нельзя.
-  if (ids.length === 0) return fail("Просьба не завелась — попробуйте ещё раз");
+  if (ids.length === 0) return fail(tr("api.syncRequestNotCreated"));
   return { ok: true, data: { ids } };
 }
 
@@ -93,7 +94,7 @@ export async function latestRun(scope?: string): Promise<ActionResult<SyncRun | 
     .order("started_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (error) return fail(`Не удалось прочитать обходы: ${error.message}`);
+  if (error) return fail(tr("api.syncRunsReadFailed", { message: error.message }));
   return { ok: true, data };
 }
 
@@ -112,7 +113,7 @@ export async function openRequests(creatorIds: string[] | null): Promise<ActionR
         ? base.is("creator_id", null)
         : base.or(`creator_id.is.null,creator_id.in.(${creatorIds.join(",")})`);
   const { data, error } = await filtered.order("requested_at", { ascending: false }).limit(200);
-  if (error) return fail(`Не удалось прочитать очередь: ${error.message}`);
+  if (error) return fail(tr("api.syncQueueReadFailed", { message: error.message }));
   return { ok: true, data: data ?? [] };
 }
 
@@ -121,7 +122,7 @@ export async function openRequests(creatorIds: string[] | null): Promise<ActionR
 export async function requestsByIds(ids: number[]): Promise<ActionResult<SyncRequest[]>> {
   if (ids.length === 0) return { ok: true, data: [] };
   const { data, error } = await createClient().from("sync_requests").select("*").in("id", ids);
-  if (error) return fail(`Не удалось прочитать просьбу: ${error.message}`);
+  if (error) return fail(tr("api.syncRequestReadFailed", { message: error.message }));
   return { ok: true, data: data ?? [] };
 }
 
@@ -148,7 +149,7 @@ export async function syncLog(
     .gt("id", after)
     .order("id", { ascending: true })
     .limit(limit);
-  if (error) return fail(`Не удалось прочитать журнал обхода: ${error.message}`);
+  if (error) return fail(tr("api.syncLogReadFailed", { message: error.message }));
   return { ok: true, data: data ?? [] };
 }
 
@@ -157,6 +158,6 @@ export async function syncLog(
 export async function runsByIds(ids: number[]): Promise<ActionResult<SyncRun[]>> {
   if (ids.length === 0) return { ok: true, data: [] };
   const { data, error } = await createClient().from("sync_runs").select("*").in("id", ids);
-  if (error) return fail(`Не удалось прочитать обход: ${error.message}`);
+  if (error) return fail(tr("api.syncRunReadFailed", { message: error.message }));
   return { ok: true, data: data ?? [] };
 }

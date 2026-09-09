@@ -6,18 +6,19 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useSyncOptions } from "@/components/sync-options";
 import {
-  ALL_VIDEOS_WORD,
   SyncDepthGroup,
   SyncLaunchButton,
   SyncMaxVideosGroup,
   SyncPickGroup,
   SyncSummary,
   SyncVideosGroup,
-  VIDEOS_WORD,
+  allVideosWord,
   pickWords,
+  videosWord,
   useSyncRange,
 } from "@/components/sync-choice";
-import { PHASE_TEXT, UNAVAILABLE_TITLE, depthWord, maxVideosWord } from "@/lib/sync-phase";
+import { useT } from "@/lib/i18n";
+import { phaseText, unavailableTitle, depthWord, maxVideosWord } from "@/lib/sync-phase";
 import type { PeriodRange } from "@/lib/period";
 import type { RowSync } from "@/lib/use-sync-queue";
 import type { SyncDepth, SyncPick, SyncVideos } from "@/lib/types";
@@ -38,6 +39,7 @@ export function RowSyncButton({
   // maxVideos — потолок числа видео на креатора; null — без потолка (миграция v19).
   onAsk: (depth: SyncDepth, pick: SyncPick, maxVideos: number | null, range?: PeriodRange) => void;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   // «Что снимать» — то же, что в попапе кнопки над страницей: выбор общий и запоминается.
   const { comments, replies } = useSyncOptions();
@@ -78,8 +80,8 @@ export function RowSyncButton({
     // Идёт обход — говорим чей и сколько сделано: «Обход по расписанию · Обновляем 3 из 10
     // · @npodcast123» (миграция v14). Счётчиков ещё нет — остаются слова фазы.
     const title = state.unavailable
-      ? UNAVAILABLE_TITLE
-      : [state.trigger, state.progress ?? PHASE_TEXT[state.phase]].filter(Boolean).join(" · ");
+      ? unavailableTitle()
+      : [state.trigger, state.progress ?? phaseText(state.phase)].filter(Boolean).join(" · ");
     return (
       <span className="inline-flex" title={title}>
         <Button variant="ghost" size="icon-sm" disabled aria-label={title}>
@@ -103,7 +105,12 @@ export function RowSyncButton({
   return (
     <Popover open={open} onOpenChange={openChange}>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="icon-sm" title="Обновить креатора" aria-label="Обновить креатора">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          title={t("sync.rowButton")}
+          aria-label={t("sync.rowButton")}
+        >
           <RefreshCwIcon />
         </Button>
       </PopoverTrigger>
@@ -115,12 +122,12 @@ export function RowSyncButton({
         <SyncPickGroup allVideos={allVideos} onAllVideos={setAllVideos} oursOnly={videos === "ours"} />
         <SyncSummary
           parts={[
-            "Этот креатор",
+            t("sync.summaryThisCreator"),
             depthWord(depth, range.range?.from, range.range?.to),
             maxVideosWord(maxVideos),
-            VIDEOS_WORD[pick.videos],
+            videosWord(pick.videos),
             pickWords(pick),
-            pick.allVideos && ALL_VIDEOS_WORD,
+            pick.allVideos && allVideosWord(),
           ]}
         />
         {/* Выбран «Период», а даты не годятся — просить нечего; почему, сказано под полями. */}
