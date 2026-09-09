@@ -287,6 +287,24 @@ export const en: Dict = {
     byDay: "Per day",
     cumulative: "Cumulative",
     empty: "No data for this range.",
+    days: "Days",
+    weeks: "Weeks",
+    series: "Series",
+    byCreators: "By creator",
+    creatorsLoading: "Loading creator series…",
+    creatorsError: "Could not read creator series: {error}",
+  },
+
+  overview: {
+    title: "Overview",
+    posts: "Posts over time",
+    postsTotal: "{n} total",
+    postsLegend: "Posts per day",
+    trend: "Views trend by platform",
+    trendTotal: "{n} total",
+    share: "Platform share",
+    shareSubtitle: "Share of views for the range",
+    empty: "No data for this range.",
   },
 
   topPosts: {

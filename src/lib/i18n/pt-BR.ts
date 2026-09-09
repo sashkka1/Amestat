@@ -287,6 +287,24 @@ export const ptBR: Dict = {
     byDay: "Por dia",
     cumulative: "Acumulado",
     empty: "Não há dados neste período.",
+    days: "Dias",
+    weeks: "Semanas",
+    series: "Séries",
+    byCreators: "Por criador",
+    creatorsLoading: "Lendo as séries dos criadores…",
+    creatorsError: "Não foi possível ler as séries dos criadores: {error}",
+  },
+
+  overview: {
+    title: "Visão geral",
+    posts: "Publicações por dia",
+    postsTotal: "{n} no total",
+    postsLegend: "Publicações por dia",
+    trend: "Tendência de views por plataforma",
+    trendTotal: "{n} no total",
+    share: "Participação das plataformas",
+    shareSubtitle: "Participação nas views do período",
+    empty: "Não há dados neste período.",
   },
 
   topPosts: {

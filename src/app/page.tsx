@@ -8,7 +8,8 @@ import { PlatformSwitch } from "@/components/platform-switch";
 import { SyncButton } from "@/components/sync-button";
 import { SyncLogPanel } from "@/components/sync-log-panel";
 import { KpiRow, totalsToKpis } from "@/components/stats/kpi-row";
-import { PerformanceChart } from "@/components/stats/performance-chart";
+import { OverviewCards } from "@/components/stats/overview-cards";
+import { PerformanceChart, type ChartCreator } from "@/components/stats/performance-chart";
 import { TopPosts } from "@/components/stats/top-posts";
 import { TopCreators, buildCreatorRows } from "@/components/stats/top-creators";
 import { VideosTable } from "@/components/stats/videos-table";
@@ -31,7 +32,7 @@ import {
 import { useIsAdmin } from "@/lib/profile-context";
 import { useLoader } from "@/lib/use-loader";
 import { usePeriod } from "@/lib/use-period";
-import type { Creator } from "@/lib/types";
+import type { Creator, DailyViews } from "@/lib/types";
 
 type Base = { creators: Creator[]; videos: VideoRow[] };
 
@@ -81,14 +82,25 @@ function Dashboard() {
   // Прошлый срок той же длины — вторым вызовом того же RPC: иначе не с чем сравнить плитки.
   // creators_overview отдаёт ряды по всем видимым креаторам — площадку из них отбираем ниже,
   // по набору id; график считает база, ему площадка уходит параметром.
+  //
+  // Ряды по площадкам нужны карточкам «Тренд просмотров» и «Доля площадок». Своей миграции
+  // у них нет: это тот же daily_views_all, позванный с p_platform. На «Все» он зовётся дважды,
+  // а при выбранной площадке второго запроса нет вовсе — её ряд и есть тот `daily`, что уже
+  // прочитан для графика.
   const stats = useLoader(async () => {
     if (!period.range || !period.previous) return null;
-    const [now, prev, daily] = await Promise.all([
-      creatorsOverview(period.range),
+    const range = period.range;
+    const [now, prev, daily, split] = await Promise.all([
+      creatorsOverview(range),
       creatorsOverview(period.previous),
-      dailyViewsAll(period.range, rpcPlatform),
+      dailyViewsAll(range, rpcPlatform),
+      rpcPlatform === null
+        ? Promise.all([dailyViewsAll(range, "tiktok"), dailyViewsAll(range, "instagram")])
+        : null,
     ]);
-    return { now, prev, daily };
+    const tiktok: DailyViews[] = rpcPlatform === "instagram" ? [] : split ? split[0] : daily;
+    const instagram: DailyViews[] = rpcPlatform === "tiktok" ? [] : split ? split[1] : daily;
+    return { now, prev, daily, tiktok, instagram };
   }, [fromMs, toMs, rpcPlatform]);
 
   const creatorIds = useMemo(() => new Set(creators.map((c) => c.id)), [creators]);
@@ -116,6 +128,31 @@ function Dashboard() {
 
   const totals = nowRows ? sumOverview(nowRows) : null;
   const prevTotals = prevRows ? sumOverview(prevRows) : null;
+
+  // Пятёрка для режима «По креаторам» на графике: лучшие по просмотрам за срок. Сами ряды
+  // график дочитывает сам и только когда режим включат.
+  const topCreators = useMemo<ChartCreator[]>(() => {
+    if (!nowRows) return [];
+    const byId = new Map(creators.map((c) => [c.id, c]));
+    return [...nowRows]
+      .sort((a, b) => b.views_delta - a.views_delta)
+      .slice(0, 5)
+      .flatMap((o) => {
+        const c = byId.get(o.creator_id);
+        return c ? [{ id: c.id, name: c.display_name || c.handle }] : [];
+      });
+  }, [nowRows, creators]);
+
+  // Сетка дней и публикации для карточек под графиком — из уже прочитанного: дни те же,
+  // по которым идёт «Динамика», видео — те же, что стоят в таблицах страницы.
+  const overviewDays = useMemo(() => stats.data?.daily.map((d) => d.day) ?? [], [stats.data]);
+  const publishedAt = useMemo(
+    () =>
+      range
+        ? tableRows.flatMap((r) => (r.publishedAt && publishedIn(r.publishedAt, range) ? [r.publishedAt] : []))
+        : [],
+    [tableRows, range],
+  );
 
   // Обход кончился — перечитываем и списки, и сводку за срок.
   const baseReload = base.reload;
@@ -163,9 +200,26 @@ function Dashboard() {
           )}
 
           {stats.data ? (
-            <PerformanceChart data={stats.data.daily} collapseKey="chart" />
+            <PerformanceChart
+              data={stats.data.daily}
+              collapseKey="chart"
+              range={range}
+              creators={topCreators}
+            />
           ) : (
             <Skeleton className="h-72 w-full" />
+          )}
+
+          {stats.data ? (
+            <OverviewCards
+              collapseKey="overview"
+              days={overviewDays}
+              publishedAt={publishedAt}
+              tiktok={stats.data.tiktok}
+              instagram={stats.data.instagram}
+            />
+          ) : (
+            <Skeleton className="h-56 w-full" />
           )}
 
           <TopPosts posts={topPosts} collapseKey="top-posts" />
