@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   slotsOf, nextSlot, missedSlot, retryDue, SLOT_HOURS, DEFAULT_SLOTS, parseSlots,
-  slotAlreadyCovered, addressProtectionHandles, manualRetryAt, retryStillNeeded,
+  slotAlreadyCovered, addressProtectionHandles, manualRetryAt, retryStillNeeded, zoneOf,
 } from "./schedule.mjs";
 
 const at = (y, m, d, h = 0, min = 0) => new Date(y, m - 1, d, h, min, 0, 0);
@@ -38,6 +38,67 @@ test("один слот 13:00: ближайший, догон и полночь"
   assert.equal(missedSlot(at(2026, 9, 8, 9, 0), null), null, "до слота догонять нечего");
   assert.equal(hm(missedSlot(at(2026, 9, 8, 20, 0), null)), "8 13:00");
   assert.equal(missedSlot(at(2026, 9, 8, 20, 0), at(2026, 9, 8, 13, 2)), null, "слот отработан");
+});
+
+// --------------------------------------------------- зона слотов (владелец, 2026-09-09)
+// Проверки нарочно сравнивают МГНОВЕНИЯ (ISO с Z), а не местные часы: тесты должны давать один
+// ответ на любой машине. Варшава летом UTC+2, зимой UTC+1; переводы 2026 — 29 марта и 25 октября.
+const TZ = "Europe/Warsaw";
+const TWO = [7, 16];
+const iso = (date) => (date === null ? null : date.toISOString());
+
+test("имя зоны: годное берётся, пустое и мусор — зона машины", () => {
+  assert.equal(zoneOf(TZ), TZ);
+  assert.equal(zoneOf(" UTC "), "UTC", "пробелы по краям не в счёт");
+  assert.equal(zoneOf(""), null);
+  assert.equal(zoneOf(undefined), null);
+  assert.equal(zoneOf("Europe/Варшава"), null, "опечатку в имени зоны молча не глотаем");
+  assert.equal(zoneOf("UTC+2"), null, "смещением зона не задаётся — оно живёт полгода");
+});
+
+test("слоты 7 и 16 в зоне: летом одно смещение, зимой другое", () => {
+  const summer = slotsOf(new Date("2026-07-15T00:00:00Z"), TWO, TZ);
+  assert.deepEqual(summer.map(iso), ["2026-07-15T05:00:00.000Z", "2026-07-15T14:00:00.000Z"], "летом +2");
+  const winter = slotsOf(new Date("2026-12-15T00:00:00Z"), TWO, TZ);
+  assert.deepEqual(winter.map(iso), ["2026-12-15T06:00:00.000Z", "2026-12-15T15:00:00.000Z"], "зимой +1");
+});
+
+test("сутки перевода: час по стенным часам тот же, миг — другой", () => {
+  // 29 марта стрелки вперёд (02:00 → 03:00), 25 октября назад (03:00 → 02:00).
+  assert.equal(iso(slotsOf(new Date("2026-03-28T12:00:00Z"), [7], TZ)[0]), "2026-03-28T06:00:00.000Z");
+  assert.equal(iso(slotsOf(new Date("2026-03-29T12:00:00Z"), [7], TZ)[0]), "2026-03-29T05:00:00.000Z");
+  assert.equal(iso(slotsOf(new Date("2026-10-24T12:00:00Z"), [7], TZ)[0]), "2026-10-24T05:00:00.000Z");
+  assert.equal(iso(slotsOf(new Date("2026-10-25T12:00:00Z"), [7], TZ)[0]), "2026-10-25T06:00:00.000Z");
+});
+
+test("день слотов — день ЗОНЫ, а не машины", () => {
+  // 22:30 UTC — в Варшаве уже полпервого ночи следующего дня.
+  const slots = slotsOf(new Date("2026-07-15T22:30:00Z"), [7], TZ);
+  assert.equal(iso(slots[0]), "2026-07-16T05:00:00.000Z");
+});
+
+test("ближайший и пропущенный слот в зоне переживают перевод стрелок", () => {
+  assert.equal(iso(nextSlot(new Date("2026-10-25T06:30:00Z"), TWO, TZ)), "2026-10-25T15:00:00.000Z");
+  assert.equal(iso(nextSlot(new Date("2026-10-25T15:30:00Z"), TWO, TZ)), "2026-10-26T06:00:00.000Z", "после последнего — утренний завтра");
+  // Компьютер спал сутки: последний обход — вечерний слот 24-го (16:00 ещё по летнему времени).
+  assert.equal(
+    iso(missedSlot(new Date("2026-10-25T14:00:00Z"), new Date("2026-10-24T14:00:00Z"), TWO, TZ)),
+    "2026-10-25T06:00:00.000Z",
+    "догоняем утренний слот 25-го, уже по зимнему времени",
+  );
+  assert.equal(iso(missedSlot(new Date("2026-07-15T13:00:00Z"), null, TWO, TZ)), "2026-07-15T05:00:00.000Z");
+  assert.equal(missedSlot(new Date("2026-07-15T13:00:00Z"), new Date("2026-07-15T05:02:00Z"), TWO, TZ), null, "утренний слот отработан");
+});
+
+test("«сегодня уже был обход по всем» считается по суткам зоны", () => {
+  const now = new Date("2026-09-09T23:00:00Z");   // в Варшаве 01:00 десятого
+  const run = (isoText) => ({ scope: "all", finished_at: isoText });
+  assert.equal(slotAlreadyCovered(now, [run("2026-09-09T21:00:00Z")], TZ), null, "23:00 девятого по зоне — вчера");
+  assert.equal(
+    iso(slotAlreadyCovered(now, [run("2026-09-09T22:30:00Z")], TZ)),
+    "2026-09-09T22:30:00.000Z",
+    "00:30 десятого по зоне — сегодня",
+  );
 });
 
 test("слоты дня — 10:00, 13:00, 17:00 того же дня", () => {

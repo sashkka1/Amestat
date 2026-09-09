@@ -8,7 +8,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 // Разбор часов расписания живёт среди чистых функций расписания — там его и проверяют тесты.
 // ⚠️ `schedule.mjs` сюда НЕ импортируется обратно: часы уходят к нему параметром, и кольца нет.
-import { parseSlots } from "./schedule.mjs";
+import { parseSlots, zoneOf } from "./schedule.mjs";
 // Разбор списка прокси — там же, где живёт весь пул. ⚠️ `proxies.mjs` сюда не импортируется
 // обратно (свою папку он считает от `import.meta.url`), поэтому кольца нет и здесь.
 import { parseProxies, addressList } from "./proxies.mjs";
@@ -64,8 +64,19 @@ export function loadEnv() {
 
   // Часы автоматических обходов. Пусто — один слот, 13:00 (владелец, 2026-09-09: обход «всё»
   // занимал 14 минут и трижды в день гонял браузер к каждому креатору). Формат — `13` или
-  // `10,13,17`. Разбор — чистая функция `parseSlots` в `schedule.mjs`, чтобы её проверяли тесты.
+  // `10,13,17`; у владельца стоит `7,16`. Читаются они в зоне `AMESTAT_SLOT_TZ` (ниже).
+  // Разбор — чистая функция `parseSlots` в `schedule.mjs`, чтобы её проверяли тесты.
   const slotHours = parseSlots(raw.AMESTAT_SLOTS);
+
+  // Зона, в которой читаются часы слотов: имя IANA (`Europe/Warsaw`). Пусто — зона машины,
+  // как было всегда. Владелец, 2026-09-09: слоты 7:00 и 16:00 по UTC+2 «с учётом перехода на
+  // зимнее время» — числом смещение задать нельзя, оно живёт полгода; зона держит час по
+  // стенным часам и меняет смещение сама. Незнакомое имя — не молчим: строка в лог резидента.
+  const slotTzRaw = (raw.AMESTAT_SLOT_TZ || "").trim();
+  const slotTz = zoneOf(slotTzRaw);
+  const slotTzNote = slotTzRaw !== "" && slotTz === null
+    ? `неизвестная зона «${slotTzRaw}» — слоты идут по времени машины`
+    : null;
 
   // Глубина автоматического обхода: 'all' (по умолчанию) — весь список видео, 'week' — 7 дней,
   // 'month' — 30 (миграция v18). Владелец, 2026-09-09: «в ежедневном обновлении пусть всё
@@ -126,7 +137,11 @@ export function loadEnv() {
   const manualRetryMin = Number.isFinite(manualRetryNum) && manualRetryNum > 0 ? Math.round(manualRetryNum) : 25;
 
   // Комментарии: за сколько последних дней брать видео. По умолчанию 7.
-  // Шаг и без того долгий — страница на каждое видео, — а старые обсуждения уже не растут.
+  // 🔴 На обход эта переменная больше НЕ влияет (владелец, 2026-09-09): окно шага комментариев
+  // равно ГЛУБИНЕ обхода — «неделя» 7 дней, «месяц» 30, «период» сам период, «всё» без
+  // ограничения по дате. Прежнее самостоятельное окно означало, что обход за месяц приносил
+  // счётчики месячных видео и ни одного текста. Значение остаётся про запас — как отдельное
+  // умолчание для расписания, если владелец захочет его завести.
   const commentsDaysRaw = (raw.AMESTAT_COMMENTS_DAYS || "").trim();
   const commentsDaysNum = commentsDaysRaw === "" ? NaN : Number(commentsDaysRaw);
   const commentsDays = Number.isFinite(commentsDaysNum) && commentsDaysNum > 0 ? Math.round(commentsDaysNum) : 7;
@@ -169,6 +184,9 @@ export function loadEnv() {
     pauseMs,
     retryMs,
     slotHours,
+    // Зона слотов: имя IANA или null («зона машины»).
+    slotTz,
+    slotTzNote,
     slotDepth,
     slotDepthNote,
     ttLaunchLimit,

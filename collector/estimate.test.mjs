@@ -185,18 +185,29 @@ test("верхняя граница периода отсекает свежее
   assert.equal(commentCandidate(row(15), 5, win), true);
 });
 
-test("окно комментариев: обычно последние дни, при периоде — сам период", () => {
-  const plain = commentsWindow({ bounds: { since: null, until: null }, commentsDays: 7, now: NOW });
-  assert.equal(plain.since, NOW - 7 * DAY);
-  assert.equal(plain.until, null);
-  const ranged = commentsWindow({ bounds: { since: NOW - 20 * DAY, until: NOW - 10 * DAY }, now: NOW });
+test("окно комментариев равно глубине обхода: неделя, месяц, период", () => {
+  const week = commentsWindow({ bounds: { since: NOW - 7 * DAY, until: null } });
+  assert.equal(week.since, NOW - 7 * DAY);
+  assert.equal(week.until, null);
+  const month = commentsWindow({ bounds: { since: NOW - 30 * DAY, until: null } });
+  assert.equal(month.since, NOW - 30 * DAY, "месячный обход снимает комментарии за месяц");
+  const ranged = commentsWindow({ bounds: { since: NOW - 20 * DAY, until: NOW - 10 * DAY } });
   assert.equal(ranged.since, NOW - 20 * DAY);
   assert.equal(ranged.until, NOW - 10 * DAY);
 });
 
-test("глубина уже окна комментариев — берётся пересечение", () => {
-  const win = commentsWindow({ bounds: { since: NOW - 2 * DAY, until: null }, commentsDays: 30, now: NOW });
-  assert.equal(win.since, NOW - 2 * DAY, "до чего не долистаем, то и не кандидат");
+test("глубина «всё» — окна нет вовсе, ни своих дней, ни границ", () => {
+  const all = commentsWindow({ bounds: { since: null, until: null } });
+  assert.equal(all.since, null);
+  assert.equal(all.until, null);
+  assert.deepEqual(commentsWindow(), { since: null, until: null }, "границ не дали вовсе");
+});
+
+test("при глубине «всё» кандидатом становится и видео без даты", () => {
+  const none = { since: null, until: null };
+  assert.equal(commentCandidate(row(400), 5, none), true, "старое — но глубина «всё»");
+  assert.equal(commentCandidate({ ...row(1), published_at: null }, 5, none), true);
+  assert.equal(commentCandidate({ ...row(1), published_at: null }, 0, none), false, "комментариев нет");
 });
 
 // --- оценка всего обхода --------------------------------------------------------------------
@@ -219,7 +230,7 @@ test("оценка обхода: по строке на креатора и су
   const tt = est.byCreator[0];
   assert.equal(tt.handle, "tt");
   assert.equal(tt.list, 66, "три видео — одна прокрутка: 60 + 6");
-  assert.equal(tt.comments, 25, "кандидат один: «b» чужое, «c» старое, «d» чужого креатора");
+  assert.equal(tt.comments, 25, "кандидат один: «b» и «c» чужие, «d» чужого креатора");
   assert.equal(tt.replies, 40);
   assert.equal(tt.done, false);
   const ig = est.byCreator[1];
@@ -229,7 +240,11 @@ test("оценка обхода: по строке на креатора и су
 
 test("«и не наши видео» добавляет кандидатов, а «без комментариев» убирает шаг целиком", () => {
   const all = estimateRun(creators, videos, counts, { depth: "all", allVideos: true, now: NOW }, T);
-  assert.equal(all.byCreator[0].comments, 50, "«a» и «b»; «c» всё равно старое");
+  assert.equal(all.byCreator[0].comments, 75, "глубина «всё» — окна нет: «a», «b» и старое «c»");
+  const week = estimateRun(creators, videos, counts, {
+    depth: "week", bounds: { since: NOW - 7 * DAY, until: null }, allVideos: true, now: NOW,
+  }, T);
+  assert.equal(week.byCreator[0].comments, 50, "неделя — «c» шестидесятидневное за окном");
   const none = estimateRun(creators, videos, counts, { depth: "all", comments: false, now: NOW }, T);
   assert.equal(none.byCreator[0].comments, 0);
   assert.equal(none.byCreator[0].total, 66);

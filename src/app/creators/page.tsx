@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { SearchIcon } from "lucide-react";
 import { AuthGate } from "@/components/auth-gate";
@@ -19,6 +19,7 @@ import { Panel, PanelHead, Empty } from "@/components/stats/panel";
 import { SortHead, nextSort, type SortDir } from "@/components/stats/sort-head";
 import { Sparkline } from "@/components/stats/sparkline";
 import { ScopeSwitch } from "@/components/stats/period-bar";
+import { PeriodChip } from "@/components/period-chip";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -31,61 +32,64 @@ import {
   listCreators,
   listTags,
 } from "@/lib/queries";
-import { fmtNum } from "@/lib/format";
+import { fmtDayAxis, fmtNum } from "@/lib/format";
 import { useScope, type Scope } from "@/lib/dashboard-prefs";
 import { useT } from "@/lib/i18n";
 import { matchesPlatform, platformFilterLabel, usePlatformFilter } from "@/lib/platform-filter";
 import { useLoader } from "@/lib/use-loader";
+import { usePeriod } from "@/lib/use-period";
 import { useSyncQueue } from "@/lib/use-sync-queue";
 import { useProfile } from "@/lib/profile-context";
-import type { PeriodRange } from "@/lib/period";
+import { earliestAdded } from "@/lib/video-rows";
+import { periodLabel, toDateInputValue, type PeriodRange } from "@/lib/period";
 import type { Creator, CreatorLatest, CreatorOverview, CreatorTag, Tag } from "@/lib/types";
 
-type Data = {
+// Списки страницы: они от срока не зависят вовсе и читаются один раз.
+type Base = {
   creators: Creator[];
   tags: Tag[];
   creatorTags: CreatorTag[];
   latest: CreatorLatest[];
-  overview: CreatorOverview[];
-  // Срок, за который сосчитан `overview`: по нему же читаются ряды спарклайнов и прошлая
-  // неделя — иначе колонка сравнивала бы числа за чуть разные сроки.
-  range: PeriodRange;
 };
 
-// «за 7 дней» в списке — та же сводка, что на дашборде, но срок здесь один.
-const WEEK_MS = 7 * 86_400_000;
+// Сводка за выбранный срок — отдельной загрузкой: сменили срок, и перечитывается только она.
+type Stats = {
+  overview: CreatorOverview[];
+  // Срок, за который сосчитан `overview`: по нему же читаются ряды спарклайнов и прошлый
+  // срок — иначе колонка сравнивала бы числа за чуть разные сроки.
+  range: PeriodRange;
+  previous: PeriodRange | null;
+};
 
 // Спарклайн — это отдельный запрос на каждого креатора. До этого числа они читаются пачкой
 // после списка, дальше столбец остаётся с одним числом и дельтой: сотня RPC ради рисунка
 // в ячейке дороже самой страницы.
 const SPARK_LIMIT = 30;
 
-async function loadData(scope: Scope): Promise<Data> {
-  const to = new Date();
-  const from = new Date(to.getTime() - WEEK_MS);
-  const [creators, tags, creatorTags, latest, overview] = await Promise.all([
+async function loadBase(): Promise<Base> {
+  const [creators, tags, creatorTags, latest] = await Promise.all([
     listCreators(),
     listTags(),
     listCreatorTags(),
     listCreatorLatest(),
-    creatorsOverview({ from, to }, scope),
   ]);
-  return { creators, tags, creatorTags, latest, overview, range: { from, to } };
+  return { creators, tags, creatorTags, latest };
 }
 
-// Дополнение к столбцу «за 7 дней»: прошлая неделя для дельты и дневные ряды для
+// Дополнение к столбцу «За период»: прошлый срок той же длины для дельты и дневные ряды для
 // спарклайнов. Читается ПОСЛЕ таблицы и отдельно от неё — таблица показывается сразу,
 // а рисунки и проценты появляются, когда приедут.
 type Trend = { prev: Map<string, number>; series: Map<string, number[]> };
 
-async function loadTrend(creators: Creator[], range: PeriodRange, scope: Scope): Promise<Trend> {
-  const previous: PeriodRange = {
-    from: new Date(range.from.getTime() - WEEK_MS),
-    to: range.from,
-  };
+async function loadTrend(
+  creators: Creator[],
+  range: PeriodRange,
+  previous: PeriodRange | null,
+  scope: Scope,
+): Promise<Trend> {
   const ids = creators.map((c) => c.id);
   const [prev, series] = await Promise.all([
-    creatorsOverview(previous, scope),
+    previous ? creatorsOverview(previous, scope) : Promise.resolve([]),
     ids.length <= SPARK_LIMIT
       ? Promise.all(ids.map((id) => creatorDailyViews(id, range, scope)))
       : Promise.resolve(null),
@@ -94,6 +98,13 @@ async function loadTrend(creators: Creator[], range: PeriodRange, scope: Scope):
     prev: new Map(prev.map((o) => [o.creator_id, o.views_delta])),
     series: new Map(series ? ids.map((id, i) => [id, series[i].map((d) => d.views)]) : []),
   };
+}
+
+// Подпись под названием столбца: «2 Sep → 9 Sep». Даты честнее слова «Custom range»,
+// а на пресетах повторяют то же, что написано в пилюле срока.
+function rangeCaption(range: PeriodRange | null): string | null {
+  if (!range) return null;
+  return `${fmtDayAxis(toDateInputValue(range.from))} → ${fmtDayAxis(toDateInputValue(range.to))}`;
 }
 
 export default function CreatorsPage() {
@@ -109,14 +120,48 @@ type Key = "name" | "followers" | "videos" | "views" | "synced";
 function CreatorsScreen() {
   const t = useT();
   const profile = useProfile();
-  // Оба переключателя те же, что на дашборде: положение общее через localStorage. Полосы
-  // периода здесь нет — срок один, — поэтому охват стоит сегментом в шапке, рядом с площадкой.
+  // Все три переключателя те же, что на дашборде, и положение у них общее через localStorage
+  // (`lib/dashboard-prefs.ts`). Полной полосы периода здесь нет — сравнение и охват в этой
+  // таблице всегда включены, — поэтому в шапке стоят пилюля срока и сегмент охвата.
   const platform = usePlatformFilter();
   const platformFilter = platform.filter;
   const { scope, setScope } = useScope();
-  // Охват уходит в базу (миграция v22): и столбец «За 7 дней», и спарклайны считаются по
-  // сужённому набору видео, поэтому смена охвата перечитывает страницу.
-  const { data, error, loading, reload } = useLoader(() => loadData(scope), [scope]);
+
+  // Списки читаются один раз: от срока они не зависят.
+  const base = useLoader(loadBase, []);
+  const creatorsAll = useMemo(() => base.data?.creators ?? [], [base.data]);
+  // Начало «Всего времени» — по всем креаторам, как на дашборде: иначе срок прыгал бы
+  // от фильтра площадки.
+  const earliest = useMemo(() => earliestAdded(creatorsAll), [creatorsAll]);
+  const period = usePeriod(earliest);
+
+  // Сводка за срок — своей загрузкой. Охват уходит в базу (миграция v22): и столбец
+  // «За период», и спарклайны считаются по сужённому набору видео, поэтому смена охвата
+  // перечитывает её так же, как смена срока.
+  const fromMs = period.range?.from.getTime() ?? null;
+  const toMs = period.range?.to.getTime() ?? null;
+  const stats = useLoader(async (): Promise<Stats | null> => {
+    if (!period.range) return null;
+    const range = period.range;
+    return { overview: await creatorsOverview(range, scope), range, previous: period.previous };
+  }, [fromMs, toMs, scope]);
+
+  const error = base.error ?? stats.error;
+  // 🔴 Скелет держится, пока не пришли ОБЕ загрузки: список без сводки — это таблица, в
+  // которой «Видео» и «За период» стоят нулями, а выглядит она как готовая. Именно так
+  // и пропадали числа. Перечитывание срока скелета уже не вызывает: старая сводка остаётся
+  // на экране, пока не приедет новая.
+  const loading = (base.loading && !base.data) || (stats.loading && !stats.data);
+  const data = base.data;
+  // Диалоги и очередь перечитывают страницу целиком: список мог измениться, а вместе с ним
+  // и сводка за срок.
+  const baseReload = base.reload;
+  const statsReload = stats.reload;
+  const reload = useCallback(() => {
+    baseReload();
+    statsReload();
+  }, [baseReload, statsReload]);
+
   const [search, setSearch] = useState("");
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey] = useState<Key>("views");
@@ -127,14 +172,15 @@ function CreatorsScreen() {
   const queueIds = useMemo(() => data?.creators.map((c) => c.id) ?? [], [data]);
   const queue = useSyncQueue(queueIds, reload);
 
-  // Тренд столбца «за 7 дней» — вторым заходом, уже после списка: пока он едет, таблица
+  // Тренд столбца «За период» — вторым заходом, уже после списка: пока он едет, таблица
   // стоит и работает, просто без спарклайнов и процентов.
   const [trend, setTrend] = useState<Trend | null>(null);
   const [trendError, setTrendError] = useState<string | null>(null);
+  const statsData = stats.data;
   useEffect(() => {
-    if (!data) return;
+    if (!data || !statsData) return;
     let alive = true;
-    loadTrend(data.creators, data.range, scope).then(
+    loadTrend(data.creators, statsData.range, statsData.previous, scope).then(
       (d) => {
         if (!alive) return;
         setTrendError(null);
@@ -150,7 +196,7 @@ function CreatorsScreen() {
       alive = false;
     };
     // scope здесь же: страница перечитывается при его смене, и тренд обязан ехать за ней.
-  }, [data, scope]);
+  }, [data, statsData, scope]);
 
   // Галочки тегов меняются сразу, база — следом. Перечитали страницу — берём свежее.
   const [localTags, setLocalTags] = useState<CreatorTag[]>([]);
@@ -163,7 +209,7 @@ function CreatorsScreen() {
   const rows = useMemo(() => {
     if (!data) return [];
     const latestById = new Map(data.latest.map((l) => [l.creator_id, l]));
-    const overviewById = new Map(data.overview.map((o) => [o.creator_id, o]));
+    const overviewById = new Map((statsData?.overview ?? []).map((o) => [o.creator_id, o]));
     const tagById = new Map(data.tags.map((t) => [t.id, t]));
     const tagsByCreator = new Map<string, Tag[]>();
     for (const ct of localTags) {
@@ -183,11 +229,11 @@ function CreatorsScreen() {
         followers: latestById.get(c.id)?.followers ?? null,
         videos: overviewById.get(c.id)?.videos_total ?? 0,
         views: overviewById.get(c.id)?.views_delta ?? 0,
-        // null — прошлая неделя ещё не приехала: ноль на её месте соврал бы про «−100%».
+        // null — прошлый срок ещё не приехал: ноль на его месте соврал бы про «−100%».
         viewsPrev: trend?.prev.get(c.id) ?? null,
         series: trend?.series.get(c.id),
       }));
-  }, [data, localTags, platformFilter, trend]);
+  }, [data, statsData, localTags, platformFilter, trend]);
 
   function onTagChange(creatorId: string, tagId: string, on: boolean) {
     setLocalTags((prev) => {
@@ -270,6 +316,9 @@ function CreatorsScreen() {
       }
       actions={
         <>
+          {/* Тот же выбор срока, что на дашборде и карточке креатора: стор один
+              (`lib/dashboard-prefs.ts`), переход между страницами его не сбрасывает. */}
+          <PeriodChip period={period} />
           <PlatformSwitch state={platform} />
           <ScopeSwitch scope={scope} onScope={setScope} />
           {data && <TagsDialog tags={data.tags} onChanged={reload} />}
@@ -279,7 +328,7 @@ function CreatorsScreen() {
     >
       {error ? (
         <PageError error={error} />
-      ) : loading && !data ? (
+      ) : loading || !data ? (
         <PageSkeleton blocks={1} />
       ) : data ? (
         <Panel>
@@ -366,7 +415,20 @@ function CreatorsScreen() {
                   </TableHead>
                   <SortHead k="followers" label={t("metric.followers")} sortKey={sortKey} dir={dir} onSort={onSort} />
                   <SortHead k="videos" label={t("metric.videos")} sortKey={sortKey} dir={dir} onSort={onSort} />
-                  <SortHead k="views" label={t("creators.views7d")} sortKey={sortKey} dir={dir} onSort={onSort} />
+                  <SortHead
+                    k="views"
+                    label={
+                      <span className="inline-flex flex-col items-end">
+                        {t("creators.viewsPeriod")}
+                        <span className="text-[11px] font-normal opacity-70">
+                          {rangeCaption(period.range) ?? periodLabel(period.key)}
+                        </span>
+                      </span>
+                    }
+                    sortKey={sortKey}
+                    dir={dir}
+                    onSort={onSort}
+                  />
                   <SortHead k="synced" label={t("table.updated")} sortKey={sortKey} dir={dir} onSort={onSort} />
                   <TableHead className="text-muted-foreground">{t("table.status")}</TableHead>
                   <TableHead className="w-10" />
@@ -423,8 +485,8 @@ function CreatorsScreen() {
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{fmtNum(r.followers)}</TableCell>
                       <TableCell className="text-right tabular-nums">{fmtNum(r.videos)}</TableCell>
-                      {/* Столбец «за 7 дней»: число, дельта к прошлой семёрке и её ход
-                          по дням — тот же спарклайн, что в плитках дашборда. */}
+                      {/* Столбец «За период»: число, дельта к прошлому сроку той же длины
+                          и ход по дням — тот же спарклайн, что в плитках дашборда. */}
                       <TableCell className="text-right tabular-nums">
                         <div className="flex min-w-24 flex-col items-end gap-0.5">
                           <span>{fmtNum(r.views)}</span>
@@ -433,7 +495,7 @@ function CreatorsScreen() {
                               now={r.views}
                               prev={r.viewsPrev}
                               className="text-xs"
-                              title={t("creators.vsPrevWeek")}
+                              title={t("creators.vsPrevPeriod")}
                             />
                           )}
                           <Sparkline values={r.series} className="h-6 w-20" />

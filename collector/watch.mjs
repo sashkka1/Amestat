@@ -105,6 +105,18 @@ function hhmm(date) {
   const p = (n) => String(n).padStart(2, "0");
   return `${p(date.getHours())}:${p(date.getMinutes())}`;
 }
+/**
+ * Момент СЛОТА словами. Слоты живут в своей зоне (`AMESTAT_SLOT_TZ`), и печатать их по часам
+ * машины значило бы врать: если машина не в той зоне, слот «7:00» вышел бы в лог восьмым часом.
+ * Зоны нет — печатаем как раньше, по машине. `withDate` добавляет дату (для «следующий слот»).
+ */
+function slotHhmm(date, withDate = false) {
+  if (!env.slotTz) return withDate ? date.toLocaleString() : hhmm(date);
+  return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: env.slotTz, hourCycle: "h23", hour: "2-digit", minute: "2-digit",
+    ...(withDate ? { day: "2-digit", month: "2-digit", year: "numeric" } : {}),
+  }).format(date);
+}
 function log(text) {
   const line = `${stamp()} ${text}`;
   console.log(line);
@@ -294,7 +306,7 @@ async function runRetry(slotLabel, { handles = [], videos = "all", maxVideos = n
 async function coveredToday(now = new Date()) {
   try {
     const runs = await get("sync_runs?select=scope,finished_at&scope=eq.all&finished_at=not.is.null&order=finished_at.desc&limit=10");
-    return slotAlreadyCovered(now, runs);
+    return slotAlreadyCovered(now, runs, env.slotTz);
   } catch (e) {
     const text = String(e?.message ?? e).split("\n")[0];
     log(`не спросилось, был ли сегодня обход по всем: ${text}`);
@@ -308,10 +320,12 @@ async function coveredToday(now = new Date()) {
  * ⚠️ Сначала проверка «сегодня уже обошли всех» — слот пропускается вовсе (владелец, 2026-09-09).
  */
 async function runScheduled(trigger, slot) {
-  const label = hhmm(slot ?? new Date());
+  // Слот и «сегодня» считаются в зоне слотов — значит и печатаются в ней, иначе строка про
+  // пропуск мешала бы два разных времени в одном предложении.
+  const label = slotHhmm(slot ?? new Date());
   const covered = await coveredToday();
   if (covered) {
-    const text = `слот ${label} пропущен: сегодня уже был обход по всем в ${hhmm(covered)}`;
+    const text = `слот ${label} пропущен: сегодня уже был обход по всем в ${slotHhmm(covered)}`;
     log(text);
     void logSystem(text, { level: "info" });
     return { ok: true, skipped: true, done: 0, failed: 0, runId: null };
@@ -384,7 +398,9 @@ startWarmup("старта");
 // ⚠️ `range` слоту не разрешён вовсе (`env.mjs`): расписание ходит каждый день, а период —
 // это один срез за конкретные числа. Опустили до «всё» — говорим об этом вслух.
 if (env.slotDepthNote) log(`AMESTAT_SLOT_DEPTH: ${env.slotDepthNote}`);
-log(`резидент запущен. Браузер: ${browser}. Слоты: ${env.slotHours.map((h) => `${String(h).padStart(2, "0")}:00`).join(", ")} (глубина ${depthLabel(env.slotDepth)}). Пауза между креаторами TikTok ${Math.round(env.pauseMs / 1000)} с. Запусков TikTok не больше ${env.ttLaunchLimit} за ${Math.round(env.ttWindowMs / 60_000)} мин. Повтор после неудачи через ${Math.round(env.retryMs / 60_000)} мин, повтор ручной просьбы через ${env.manualRetryMin} мин. Instagram: ${env.igSource}. Логи: ${logsDir}`);
+// Зона слотов: опечатку в имени тоже говорим вслух — иначе расписание тихо уехало бы на час.
+if (env.slotTzNote) log(`AMESTAT_SLOT_TZ: ${env.slotTzNote}`);
+log(`резидент запущен. Браузер: ${browser}. Слоты: ${env.slotHours.map((h) => `${String(h).padStart(2, "0")}:00`).join(", ")} по ${env.slotTz ?? "времени машины"} (глубина ${depthLabel(env.slotDepth)}). Пауза между креаторами TikTok ${Math.round(env.pauseMs / 1000)} с. Запусков TikTok не больше ${env.ttLaunchLimit} за ${Math.round(env.ttWindowMs / 60_000)} мин. Повтор после неудачи через ${Math.round(env.retryMs / 60_000)} мин, повтор ручной просьбы через ${env.manualRetryMin} мин. Instagram: ${env.igSource}. Логи: ${logsDir}`);
 
 // 0. Остатки прошлых обходов: упавший обход оставляет окно Opera на нашем профиле, а оно и
 //    память держит, и не даёт подняться следующему браузеру. Свои окна владельца не трогаем —
@@ -400,8 +416,8 @@ try {
 }
 
 // 1. Часы: каждую минуту смотрим, не наступил ли слот.
-let nextAt = nextSlot(new Date(), env.slotHours);
-log(`следующий слот: ${nextAt.toLocaleString()}`);
+let nextAt = nextSlot(new Date(), env.slotHours, env.slotTz);
+log(`следующий слот: ${slotHhmm(nextAt, true)}${env.slotTz ? ` (${env.slotTz})` : ""}`);
 let lastTickAt = Date.now();
 const tick = setInterval(() => {
   const now = new Date();
@@ -415,8 +431,8 @@ const tick = setInterval(() => {
   }
   if (now >= nextAt) {
     const slot = nextAt;
-    nextAt = nextSlot(now, env.slotHours);
-    log(`слот ${slot.toLocaleTimeString()} — обход по расписанию. Следующий: ${nextAt.toLocaleString()}`);
+    nextAt = nextSlot(now, env.slotHours, env.slotTz);
+    log(`слот ${slotHhmm(slot)} — обход по расписанию. Следующий: ${slotHhmm(nextAt, true)}`);
     runScheduled("schedule", slot).catch((e) => {
       const text = String(e?.message ?? e).split("\n")[0];
       log(`обход по расписанию сорвался: ${text}`);
@@ -562,7 +578,7 @@ try {
   const due = retryDue(new Date(), scheduled ?? null, lastRetry ?? null, env.retryMs);
   // `fresh: false` — восстановленный повтор владельцу не письмо: он его уже получал тогда,
   // когда повтор назначался впервые. Просрочен и пойдёт сразу — тем более: придёт письмо обхода.
-  if (due && !stopping) planRetry(due, hhmm(new Date(scheduled.started_at)), { fresh: false });
+  if (due && !stopping) planRetry(due, slotHhmm(new Date(scheduled.started_at)), { fresh: false });
   else log("несделанных повторов нет");
 } catch (e) {
   const text = String(e?.message ?? e).split("\n")[0];
@@ -576,8 +592,8 @@ try {
 try {
   const runs = await get("sync_runs?select=started_at&order=started_at.desc&limit=1");
   const last = runs[0]?.started_at ? new Date(runs[0].started_at) : null;
-  const missed = missedSlot(new Date(), last, env.slotHours);
-  log(`последний обход: ${last ? last.toLocaleString() : "не было ни одного"}; пропущенный слот: ${missed ? missed.toLocaleTimeString() : "нет"}`);
+  const missed = missedSlot(new Date(), last, env.slotHours, env.slotTz);
+  log(`последний обход: ${last ? last.toLocaleString() : "не было ни одного"}; пропущенный слот: ${missed ? slotHhmm(missed) : "нет"}`);
   if (missed && !stopping) await runScheduled("catchup", missed);
 } catch (e) {
   const text = String(e?.message ?? e).split("\n")[0];

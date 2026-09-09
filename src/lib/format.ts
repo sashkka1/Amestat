@@ -1,5 +1,6 @@
-// Форматирование чисел и дат. Локаль берётся из выбранного языка (`lib/i18n`): русский —
-// `ru-RU`, английский — `en-US`, португальский — `pt-BR`.
+// Форматирование чисел и дат. Локаль берётся из выбранного языка (`lib/i18n`): английский —
+// `en-US`, португальский — `pt-BR`. Часовой пояс нигде не задаётся: и `toLocale*`, и разбор
+// ISO со смещением `Z` работают в поясе браузера, а другого нам и не надо.
 //
 // ⚠️ Язык читается вне React (getLang), поэтому сам по себе он перерисовку не вызывает:
 // страница обязана быть подписана на язык через useT/useLang, и тогда всё под ней
@@ -7,6 +8,7 @@
 // страницы переводятся тем же хуком.
 
 import { getLang, localeOf, monthsShort, tr } from "@/lib/i18n";
+import { engagementRate, type EngagementParts } from "@/lib/stats";
 
 function locale(): string {
   return localeOf(getLang());
@@ -64,17 +66,17 @@ function months(): string[] {
   return monthsShort(getLang());
 }
 
-// «12 авг» — подпись оси и даты в карточках.
+// «12 Aug» — подпись оси и даты в карточках. Дата вида `2026-09-08` (день из базы) читается
+// как МЕСТНАЯ полночь, а не как UTC: иначе день на оси уезжал бы на сутки назад западнее
+// Гринвича.
 export function fmtDayAxis(iso: string): string {
   const d = new Date(iso.length === 10 ? `${iso}T00:00:00` : iso);
   if (Number.isNaN(d.getTime())) return iso;
   return `${d.getDate()} ${months()[d.getMonth()]}`;
 }
 
-// «10 авг 2026» — концы срока в пилюле выбора.
-// «8 сентября» — день с месяцем словом, без года: так читается оговорка под полосой периода.
-// Месяц берётся у Intl, а не из словаря: в русском здесь нужен родительный падеж, которого
-// у коротких `monthsShort` нет.
+// «8 September» — день с месяцем словом, без года: так читается оговорка под полосой периода.
+// Месяц берётся у Intl, а не из словаря: там он полный, а `monthsShort` короткие.
 export function fmtDayLong(iso: string | null | undefined): string {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -82,6 +84,7 @@ export function fmtDayLong(iso: string | null | undefined): string {
   return d.toLocaleDateString(locale(), { day: "numeric", month: "long" });
 }
 
+// «10 Aug 2026» — концы срока в пилюле выбора.
 export function fmtDayYear(d: Date): string {
   return `${d.getDate()} ${months()[d.getMonth()]} ${d.getFullYear()}`;
 }
@@ -99,7 +102,7 @@ export function fmtCompact(n: number | null | undefined): string {
   return `${sign}${s}${unit}`;
 }
 
-// Какой знак у дробной части в этой локали: «,» у русского и португальского, «.» у английского.
+// Какой знак у дробной части в этой локали: «,» у португальского, «.» у английского.
 function decimalSep(): string {
   return (1.1).toLocaleString(locale()).replace(/\d/g, "");
 }
@@ -136,11 +139,12 @@ export function changePct(now: number, prev: number): Change {
   return { text: `${sign}${rounded.toLocaleString(locale())}%`, tone: toneOf(rounded) };
 }
 
-// Вовлечённость видео в процентах: (лайки + комментарии + репосты) / просмотры.
-export function engagementPct(likes: number, comments: number, shares: number, views: number): string {
-  if (!views) return "—";
-  const v = ((likes + comments + shares) / views) * 100;
-  return `${(Math.round(v * 10) / 10).toLocaleString(locale())}%`;
+// Вовлечённость видео в процентах: (лайки + комментарии + репосты) / просмотры. Сама формула
+// живёт в `lib/stats.ts` — здесь только проценты и знаки.
+export function engagementPct(v: EngagementParts & { views?: number | null }): string {
+  if (!v.views) return "—";
+  const pct = engagementRate(v) * 100;
+  return `${(Math.round(pct * 10) / 10).toLocaleString(locale())}%`;
 }
 
 export function fmtDayShort(iso: string): string {

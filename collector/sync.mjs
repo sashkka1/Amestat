@@ -100,7 +100,6 @@ const CREATOR_FIELDS = "id,platform,handle,display_name,avatar_custom,sort_order
 const COVERS_PARALLEL = 4;      // столько обложек качаем разом
 const COVERS_PAUSE_MS = 100;    // и пауза между пачками: чужой CDN не любит очередь запросов подряд
 const COMMENTS_PAUSE_MS = 3000; // пауза между видео на шаге комментариев
-const DAY_MS = 24 * 60 * 60 * 1000;
 const SLOW_CREATOR_MS = 3 * 60_000;  // дольше — замечание владельцу: обход тормозит
 
 // Куда странице комментариев вообще можно ходить. Всё остальное отсекается (`trimTraffic`):
@@ -227,13 +226,18 @@ async function estimateWork(creators, env, depth, bounds, flags, timing) {
 
   const counts = new Map();
   if (flags.comments) {
-    const win = commentsWindow({ bounds, commentsDays: env.commentsDays });
+    const win = commentsWindow({ bounds });
+    const hasSince = win.since !== null && win.since !== undefined;
+    const hasUntil = win.until !== null && win.until !== undefined;
     const fresh = rows
       .filter((r) => {
+        // Границ нет вовсе (глубина «всё») — счётчик нужен у каждого видео, и у безымянного по
+        // дате тоже: шаг его возьмёт, значит и оценка должна о нём знать.
+        if (!hasSince && !hasUntil) return true;
         const at = r.published_at ? Date.parse(r.published_at) : NaN;
         if (Number.isNaN(at)) return false;
-        if (win.since !== null && win.since !== undefined && at < win.since) return false;
-        if (win.until !== null && win.until !== undefined && at > win.until) return false;
+        if (hasSince && at < win.since) return false;
+        if (hasUntil && at > win.until) return false;
         return true;
       })
       .map((r) => String(r.id));
@@ -253,7 +257,6 @@ async function estimateWork(creators, env, depth, bounds, flags, timing) {
     comments: flags.comments,
     replies: flags.replies,
     allVideos: flags.allVideos,
-    commentsDays: env.commentsDays,
   }, timing);
 }
 
@@ -406,7 +409,8 @@ async function syncedCounts(ids, log) {
 
 /**
  * Кого из видео обходить за текстами комментариев.
- *   • только свежие (`sinceMs`) и только те, у которых комментарии есть вовсе;
+ *   • только попавшие в окно (`sinceMs`/`untilMs` — границы ГЛУБИНЫ обхода) и только те, у
+ *     которых комментарии есть вовсе;
  *   • только НАШИ (`videos.ours`; владелец, 2026-09-08: счётчики из списка — по всем видео,
  *     «всю остальную информацию» — по нашим). Флаг `allVideos` (просьба «и не наши видео» из
  *     матрицы) снимает это условие. Видео, о котором база не сказала (нет строки), — считается
@@ -418,22 +422,28 @@ async function syncedCounts(ids, log) {
  *     (`videos.comments_synced_count`), пропускается: обсуждение не двигалось, а страница
  *     на видео стоит минуты. Первый раз (`null` или неизвестно) — снимаем всегда.
  * `known` — Map id → `{ count, ours, watch }` (старый вид «id → число» тоже понимается).
- * `untilMs` — верхняя граница свежести (миграция v18): при глубине «период» комментарии
- * снимаются у видео ИЗ ПЕРИОДА, а не у вчерашних. Пусто — как было: всё, что новее `sinceMs`.
+ * `sinceMs` / `untilMs` — границы окна, и они те же, что у глубины обхода (владелец,
+ * 2026-09-09): «неделя» — 7 дней, «месяц» — 30, «период» — сам период, «всё» — границ нет
+ * вовсе (`null`), и тогда берутся все видео списка, у которых есть комментарии, — даже те,
+ * у которых площадка не сказала даты.
  * Отдаёт `{ picked, unchanged, foreign, watched }`: `watched` — жёлтые, `foreign` — совсем
  * чужие; текстов не получают ни те ни другие, но в логе они названы порознь.
  * Чистая функция: её проверяют тесты.
  */
-export function pickComments(videos, known, sinceMs, { allVideos = false, untilMs = null } = {}) {
+export function pickComments(videos, known, sinceMs = null, { allVideos = false, untilMs = null } = {}) {
   const picked = [], unchanged = [], foreign = [], watched = [];
+  const hasSince = sinceMs !== null && sinceMs !== undefined;
+  const hasUntil = untilMs !== null && untilMs !== undefined;
   for (const v of videos ?? []) {
     const count = v.comments ?? 0;
     if (count <= 0) continue;
-    if (v.publishedAt === null || v.publishedAt === undefined) continue;
-    const at = Date.parse(v.publishedAt);
-    if (Number.isNaN(at)) continue;
-    if (at < sinceMs) continue;
-    if (untilMs !== null && untilMs !== undefined && at > untilMs) continue;
+    if (hasSince || hasUntil) {
+      if (v.publishedAt === null || v.publishedAt === undefined) continue;
+      const at = Date.parse(v.publishedAt);
+      if (Number.isNaN(at)) continue;
+      if (hasSince && at < sinceMs) continue;
+      if (hasUntil && at > untilMs) continue;
+    }
     const row = known?.get(String(v.id));
     const known_ = row !== null && typeof row === "object";
     const was = known_ ? row.count : row;
@@ -472,7 +482,7 @@ export function pickComments(videos, known, sinceMs, { allVideos = false, untilM
  * Отдаёт `{ videos, ms }` — сколько видео шаг обошёл и сколько это заняло: из этой пары
  * калибруется цена `comments.video` (`estimate.mjs`).
  */
-async function collectComments(creator, videos, env, lane, flags, bounds, log, work = null) {
+async function collectComments(creator, videos, env, lane, flags, depth, bounds, log, work = null) {
   const started = Date.now();
   const nothing = () => ({ videos: 0, ms: Date.now() - started });
   const platform = creator.platform ?? "tiktok";
@@ -481,13 +491,13 @@ async function collectComments(creator, videos, env, lane, flags, bounds, log, w
       : null;
   if (!collect) return nothing();
 
-  // Обычно шаг берёт СВЕЖИЕ видео — за `AMESTAT_COMMENTS_DAYS` дней, как и раньше при любой
-  // глубине. Исключение одно: просьба «за выбранный период» (v18) — там комментарии нужны у
-  // видео ИЗ ПЕРИОДА, иначе срез за первую неделю сентября принёс бы вчерашние обсуждения.
-  const ranged = bounds?.until !== null && bounds?.until !== undefined && bounds?.since !== null && bounds?.since !== undefined;
-  const since = ranged ? bounds.since : Date.now() - env.commentsDays * DAY_MS;
-  const until = ranged ? bounds.until : null;
-  const window = ranged ? "за выбранный период" : `за ${env.commentsDays} дн.`;
+  // 🔴 Окно шага — ровно глубина обхода (владелец, 2026-09-09): «неделя» — 7 дней, «месяц» —
+  // 30, «период» — сам период, «всё» — без ограничения по дате вовсе. Своего окна у шага нет:
+  // прежние «последние `AMESTAT_COMMENTS_DAYS` дней» при обходе за месяц давали счётчики
+  // месячных видео и ни одного текста — «свежих с новыми комментариями нет за 7 дн.».
+  const win = commentsWindow({ bounds });
+  const since = win.since, until = win.until;
+  const windowLabel = depthLabel(depth, since, until);
   const known = await syncedCounts(videos.map((v) => v.id), log);
   const { picked, unchanged, foreign, watched } = pickComments(videos, known, since, { allVideos: flags.allVideos, untilMs: until });
   const same = unchanged.length > 0 ? `, без изменений: ${unchanged.length} видео` : "";
@@ -497,14 +507,14 @@ async function collectComments(creator, videos, env, lane, flags, bounds, log, w
     watched.length > 0 ? `жёлтых: ${watched.length}` : null,
   ].filter(Boolean).join(", ");
   const alien = skipped ? `, ${skipped}` : "";
+  log?.(`  комментарии: окно — ${windowLabel}`);
   if (picked.length === 0) {
-    log?.(`  комментарии: видео 0, собрано 0, не вышло 0 (свежих с новыми комментариями нет ${window}${same}${alien})`);
+    log?.(`  комментарии: видео 0, собрано 0, не вышло 0 (видео с новыми комментариями нет в окне «${windowLabel}»${same}${alien})`);
     return nothing();
   }
-  if (ranged) log?.("  комментарии: глубина «период» — берём видео из периода, а не свежие");
   if (unchanged.length > 0) log?.(`  комментарии: без изменений: ${unchanged.length} видео — их не открываем`);
   if (skipped) log?.(`  комментарии: ${skipped} — тексты не снимаем (нужны — просьба «и не наши видео»)`);
-  if (flags.allVideos) log?.(`  комментарии: просьба «и не наши видео» — снимаем у всех свежих`);
+  if (flags.allVideos) log?.(`  комментарии: просьба «и не наши видео» — снимаем у всех видео окна`);
 
   let ctx = null;
   try {
@@ -644,7 +654,7 @@ async function collectOne(creator, env, depth, bounds, lane, flags, log, pool = 
     // Тексты комментариев — после снимков и только по свежим видео: строки `video_comments`
     // ссылаются на `videos`, значит upsert выше должен пройти первым.
     // ⚠️ `comments: false` пропускает шаг целиком — вместе с запросом прежних чисел.
-    if (flags.comments) commentsRun = await collectComments(creator, videos, env, lane, flags, bounds, log, work);
+    if (flags.comments) commentsRun = await collectComments(creator, videos, env, lane, flags, depth, bounds, log, work);
     else log?.("  комментарии: пропущены (просьба без комментариев)");
   }
 

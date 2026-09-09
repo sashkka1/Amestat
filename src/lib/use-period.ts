@@ -1,11 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
+import { setPeriodPrefs, usePeriodPrefs } from "./dashboard-prefs";
 import {
   fromDateInputValue,
   previousRange,
   resolvePeriod,
-  toDateInputValue,
   type PeriodKey,
   type PeriodRange,
 } from "./period";
@@ -23,12 +23,24 @@ export type PeriodState = {
 
 // Срок по умолчанию — 7 дней (владелец, 2026-09-08). «Всё время» отсчитывается от
 // самой ранней даты добавления: раньше неё данных нет.
+//
+// 🔴 Выбор живёт не в состоянии страницы, а в общем сторе (`lib/dashboard-prefs.ts`,
+// localStorage `amestat.period`): один срок на весь сайт, переход между страницами его не
+// сбрасывает. Хук у каждой страницы свой, но читают они одно и то же значение, поэтому
+// полоса периода и содержимое под ней не могут разойтись.
+//
+// ⚠️ Границы считаются здесь, а не хранятся: «7 дней» — это семь дней назад ОТ СЕЙЧАС.
+// `earliest` у страниц разный (весь список креаторов против одного), и на «Всё время» срок
+// у них поэтому свой — это не рассинхрон, а разный смысл слова «всё».
 export function usePeriod(earliest: Date): PeriodState {
-  const [key, setKey] = useState<PeriodKey>("7d");
-  const [customFrom, setCustomFrom] = useState(() =>
-    toDateInputValue(new Date(Date.now() - 7 * 86_400_000)),
+  const prefs = usePeriodPrefs();
+  const { key, from: customFrom, to: customTo } = prefs;
+
+  const setKey = useCallback((k: PeriodKey) => setPeriodPrefs({ ...prefs, key: k }), [prefs]);
+  const setCustom = useCallback(
+    (from: string, to: string) => setPeriodPrefs({ ...prefs, from, to }),
+    [prefs],
   );
-  const [customTo, setCustomTo] = useState(() => toDateInputValue(new Date()));
 
   const earliestMs = earliest.getTime();
   const range = useMemo(
@@ -42,16 +54,5 @@ export function usePeriod(earliest: Date): PeriodState {
 
   const previous = useMemo(() => (range ? previousRange(range) : null), [range]);
 
-  return {
-    key,
-    setKey,
-    customFrom,
-    customTo,
-    setCustom: (f, t) => {
-      setCustomFrom(f);
-      setCustomTo(t);
-    },
-    range,
-    previous,
-  };
+  return { key, setKey, customFrom, customTo, setCustom, range, previous };
 }

@@ -199,6 +199,32 @@ test("старое и пустое не берётся ни в снятые, н�
   assert.equal(unchanged.length, 0, "пропущенное по свежести в счёт «без изменений» не идёт");
 });
 
+// --- Окно шага = глубина обхода (владелец, 2026-09-09) --------------------------------------
+
+test("окно «месяц»: тридцатидневное видео берётся, а более старое — нет", () => {
+  const videos = [video("m", 5, 20), video("older", 5, 40)];
+  const { picked } = pickComments(videos, new Map(), NOW - 30 * DAY);
+  assert.deepEqual(picked.map((v) => v.id), ["m"], "месячный обход снимает комментарии за месяц");
+});
+
+test("окно «всё» (границ нет) — берутся все видео с комментариями, даже без даты", () => {
+  const videos = [video("old", 100, 300), video("empty", 0, 1), { id: "nodate", comments: 5, publishedAt: null }];
+  const { picked, unchanged } = pickComments(videos, new Map(), null);
+  assert.deepEqual(picked.map((v) => v.id), ["old", "nodate"], "у глубины «всё» ограничения по дате нет");
+  assert.equal(unchanged.length, 0);
+});
+
+test("окно «всё» не отменяет ни «без изменений», ни «только наши»", () => {
+  const known = new Map([
+    ["same", { count: 7, ours: true }],
+    ["alien", { count: null, ours: false }],
+  ]);
+  const { picked, unchanged, foreign } = pickComments([video("same", 7, 200), video("alien", 3, 200)], known, null);
+  assert.equal(picked.length, 0);
+  assert.deepEqual(unchanged.map((v) => v.id), ["same"]);
+  assert.deepEqual(foreign.map((v) => v.id), ["alien"]);
+});
+
 test("счётчик базы приезжает строкой — сравнение всё равно числовое", () => {
   const { picked, unchanged } = pickComments([video("a", 42, 1)], new Map([["a", "42"]]), SINCE);
   assert.equal(picked.length, 0);

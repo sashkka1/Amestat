@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/button";
 import { LANGS, useLang, useT, type Lang } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
-// Переключатель языка в правом верхнем углу (владелец, 2026-09-09) — три коротких блока
-// RU / EN / PT. Вид тот же, что у переключателя площадки (`components/platform-switch.tsx`):
+// Переключатель языка в правом верхнем углу (владелец, 2026-09-09) — два коротких блока
+// EN / PT. Вид тот же, что у переключателя площадки (`components/platform-switch.tsx`):
 // выбранный — `secondary`, остальные — `outline`.
 export function LangSwitch({ className }: { className?: string }) {
   const t = useT();
@@ -37,9 +37,9 @@ export function LangSwitch({ className }: { className?: string }) {
   );
 }
 
-// `<html lang>` статика печатает русским: язык проставляется уже в браузере, как и заголовок
-// вкладки. Отдельным компонентом, потому что сама раскладка — серверная.
-const HTML_LANG: Record<Lang, string> = { ru: "ru", en: "en", "pt-BR": "pt-BR" };
+// `<html lang>` статика печатает английским: язык проставляется уже в браузере, как и
+// заголовок вкладки. Отдельным компонентом, потому что сама раскладка — серверная.
+const HTML_LANG: Record<Lang, string> = { en: "en", "pt-BR": "pt-BR" };
 
 export function LangHtml() {
   const { lang } = useLang();

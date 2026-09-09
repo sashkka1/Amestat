@@ -249,9 +249,12 @@ export function estimateCreator({
 export function commentCandidate(row, comments, { since = null, until = null, allVideos = false } = {}) {
   if (!(Number(comments) > 0)) return false;
   const at = msOf(row?.published_at);
-  if (at === null) return false;
-  if (since !== null && at < since) return false;
-  if (until !== null && at > until) return false;
+  // Границ нет вовсе (глубина «всё») — дата не нужна: берём весь список, как и `pickComments`.
+  if (since !== null || until !== null) {
+    if (at === null) return false;
+    if (since !== null && at < since) return false;
+    if (until !== null && at > until) return false;
+  }
   // Чужие и жёлтые текстов не получают — ровно как в `pickComments`. Строки без поля `ours`
   // считаются нашими: лишняя работа в оценке лучше заниженной полосы.
   if (!allVideos && row?.ours === false) return false;
@@ -259,21 +262,19 @@ export function commentCandidate(row, comments, { since = null, until = null, al
 }
 
 /**
- * Окно шага комментариев в мс: обычно последние `commentsDays` дней, а при глубине «период» —
- * сам период (так же решает `collectComments`). Пересекается с границами глубины: видео, до
- * которого шаг списка не долистает, кандидатом быть не может.
- * Чистая функция.
+ * Окно шага комментариев в мс — РОВНО границы глубины обхода (владелец, 2026-09-09).
+ * `week` → 7 дней, `month` → 30, `range` → сам период, `all` → границ нет вовсе.
+ * 🔴 Своего окна у шага больше нет: прежние «последние `AMESTAT_COMMENTS_DAYS` дней»
+ * независимо от глубины означали, что обход за месяц приносил счётчики месячных видео, а
+ * тексты — только недельных, и в логе стояло «свежих с новыми комментариями нет за 7 дн.».
+ * ⚠️ Границы приходят готовыми (`depthBounds` в `scope.mjs`) — считать их здесь второй раз
+ * значило бы завести «месяц» дважды. Чистая функция.
  */
-export function commentsWindow({ bounds = null, commentsDays = 7, now = Date.now() } = {}) {
-  const DAY = 24 * 60 * 60 * 1000;
-  const ranged = bounds?.since !== null && bounds?.since !== undefined
-    && bounds?.until !== null && bounds?.until !== undefined;
-  let since = ranged ? bounds.since : now - Math.max(1, Number(commentsDays) || 7) * DAY;
-  let until = ranged ? bounds.until : null;
-  // Глубина уже, чем окно комментариев: берём пересечение.
-  if (!ranged && bounds?.since !== null && bounds?.since !== undefined) since = Math.max(since, bounds.since);
-  if (!ranged && bounds?.until !== null && bounds?.until !== undefined) until = bounds.until;
-  return { since, until };
+export function commentsWindow({ bounds = null } = {}) {
+  return {
+    since: bounds?.since ?? null,
+    until: bounds?.until ?? null,
+  };
 }
 
 /**
@@ -282,8 +283,8 @@ export function commentsWindow({ bounds = null, commentsDays = 7, now = Date.now
  * `creators` — `[{ id, handle, platform }]` в порядке обхода;
  * `videos`   — строки `videos` этих креаторов: `{ creator_id, id, published_at, ours, watch }`;
  * `counts`   — Map «id видео → число комментариев последнего снимка» (нет строки — нет счёта);
- * `opts`     — `{ depth, bounds, videos: 'all'|'ours', maxVideos, comments, replies, allVideos,
- *                commentsDays, now }`;
+ * `opts`     — `{ depth, bounds, videos: 'all'|'ours', maxVideos, comments, replies, allVideos }`
+ *                (окно шага комментариев — те же `bounds`, своего у него нет);
  * `timing`   — калибровка.
  *
  * Отдаёт `{ total, byCreator: [{ creatorId, handle, list, comments, replies, total, done }] }`,
@@ -294,8 +295,7 @@ export function estimateRun(creators, videos, counts, opts = {}, timing = DEFAUL
   const mode = opts.videos === "ours" ? "ours" : "all";
   const depth = String(opts.depth ?? "all");
   const bounds = opts.bounds ?? { since: null, until: null };
-  const now = Number(opts.now) || Date.now();
-  const win = commentsWindow({ bounds, commentsDays: opts.commentsDays ?? 7, now });
+  const win = commentsWindow({ bounds });
   const withComments = opts.comments !== false;
   const withReplies = opts.replies !== false;
   const allVideos = opts.allVideos === true;

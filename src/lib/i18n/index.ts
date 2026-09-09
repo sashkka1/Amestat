@@ -1,32 +1,32 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
-import { ru, type Dict } from "./ru";
-import { en } from "./en";
+import { en, type Dict } from "./en";
 import { ptBR } from "./pt-BR";
 
-// Язык сайта. Русский основной, английский и бразильский португальский — переводы
-// (владелец, 2026-09-09). Выбор общий на все страницы и живёт в localStorage, тем же
+// Язык сайта. Английский основной, бразильский португальский — перевод (владелец,
+// 2026-09-09; русского на сайте нет вовсе). Выбор общий на все страницы и живёт в
+// localStorage, тем же
 // приёмом, что переключатель площадки (`lib/platform-filter.ts`): хранилища может не быть
 // вовсе, и обращение к нему кидает, поэтому чтение и запись в try/catch, а значение
 // дублируется в памяти — переключатель обязан работать хотя бы до перезагрузки.
 
-export type Lang = "ru" | "en" | "pt-BR";
+export type Lang = "en" | "pt-BR";
 
-export const LANGS: Lang[] = ["ru", "en", "pt-BR"];
+export const LANGS: Lang[] = ["en", "pt-BR"];
 
 export const LANG_KEY = "amestat.lang";
 
-const DICTS: Record<Lang, Dict> = { ru, en, "pt-BR": ptBR };
+const DICTS: Record<Lang, Dict> = { en, "pt-BR": ptBR };
 
 // Локаль для Intl: даты и числа берут её из выбранного языка.
-const LOCALES: Record<Lang, string> = { ru: "ru-RU", en: "en-US", "pt-BR": "pt-BR" };
+const LOCALES: Record<Lang, string> = { en: "en-US", "pt-BR": "pt-BR" };
 
 export function localeOf(lang: Lang): string {
   return LOCALES[lang];
 }
 
-// Ключ словаря — путь через точку: "sync.phase.queued". Тип собирается из самого `ru`,
+// Ключ словаря — путь через точку: "sync.phase.queued". Тип собирается из самого `en`,
 // поэтому опечатка в ключе не соберётся.
 type Join<K, P> = K extends string ? (P extends string ? (P extends "" ? K : `${K}.${P}`) : never) : never;
 type Paths<T> = T extends string
@@ -39,17 +39,11 @@ export type TParams = Record<string, string | number>;
 // Слова, которые склоняются по числу: три формы в словаре, правило — на язык.
 export type PluralKey = keyof Dict["plural"];
 
-// Русское правило: 1 креатор, 2–4 креатора, 5–20 креаторов. У английского и португальского
-// форм две, и «few» там повторяет «many» — выбирать нечего.
-function pluralForm(lang: Lang, n: number): "one" | "few" | "many" {
-  const abs = Math.abs(Math.trunc(n));
-  if (lang !== "ru") return abs === 1 ? "one" : "many";
-  const tens = abs % 100;
-  if (tens >= 11 && tens <= 14) return "many";
-  const ones = abs % 10;
-  if (ones === 1) return "one";
-  if (ones >= 2 && ones <= 4) return "few";
-  return "many";
+// У английского и португальского форм две, и «few» в словаре повторяет «many» — выбирать
+// нечего. Третья форма в словаре осталась: язык со своим правилом добавится, не переписывая
+// ни один вызов `t.plural`.
+function pluralForm(_lang: Lang, n: number): "one" | "few" | "many" {
+  return Math.abs(Math.trunc(n)) === 1 ? "one" : "many";
 }
 
 function lookup(dict: Dict, key: string): string | null {
@@ -69,10 +63,10 @@ function fill(text: string, params?: TParams): string {
   );
 }
 
-// Перевода нет — берём русский: словарь-источник полон по определению. Нет и там (ключ
+// Перевода нет — берём английский: словарь-источник полон по определению. Нет и там (ключ
 // сочинили на ходу) — показываем сам ключ, а не пустоту.
 export function translate(lang: Lang, key: TKey, params?: TParams): string {
-  const text = lookup(DICTS[lang], key) ?? lookup(ru, key);
+  const text = lookup(DICTS[lang], key) ?? lookup(en, key);
   return text === null ? key : fill(text, params);
 }
 
@@ -98,19 +92,18 @@ function makeT(lang: Lang): T {
 }
 
 function isLang(value: unknown): value is Lang {
-  return value === "ru" || value === "en" || value === "pt-BR";
+  return value === "en" || value === "pt-BR";
 }
 
-// Умолчание — язык браузера, если он один из трёх; иначе русский.
+// Умолчание — язык браузера: португальский, если браузер просит португальский (любой,
+// не только бразильский), иначе английский (владелец, 2026-09-09).
 function browserLang(): Lang {
   try {
-    const raw = (navigator.language || "").toLowerCase();
-    if (raw.startsWith("pt")) return "pt-BR";
-    if (raw.startsWith("en")) return "en";
+    if ((navigator.language || "").toLowerCase().startsWith("pt")) return "pt-BR";
   } catch {
-    // navigator недоступен — остаётся русский.
+    // navigator недоступен — остаётся английский.
   }
-  return "ru";
+  return "en";
 }
 
 function readSaved(): Lang {
@@ -118,7 +111,7 @@ function readSaved(): Lang {
     const raw = window.localStorage.getItem(LANG_KEY);
     return isLang(raw) ? raw : browserLang();
   } catch {
-    return "ru";
+    return "en";
   }
 }
 
@@ -138,9 +131,9 @@ function getSnapshot(): Lang {
 }
 
 // Разметку статических страниц Next печатает заранее, до всякого хранилища: там всегда
-// русский, а выбранный язык встаёт сразу после подключения.
+// английский, а выбранный язык встаёт сразу после подключения.
 function getServerSnapshot(): Lang {
-  return "ru";
+  return "en";
 }
 
 // Язык вне React: его читают форматирование чисел и дат (`lib/format.ts`) и модули без
@@ -148,7 +141,7 @@ function getServerSnapshot(): Lang {
 // ⚠️ Перерисовку это само не вызывает: страница обязана быть подписана через useT/useLang,
 // и тогда всё под ней пересчитается вместе с ней.
 export function getLang(): Lang {
-  return typeof window === "undefined" ? "ru" : getSnapshot();
+  return typeof window === "undefined" ? "en" : getSnapshot();
 }
 
 // Перевод вне React — тем же словарём и тем же языком, что и в компонентах.
@@ -189,7 +182,7 @@ export function monthsShort(lang: Lang): string[] {
   return [m.m1, m.m2, m.m3, m.m4, m.m5, m.m6, m.m7, m.m8, m.m9, m.m10, m.m11, m.m12];
 }
 
-// Заголовок вкладки. Статика печатает его заранее и по-русски, поэтому язык проставляется
+// Заголовок вкладки. Статика печатает его заранее по-английски, поэтому язык проставляется
 // уже в браузере — как и `<html lang>`.
 export function useDocumentTitle(title: string): void {
   useEffect(() => {

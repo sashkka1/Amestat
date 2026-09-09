@@ -3,6 +3,32 @@
 
 import { getLang, localeOf, tr } from "@/lib/i18n";
 
+// 🔴 Вовлечённость — ОДНА формула на весь сайт: лайки + комментарии + репосты
+// (владелец, 2026-09-09). Сохранений в ней нет намеренно: площадка отдаёт их не всегда,
+// и добавить их здесь значило бы сделать числа несравнимыми между TikTok и Instagram.
+//
+// ⚠️ Своей колонки `engagement` в базе нет вовсе: `creators_overview` отдаёт только суммы
+// лайков, комментариев и репостов, а складывает их сайт — этой функцией и нигде больше.
+// Считалось это в пяти местах отдельно, и разойтись им ничего не мешало.
+//
+// Поля необязательные: строки приходят и из RPC (`*_delta`), и из снимков (`*_now`), и там
+// бывает null — «нет данных» считается нулём, а не ломает сумму.
+export type EngagementParts = {
+  likes?: number | null;
+  comments?: number | null;
+  shares?: number | null;
+};
+
+export function engagementOf({ likes, comments, shares }: EngagementParts): number {
+  return (likes ?? 0) + (comments ?? 0) + (shares ?? 0);
+}
+
+// Доля вовлечённости от просмотров, 0..1. Просмотров нет — 0: делить не на что, а «бесконечно
+// вовлечённое» видео встало бы первым в любой сортировке.
+export function engagementRate(v: EngagementParts & { views?: number | null }): number {
+  return v.views ? engagementOf(v) / v.views : 0;
+}
+
 export function sum(values: Iterable<number | null | undefined>): number {
   let total = 0;
   for (const v of values) total += v ?? 0;

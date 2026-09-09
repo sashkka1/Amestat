@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/client";
+import { engagementOf } from "./stats";
 import type {
   Creator,
   CreatorArchive,
@@ -329,6 +330,7 @@ export function sumOverview(rows: CreatorOverview[]): Totals {
     t.followers += r.followers_now ?? 0;
     t.followersDelta += r.followers_delta ?? 0;
   }
-  t.engagement = t.likes + t.comments + t.shares;
+  // Формула вовлечённости — одна на весь сайт (`lib/stats.ts`).
+  t.engagement = engagementOf(t);
   return t;
 }

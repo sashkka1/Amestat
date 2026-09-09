@@ -13,6 +13,7 @@ import { VideoStateToggle } from "@/components/video-state-toggle";
 import { Panel, PanelHead, Empty } from "./panel";
 import { SortHead, nextSort, type SortDir } from "./sort-head";
 import { engagementPct, fmtDayAxis, fmtNum } from "@/lib/format";
+import { engagementRate } from "@/lib/stats";
 import { useT, type TKey } from "@/lib/i18n";
 import { STATE_DOT_CLASS, STATE_ROW_CLASS, stateLabel, type VideoState } from "@/lib/video-state";
 import type { Platform } from "@/lib/types";
@@ -58,7 +59,7 @@ function value(r: VideoTableRow, k: Key): number {
     case "published":
       return r.publishedAt ? new Date(r.publishedAt).getTime() : 0;
     case "engagement":
-      return r.views ? (r.likes + r.comments + r.shares) / r.views : 0;
+      return engagementRate(r);
     default:
       return r[k];
   }
@@ -244,7 +245,7 @@ export function VideosTable({
                   <TableCell className="text-right tabular-nums">{fmtNum(r.shares)}</TableCell>
                   <TableCell className="text-right tabular-nums">{fmtNum(r.saves)}</TableCell>
                   <TableCell className="text-right tabular-nums">
-                    {engagementPct(r.likes, r.comments, r.shares, r.views)}
+                    {engagementPct(r)}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {r.publishedAt ? fmtDayAxis(r.publishedAt) : "—"}

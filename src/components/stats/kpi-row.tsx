@@ -121,6 +121,9 @@ export function totalsToKpis(now: Totals, prev: Totals | null, daily?: DailyView
     { key: "likes", label: tr("metric.likes"), icon: HeartIcon, value: now.likes, prev: was("likes"), series: series("likes"), color: "var(--chart-3)" },
     { key: "comments", label: tr("metric.comments"), icon: MessageCircleIcon, value: now.comments, prev: was("comments"), series: series("comments"), color: "var(--chart-4)" },
     { key: "shares", label: tr("metric.shares"), icon: Share2Icon, value: now.shares, prev: was("shares"), series: series("shares"), color: "var(--chart-5)" },
-    { key: "videos", label: tr("metric.videos"), icon: VideoIcon, value: now.videos, prev: was("videos") },
+    // Плитка называется «Посты» (владелец, 2026-09-09): считаются вышедшие за срок
+    // публикации, а «видео» — это уже строки таблицы ниже. Ключ `metric.videos` остался за
+    // ними, у плитки свой.
+    { key: "videos", label: tr("metric.posts"), icon: VideoIcon, value: now.videos, prev: was("videos") },
   ];
 }

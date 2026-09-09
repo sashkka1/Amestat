@@ -8,6 +8,7 @@ import { PlatformIcon } from "@/components/platform";
 import { Input } from "@/components/ui/input";
 import { Panel, PanelHead, Empty } from "./panel";
 import { fmtCompact, fmtDayAxis, fmtNum } from "@/lib/format";
+import { engagementRate } from "@/lib/stats";
 import { useT, type TKey } from "@/lib/i18n";
 import type { Platform } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -47,7 +48,7 @@ function sortValue(p: PostItem, sort: Sort): number {
     case "comments":
       return p.comments;
     case "engagement":
-      return p.views ? (p.likes + p.comments + p.shares) / p.views : 0;
+      return engagementRate(p);
     default:
       return p.views;
   }

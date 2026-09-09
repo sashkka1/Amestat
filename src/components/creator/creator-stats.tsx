@@ -22,7 +22,7 @@ import {
 import { setVideoState } from "@/lib/api/videos";
 import { matchesScope, useCompare, useScope, type Scope } from "@/lib/dashboard-prefs";
 import { videoState, type VideoState } from "@/lib/video-state";
-import { median, sum } from "@/lib/stats";
+import { engagementOf, median, sum } from "@/lib/stats";
 import { changeVs, fmtCompact, fmtNum } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import { publishedIn } from "@/lib/video-rows";
@@ -89,7 +89,9 @@ function totalsOf(rows: VideoStats[], range: PeriodRange): Totals {
     followers: 0,
     followersDelta: 0,
   };
-  t.engagement = t.likes + t.comments + t.shares;
+  // Формула вовлечённости — одна на весь сайт (`lib/stats.ts`), та же, что у сводки
+  // дашборда в `sumOverview`.
+  t.engagement = engagementOf(t);
   return t;
 }
 

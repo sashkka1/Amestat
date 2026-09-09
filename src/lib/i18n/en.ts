@@ -1,9 +1,15 @@
-import type { Dict } from "./ru";
+// Source dictionary. English is the site's base language (owner, 2026-09-09) and Brazilian
+// Portuguese is translated from it: `pt-BR.ts` is declared as `Dict`, so a missing, extra or
+// misspelled key does not compile.
+//
+// 🔴 Nothing that comes from the database written by the collector belongs here:
+// `sync_log.text`, `creators.sync_error`, `sync_runs.error`, `current_handles`. Those strings
+// are shown as they are. Platform names (TikTok, Instagram) and handles are not translated.
+//
+// Substitution is `{name}`: `t("sync.progress", { done: 3, total: 10 })`.
+// Plurals live in `plural` with three forms, picked by the language rule (see index.ts).
 
-// English. Same shape as `ru.ts` — the compiler catches a missing or misspelled key.
-// Strings written by the collector into the database are never translated here.
-
-export const en: Dict = {
+export const en = {
   meta: {
     title: "Amestat",
     description: "Creator statistics",
@@ -12,12 +18,11 @@ export const en: Dict = {
 
   lang: {
     label: "Language",
-    ru: "RU",
     en: "EN",
     "pt-BR": "PT",
   },
 
-  // English has two forms; `few` repeats `many` so the shape matches Russian.
+  // English and Portuguese both have two forms; `few` repeats `many` so the shape is one.
   plural: {
     creators: { one: "creator", few: "creators", many: "creators" },
     days: { one: "day", few: "days", many: "days" },
@@ -68,6 +73,8 @@ export const en: Dict = {
     saves: "Saves",
     engagement: "Engagement",
     videos: "Videos",
+    // The summary tile: what went out during the range is posts, not table rows.
+    posts: "Posts",
     followers: "Followers",
   },
 
@@ -182,14 +189,14 @@ export const en: Dict = {
     listTitle: "List",
     countOf: "{shown} of {total}",
     queueUnreadable: "the update queue cannot be read",
-    trendUnreadable: "the 7-day trend cannot be read",
+    trendUnreadable: "the trend for the period cannot be read",
     searchPlaceholder: "Search by name or @handle",
     emptyFiltered: "Nobody matches the search and filters.",
     emptyNone: "No creators yet.",
     emptyPlatform: "No creators on this platform.",
     allOursHead: "All ours",
-    views7d: "Last 7 days",
-    vsPrevWeek: "vs the previous 7 days",
+    viewsPeriod: "For the period",
+    vsPrevPeriod: "vs the previous period of the same length",
     allOursAria: "All videos are ours",
     someOursAria: "Only tagged videos are ours",
     allOursTitle: "Every video of this creator counts as ours",
@@ -283,7 +290,6 @@ export const en: Dict = {
     thisVideo: "This video",
     median: "Median",
     result: "Result",
-    total: "{n} total",
     viewsBySnapshots: "Views by snapshot",
     snapshotsError: "Could not read the snapshots: {error}",
     fewSnapshots: "Too few snapshots for a chart yet.",
@@ -383,7 +389,7 @@ export const en: Dict = {
     notOursNote:
       "Comment texts are not collected for videos that are not ours. If you need them, tick “Comments for videos that are not ours” in the update popup.",
     emptyTitle: "No comments in the database",
-    emptyHint: "texts are collected for videos from the last 7 days",
+    emptyHint: "texts are collected during an update run",
     nothingFound: "Nothing found.",
     replies: "Replies",
     more: "Show more · {n} left",
@@ -653,3 +659,7 @@ export const en: Dict = {
     syncRunReadFailed: "Could not read the run: {message}",
   },
 };
+
+// Shape of the dictionary: `pt-BR.ts` is declared as `Dict`, so the compiler catches a
+// missing key, an extra one and a typo in a name.
+export type Dict = typeof en;

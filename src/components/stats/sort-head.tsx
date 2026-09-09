@@ -17,7 +17,8 @@ export function SortHead<K extends string>({
   className,
 }: {
   k: K;
-  label: string;
+  // Не только строка: у столбца «За период» под названием стоит вторая строка с датами.
+  label: React.ReactNode;
   sortKey: K;
   dir: SortDir;
   onSort: (k: K) => void;
@@ -31,7 +32,7 @@ export function SortHead<K extends string>({
         type="button"
         onClick={() => onSort(k)}
         className={cn(
-          "inline-flex items-center gap-1 hover:text-foreground",
+          "inline-flex items-center gap-1 text-left hover:text-foreground",
           active ? "text-foreground" : "text-muted-foreground",
         )}
       >

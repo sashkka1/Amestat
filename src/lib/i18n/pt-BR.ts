@@ -1,6 +1,6 @@
-import type { Dict } from "./ru";
+import type { Dict } from "./en";
 
-// Português do Brasil. Mesma forma de `ru.ts` — o compilador acusa chave faltando ou errada.
+// Português do Brasil. Mesma forma de `en.ts` — o compilador acusa chave faltando ou errada.
 // Textos gravados no banco pelo coletor nunca são traduzidos aqui.
 
 export const ptBR: Dict = {
@@ -12,12 +12,11 @@ export const ptBR: Dict = {
 
   lang: {
     label: "Idioma",
-    ru: "RU",
     en: "EN",
     "pt-BR": "PT",
   },
 
-  // O português tem duas formas; `few` repete `many` para a forma bater com o russo.
+  // O português tem duas formas; `few` repete `many` para a forma bater com o inglês.
   plural: {
     creators: { one: "criador", few: "criadores", many: "criadores" },
     days: { one: "dia", few: "dias", many: "dias" },
@@ -68,6 +67,7 @@ export const ptBR: Dict = {
     saves: "Salvamentos",
     engagement: "Engajamento",
     videos: "Vídeos",
+    posts: "Posts",
     followers: "Seguidores",
   },
 
@@ -182,14 +182,14 @@ export const ptBR: Dict = {
     listTitle: "Lista",
     countOf: "{shown} de {total}",
     queueUnreadable: "a fila de atualização não pode ser lida",
-    trendUnreadable: "a tendência de 7 dias não pode ser lida",
+    trendUnreadable: "a tendência do período não pode ser lida",
     searchPlaceholder: "Buscar por nome ou @perfil",
     emptyFiltered: "Ninguém corresponde à busca e aos filtros.",
     emptyNone: "Ainda não há criadores.",
     emptyPlatform: "Não há criadores nesta plataforma.",
     allOursHead: "Todos nossos",
-    views7d: "Últimos 7 dias",
-    vsPrevWeek: "em relação aos 7 dias anteriores",
+    viewsPeriod: "No período",
+    vsPrevPeriod: "em relação ao período anterior de mesma duração",
     allOursAria: "Todos os vídeos são nossos",
     someOursAria: "Só os vídeos marcados são nossos",
     allOursTitle: "Todos os vídeos deste criador contam como nossos",
@@ -283,7 +283,6 @@ export const ptBR: Dict = {
     thisVideo: "Este vídeo",
     median: "Mediana",
     result: "Resultado",
-    total: "{n} no total",
     viewsBySnapshots: "Visualizações por registro",
     snapshotsError: "Não foi possível ler os registros: {error}",
     fewSnapshots: "Ainda há poucos registros para o gráfico.",
@@ -383,7 +382,7 @@ export const ptBR: Dict = {
     notOursNote:
       "Os textos dos comentários não são coletados em vídeos que não são nossos. Se precisar, marque “Também nos vídeos que não são nossos” no popup de atualização.",
     emptyTitle: "Não há comentários no banco",
-    emptyHint: "os textos são coletados para vídeos dos últimos 7 dias",
+    emptyHint: "os textos são coletados durante uma atualização",
     nothingFound: "Nada encontrado.",
     replies: "Respostas",
     more: "Mostrar mais · faltam {n}",

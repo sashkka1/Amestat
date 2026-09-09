@@ -12,7 +12,7 @@ import { VideoHistoryChart } from "./daily-chart";
 import { VideoComments } from "./video-comments";
 import { videoHistory } from "@/lib/queries";
 import { describeVsMedian } from "@/lib/stats";
-import { fmtDateTime, fmtDelta, fmtNum } from "@/lib/format";
+import { fmtDateTime, fmtNum } from "@/lib/format";
 import { useT, type TKey } from "@/lib/i18n";
 import type { VideoState } from "@/lib/video-state";
 import type { Platform, VideoStats } from "@/lib/types";
@@ -126,13 +126,10 @@ export function VideoPanel({
               return (
                 <TableRow key={m.key}>
                   <TableCell>{t(m.label)}</TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {fmtDelta(value)}
-                    <span className="text-muted-foreground">
-                      {" · "}
-                      {t("videoPanel.total", { n: fmtNum(now) })}
-                    </span>
-                  </TableCell>
+                  {/* Одно число — текущее значение счётчика (владелец, 2026-09-09).
+                      Прирост за срок из колонки убран: он остаётся в расчёте справа,
+                      где сравнивается с медианой, но глазами тут нужен итог. */}
+                  <TableCell className="text-right tabular-nums">{fmtNum(now)}</TableCell>
                   <TableCell className="text-right tabular-nums">{fmtNum(medians[m.key])}</TableCell>
                   <TableCell className="text-right">{describeVsMedian(value, medians[m.key])}</TableCell>
                 </TableRow>

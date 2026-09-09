@@ -11,6 +11,7 @@ import { Delta } from "./delta";
 import { Panel, PanelHead, Empty } from "./panel";
 import { SortHead, nextSort, type SortDir } from "./sort-head";
 import { fmtNum } from "@/lib/format";
+import { engagementOf } from "@/lib/stats";
 import { useT } from "@/lib/i18n";
 import type { Creator, CreatorOverview } from "@/lib/types";
 
@@ -55,7 +56,12 @@ export function buildCreatorRows(
     return {
       creator: c,
       views,
-      engagement: (o?.likes_delta ?? 0) + (o?.comments_delta ?? 0) + (o?.shares_delta ?? 0),
+      // Та же формула, что у плитки «Вовлечённость» над таблицей (`lib/stats.ts`).
+      engagement: engagementOf({
+        likes: o?.likes_delta,
+        comments: o?.comments_delta,
+        shares: o?.shares_delta,
+      }),
       videos,
       avgViews: videos > 0 ? Math.round(views / videos) : 0,
       viewsPrev: prevById.get(c.id)?.views_delta ?? 0,

@@ -207,9 +207,12 @@ function Dashboard() {
         <>
           {stats.error ? (
             <PageError error={stats.error} />
-          ) : totals && (!compare.on || prevTotals) ? (
+          ) : totals ? (
             /* Дневной ряд у плиток тот же, что рисует «Динамика»: спарклайн в плитке —
-               это её кусок, а не отдельный расчёт. */
+               это её кусок, а не отдельный расчёт.
+               ⚠️ Ждать прошлый срок нельзя: пока он едет (сравнение только что включили),
+               плитки уезжали в скелет — и число просмотров пропадало с экрана на ровном
+               месте. Нет прошлого — плитка стоит без строки дельты, и это честно. */
             <KpiRow items={totalsToKpis(totals, prevTotals, stats.data?.daily)} collapseKey="kpi" />
           ) : (
             <Skeleton className="h-28 w-full" />
