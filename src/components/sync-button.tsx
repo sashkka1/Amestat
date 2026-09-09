@@ -126,7 +126,10 @@ export function SyncButton({
   // переключатель страниц, но своего выбора не запоминает и общий не двигает: это выбор
   // на одну просьбу, а не настройка.
   const { filter: pageFilter } = usePlatformFilter();
-  const [platform, setPlatform] = useState<PlatformFilter>(pageFilter);
+  // На карточке креатора площадка всегда «Все»: группы там нет, и общий переключатель
+  // не должен молча резать «Все креаторы».
+  const startPlatform: PlatformFilter = scope === null ? pageFilter : "all";
+  const [platform, setPlatform] = useState<PlatformFilter>(startPlatform);
   // Площадка ушедшей просьбы: строке состояния и тосту нечего взять из базы — в sync_runs
   // площадки нет, а знать, чей обход ждём, надо.
   const [askedPlatform, setAskedPlatform] = useState<PlatformFilter>("all");
@@ -360,7 +363,7 @@ export function SyncButton({
     (next: boolean) => {
       setOpen(next);
       if (!next) return;
-      setPlatform(pageFilter);
+      setPlatform(startPlatform);
       // Каждое открытие — с чистого листа: ни «все видео», ни глубина, ни охват не
       // наследуются от прошлой просьбы.
       setAllVideos(false);
@@ -380,7 +383,7 @@ export function SyncButton({
         },
       );
     },
-    [pageFilter, creators, loadingCreators],
+    [startPlatform, creators, loadingCreators],
   );
 
   // Площадка креатора — из списка; строка страницы отбирается по ней же.
@@ -548,8 +551,8 @@ export function SyncButton({
                 onClick={() => setTarget("all")}
               />
               <SyncChoiceBlock
-                label="Только эта страница"
-                hint={`${pageCount} ${creatorsWord(pageCount)} на странице`}
+                label={scope !== null ? "Только этот креатор" : "Только эта страница"}
+                hint={scope !== null ? "без остальных" : `${pageCount} ${creatorsWord(pageCount)} на странице`}
                 selected={target === "page"}
                 disabled={pageBlocked}
                 title={pageBlocked && emptyNote ? emptyNote : undefined}
@@ -557,7 +560,9 @@ export function SyncButton({
               />
             </SyncGroup>
           )}
-          {/* Какую площадку обходить. Общий переключатель страниц попап не двигает. */}
+          {/* Какую площадку обходить. Общий переключатель страниц попап не двигает. На карточке
+              креатора группы нет (владелец, 2026-09-09): площадка у него одна, выбирать нечего. */}
+          {scope === null && (
           <SyncGroup title="Площадка" cols={3}>
             {PLATFORM_KEYS.map((key) => (
               <SyncChoiceBlock
@@ -577,6 +582,7 @@ export function SyncButton({
               />
             ))}
           </SyncGroup>
+          )}
           <SyncDepthGroup depth={depth} onDepth={setDepth} />
           <SyncPickGroup allVideos={allVideos} onAllVideos={setAllVideos} />
           {/* Единственная строка объяснений под блоками: список креаторов не прочитался или
