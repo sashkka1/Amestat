@@ -123,7 +123,6 @@ function CreatorView({ id, videoId }: { id: string; videoId: string | null }) {
         onCompare={compare.set}
         scope={scope}
         onScope={setScope}
-        scopeNote="periodBar.scopeServerNoteCreator"
       />
 
       {/* Ход обновления — только администратору. Обход берётся с учётом scope: тот, что

@@ -127,8 +127,8 @@ export const ptBR: Dict = {
     scopeGroup: "Escopo dos vídeos",
     scopeAll: "Todos os vídeos",
     scopeOurs: "Somente nossos",
-    scopeServerNote: "Os cartões, a “Dinâmica”, a tendência das plataformas e os “Melhores criadores” são calculados no banco e não seguem este escopo.",
-    scopeServerNoteCreator: "Os cartões e a “Dinâmica” são calculados no banco e não seguem este escopo.",
+    allVideosNote: "Para todos os vídeos, há dados apenas dos últimos {days} dias (desde {date}).",
+    allVideosNoteEmpty: "Ainda não há dados de todos os vídeos: nenhuma coleta foi feita.",
   },
 
   auth: {

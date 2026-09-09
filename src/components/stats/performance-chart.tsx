@@ -16,6 +16,7 @@ import { fmtCompact, fmtDayAxis, fmtNum } from "@/lib/format";
 import { useT, type TKey } from "@/lib/i18n";
 import { toDateInputValue, type PeriodRange } from "@/lib/period";
 import { creatorDailyViews } from "@/lib/queries";
+import { useScope } from "@/lib/dashboard-prefs";
 import { runningTotal } from "@/lib/stats";
 import type { DailyViews } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -125,6 +126,9 @@ export function PerformanceChart({
   creators?: ChartCreator[];
 }) {
   const t = useT();
+  // Тот же стор охвата, что у полосы периода: график дочитывает ряды сам, значит и охват
+  // берёт сам.
+  const { scope } = useScope();
   const [mode, setMode] = useState<Mode>("daily");
   const [bucketPick, setBucketPick] = useState<Bucket>("day");
   const [source, setSource] = useState<Source>("series");
@@ -140,9 +144,11 @@ export function PerformanceChart({
   const top = useMemo(() => (creators ?? []).slice(0, TOP_CREATORS), [creators]);
   const byCreators = source === "creators" && top.length > 0;
   // Ключ кэша: тот же срок и та же пятёрка — то же самое, читать заново нечего.
+  // Охват в ключе: ряды «По креаторам» читаются той же функцией с тем же p_only_ours, что и
+  // основной ряд (миграция v22), иначе режим показывал бы другой набор видео, чем график.
   const cacheKey =
     range && top.length > 0
-      ? `${range.from.getTime()}|${range.to.getTime()}|${top.map((c) => c.id).join(",")}`
+      ? `${range.from.getTime()}|${range.to.getTime()}|${scope}|${top.map((c) => c.id).join(",")}`
       : null;
 
   useEffect(() => {
@@ -151,7 +157,7 @@ export function PerformanceChart({
     let alive = true;
     // Ошибка гасится удачным ответом, а не началом запроса: setState прямо в теле эффекта
     // тянет лишний каскад перерисовок (правило react-hooks/set-state-in-effect).
-    Promise.all(top.map((c) => creatorDailyViews(c.id, range))).then(
+    Promise.all(top.map((c) => creatorDailyViews(c.id, range, scope))).then(
       (series) => {
         if (!alive) return;
         setCreatorsError(null);

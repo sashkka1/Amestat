@@ -72,6 +72,16 @@ export function fmtDayAxis(iso: string): string {
 }
 
 // «10 авг 2026» — концы срока в пилюле выбора.
+// «8 сентября» — день с месяцем словом, без года: так читается оговорка под полосой периода.
+// Месяц берётся у Intl, а не из словаря: в русском здесь нужен родительный падеж, которого
+// у коротких `monthsShort` нет.
+export function fmtDayLong(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString(locale(), { day: "numeric", month: "long" });
+}
+
 export function fmtDayYear(d: Date): string {
   return `${d.getDate()} ${months()[d.getMonth()]} ${d.getFullYear()}`;
 }

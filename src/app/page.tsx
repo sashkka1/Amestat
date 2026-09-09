@@ -96,23 +96,29 @@ function Dashboard() {
   //
   // ⚠️ Сравнение выключено — прошлый срок не читается вовсе: это второй такой же вызов
   // creators_overview на каждую смену срока, и он никому не нужен, пока дельты не показывают.
+  //
+  // ⚠️ Охват тоже уходит в базу (миграция v22) и стоит в списке зависимостей: переключили
+  // «Только наши / Все видео» — плитки, «Динамика» и тренд площадок перечитываются.
   const comparing = compare.on;
   const stats = useLoader(async () => {
     if (!period.range) return null;
     const range = period.range;
     const previous = comparing ? period.previous : null;
     const [now, prev, daily, split] = await Promise.all([
-      creatorsOverview(range),
-      previous ? creatorsOverview(previous) : Promise.resolve(null),
-      dailyViewsAll(range, rpcPlatform),
+      creatorsOverview(range, scope),
+      previous ? creatorsOverview(previous, scope) : Promise.resolve(null),
+      dailyViewsAll(range, rpcPlatform, scope),
       rpcPlatform === null
-        ? Promise.all([dailyViewsAll(range, "tiktok"), dailyViewsAll(range, "instagram")])
+        ? Promise.all([
+            dailyViewsAll(range, "tiktok", scope),
+            dailyViewsAll(range, "instagram", scope),
+          ])
         : null,
     ]);
     const tiktok: DailyViews[] = rpcPlatform === "instagram" ? [] : split ? split[0] : daily;
     const instagram: DailyViews[] = rpcPlatform === "tiktok" ? [] : split ? split[1] : daily;
     return { now, prev, daily, tiktok, instagram };
-  }, [fromMs, toMs, rpcPlatform, comparing]);
+  }, [fromMs, toMs, rpcPlatform, comparing, scope]);
 
   const creatorIds = useMemo(() => new Set(creators.map((c) => c.id)), [creators]);
   const nowRows = useMemo(
@@ -127,11 +133,10 @@ function Dashboard() {
   // toTableRows выбрасывает видео тех, кого нет в переданном списке креаторов, — поэтому
   // отфильтрованный список сам оставляет и «Лучшие видео», и «Новые видео» по площадке.
   //
-  // Охват «Только наши» ложится тем же слоем, но действует лишь на то, что считается прямо
-  // здесь, из видео: «Лучшие видео», «Новые видео» и столбцы публикаций в карточках. Плитки,
-  // «Динамика», тренд площадок и «Лучшие креаторы» приходят суммами из базы
-  // (creators_overview, daily_views_all), а она про «наше / жёлтое» не знает — разложить эти
-  // суммы по состоянию видео на клиенте нечем, и полоса честно об этом пишет.
+  // Охват «Только наши» ложится тем же слоем на то, что считается прямо здесь, из видео:
+  // «Лучшие видео», «Новые видео» и столбцы публикаций в карточках. Суммы из базы теперь
+  // сужены тем же условием (миграция v22), поэтому клиентский фильтр и серверный отбор
+  // говорят про один и тот же набор видео — таблица сходится с плиткой над ней.
   const tableRows = useMemo(
     () => (base.data ? toTableRows(base.data.videos, creators) : []),
     [base.data, creators],

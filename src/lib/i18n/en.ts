@@ -127,8 +127,8 @@ export const en: Dict = {
     scopeGroup: "Video scope",
     scopeAll: "All videos",
     scopeOurs: "Ours only",
-    scopeServerNote: "Tiles, “Dynamics”, the platform trend and “Top creators” are computed in the database and ignore this scope.",
-    scopeServerNoteCreator: "Tiles and “Dynamics” are computed in the database and ignore this scope.",
+    allVideosNote: "For all videos, data has only been collected for {days} days (since {date}).",
+    allVideosNoteEmpty: "There is no data for all videos yet: no run has happened.",
   },
 
   auth: {

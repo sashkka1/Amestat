@@ -20,7 +20,7 @@ import {
   type Totals,
 } from "@/lib/queries";
 import { setVideoState } from "@/lib/api/videos";
-import { matchesScope, useCompare, useScope } from "@/lib/dashboard-prefs";
+import { matchesScope, useCompare, useScope, type Scope } from "@/lib/dashboard-prefs";
 import { videoState, type VideoState } from "@/lib/video-state";
 import { median, sum } from "@/lib/stats";
 import { changeVs, fmtCompact, fmtNum } from "@/lib/format";
@@ -52,12 +52,13 @@ async function loadStats(
   creatorId: string,
   range: PeriodRange,
   previous: PeriodRange | null,
+  scope: Scope,
 ): Promise<Loaded> {
   const [rows, prevRows, watch, daily, followers] = await Promise.all([
-    videoStatsBetween(creatorId, range),
-    previous ? videoStatsBetween(creatorId, previous) : Promise.resolve(null),
+    videoStatsBetween(creatorId, range, scope),
+    previous ? videoStatsBetween(creatorId, previous, scope) : Promise.resolve(null),
     listVideoWatch(creatorId),
-    creatorDailyViews(creatorId, range),
+    creatorDailyViews(creatorId, range, scope),
     creatorFollowers(creatorId, range),
   ]);
   return {
@@ -73,8 +74,9 @@ async function loadStats(
   };
 }
 
-// Суммы — по всем видео креатора (владелец, 2026-09-08/09): пометка «наше» решает только,
-// снимать ли подробности (тексты комментариев), а на общие счётчики не влияет.
+// Суммы — по тем строкам, что пришли из базы: при охвате «Все видео» это все видео креатора,
+// при «Только наши» — наши и жёлтые (владелец, 2026-09-09). Пометка `ours` при этом
+// по-прежнему решает и другое: снимать ли подробности (тексты комментариев).
 function totalsOf(rows: VideoStats[], range: PeriodRange): Totals {
   const t: Totals = {
     views: sum(rows.map((r) => r.views_delta)),
@@ -127,14 +129,16 @@ export function CreatorStats({
   const range = period.range;
   // Сравнение выключено — прошлый срок не читается вовсе.
   const previous = comparing ? period.previous : null;
+  // Охват стоит в ключе: он уходит в базу (миграция v22), значит переключение «Только наши /
+  // Все видео» обязано перечитать и строки, и ряд «Динамики».
   const key = range
-    ? `${creator.id}|${range.from.getTime()}|${range.to.getTime()}|${comparing ? "cmp" : "solo"}|${refreshKey}`
+    ? `${creator.id}|${range.from.getTime()}|${range.to.getTime()}|${comparing ? "cmp" : "solo"}|${scope}|${refreshKey}`
     : null;
 
   useEffect(() => {
     if (key === null || !range) return;
     let alive = true;
-    loadStats(key, creator.id, range, previous).then(
+    loadStats(key, creator.id, range, previous, scope).then(
       (d) => {
         if (alive) setLoaded(d);
       },
@@ -226,9 +230,8 @@ export function CreatorStats({
   }, [loaded, creator]);
 
   // Охват «Только наши» ложится на всё, что считается прямо здесь, из видео: «Лучшие видео»,
-  // таблицу и столбцы публикаций. Плитки и «Динамика» приходят суммами из базы
-  // (video_stats_between, creator_daily_views), а она про «наше / жёлтое» не знает — полоса
-  // периода честно об этом пишет.
+  // таблицу и столбцы публикаций. База при сужённом охвате «не наши» строки уже не отдаёт
+  // (миграция v22), так что фильтр — страховка от расхождения определений, а не второй отбор.
   const scopedRows = useMemo(
     () => tableRows.filter((r) => matchesScope(scope, r.state)),
     [tableRows, scope],

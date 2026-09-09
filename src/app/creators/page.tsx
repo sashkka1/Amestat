@@ -17,6 +17,7 @@ import { Delta } from "@/components/stats/delta";
 import { Panel, PanelHead, Empty } from "@/components/stats/panel";
 import { SortHead, nextSort, type SortDir } from "@/components/stats/sort-head";
 import { Sparkline } from "@/components/stats/sparkline";
+import { ScopeSwitch } from "@/components/stats/period-bar";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -30,6 +31,7 @@ import {
   listTags,
 } from "@/lib/queries";
 import { fmtNum } from "@/lib/format";
+import { useScope, type Scope } from "@/lib/dashboard-prefs";
 import { useT } from "@/lib/i18n";
 import { matchesPlatform, platformFilterLabel, usePlatformFilter } from "@/lib/platform-filter";
 import { useLoader } from "@/lib/use-loader";
@@ -57,7 +59,7 @@ const WEEK_MS = 7 * 86_400_000;
 // в ячейке дороже самой страницы.
 const SPARK_LIMIT = 30;
 
-async function loadData(): Promise<Data> {
+async function loadData(scope: Scope): Promise<Data> {
   const to = new Date();
   const from = new Date(to.getTime() - WEEK_MS);
   const [creators, tags, creatorTags, latest, overview] = await Promise.all([
@@ -65,7 +67,7 @@ async function loadData(): Promise<Data> {
     listTags(),
     listCreatorTags(),
     listCreatorLatest(),
-    creatorsOverview({ from, to }),
+    creatorsOverview({ from, to }, scope),
   ]);
   return { creators, tags, creatorTags, latest, overview, range: { from, to } };
 }
@@ -75,16 +77,16 @@ async function loadData(): Promise<Data> {
 // а рисунки и проценты появляются, когда приедут.
 type Trend = { prev: Map<string, number>; series: Map<string, number[]> };
 
-async function loadTrend(creators: Creator[], range: PeriodRange): Promise<Trend> {
+async function loadTrend(creators: Creator[], range: PeriodRange, scope: Scope): Promise<Trend> {
   const previous: PeriodRange = {
     from: new Date(range.from.getTime() - WEEK_MS),
     to: range.from,
   };
   const ids = creators.map((c) => c.id);
   const [prev, series] = await Promise.all([
-    creatorsOverview(previous),
+    creatorsOverview(previous, scope),
     ids.length <= SPARK_LIMIT
-      ? Promise.all(ids.map((id) => creatorDailyViews(id, range)))
+      ? Promise.all(ids.map((id) => creatorDailyViews(id, range, scope)))
       : Promise.resolve(null),
   ]);
   return {
@@ -106,10 +108,14 @@ type Key = "name" | "followers" | "videos" | "views" | "synced";
 function CreatorsScreen() {
   const t = useT();
   const profile = useProfile();
-  const { data, error, loading, reload } = useLoader(loadData, []);
-  // Переключатель тот же, что на дашборде: положение общее через localStorage.
+  // Оба переключателя те же, что на дашборде: положение общее через localStorage. Полосы
+  // периода здесь нет — срок один, — поэтому охват стоит сегментом в шапке, рядом с площадкой.
   const platform = usePlatformFilter();
   const platformFilter = platform.filter;
+  const { scope, setScope } = useScope();
+  // Охват уходит в базу (миграция v22): и столбец «За 7 дней», и спарклайны считаются по
+  // сужённому набору видео, поэтому смена охвата перечитывает страницу.
+  const { data, error, loading, reload } = useLoader(() => loadData(scope), [scope]);
   const [search, setSearch] = useState("");
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey] = useState<Key>("views");
@@ -127,7 +133,7 @@ function CreatorsScreen() {
   useEffect(() => {
     if (!data) return;
     let alive = true;
-    loadTrend(data.creators, data.range).then(
+    loadTrend(data.creators, data.range, scope).then(
       (d) => {
         if (!alive) return;
         setTrendError(null);
@@ -142,7 +148,8 @@ function CreatorsScreen() {
     return () => {
       alive = false;
     };
-  }, [data]);
+    // scope здесь же: страница перечитывается при его смене, и тренд обязан ехать за ней.
+  }, [data, scope]);
 
   // Галочки тегов меняются сразу, база — следом. Перечитали страницу — берём свежее.
   const [localTags, setLocalTags] = useState<CreatorTag[]>([]);
@@ -263,6 +270,7 @@ function CreatorsScreen() {
       actions={
         <>
           <PlatformSwitch state={platform} />
+          <ScopeSwitch scope={scope} onScope={setScope} />
           {data && <TagsDialog tags={data.tags} onChanged={reload} />}
           {profile.role === "admin" && <AddCreatorDialog onAdded={reload} />}
         </>

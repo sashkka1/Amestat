@@ -18,7 +18,9 @@ export const SCOPE_KEY = "amestat.scope";
 export type Compare = "on" | "off";
 export type Scope = "all" | "ours";
 
-export const SCOPES: Scope[] = ["all", "ours"];
+// Порядок сегментов и умолчание — «Только наши» первым (владелец, 2026-09-09): считаем мы
+// в первую очередь свои видео, а «Все видео» смотрим по желанию.
+export const SCOPES: Scope[] = ["ours", "all"];
 
 function createStore<T extends string>(key: string, values: readonly T[], fallback: T) {
   let current: T | null = null;
@@ -67,7 +69,7 @@ function createStore<T extends string>(key: string, values: readonly T[], fallba
 }
 
 const useCompareStore = createStore<Compare>(COMPARE_KEY, ["on", "off"], "on");
-const useScopeStore = createStore<Scope>(SCOPE_KEY, SCOPES, "all");
+const useScopeStore = createStore<Scope>(SCOPE_KEY, SCOPES, "ours");
 
 // Сравнение с прошлым сроком. Выключено — плитки не показывают дельту, и прошлый срок
 // не читается вовсе: лишний вызов creators_overview на каждую смену срока.
@@ -83,6 +85,9 @@ export function useScope(): { scope: Scope; setScope: (next: Scope) => void } {
 
 // 🔴 «Только наши» — это наше И жёлтое: жёлтое видео мы ведём так же, просто без подробностей
 // (`lib/video-state.ts`). Отсеивается одно «не наше».
+//
+// ⚠️ Это же определение стоит в базе (`videos.ours or videos.watch`, миграция v22), и оно
+// обязано совпадать: иначе таблица на странице и плитки над ней считали бы разные наборы.
 export function matchesScope(scope: Scope, state: VideoState): boolean {
   return scope === "all" || state !== "none";
 }

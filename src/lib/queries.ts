@@ -15,6 +15,11 @@ import type {
   VideoStats,
 } from "./types";
 import type { PeriodRange } from "./period";
+import type { Scope } from "./dashboard-prefs";
+
+// Охват «Только наши» считает база (миграция v22): у всех четырёх статистических функций
+// есть `p_only_ours`, и «наше» там значит ровно то же, что у клиентского `matchesScope` —
+// `videos.ours or videos.watch`.
 
 // Чтение базы для страниц. Сервера нет: всё это запросы из браузера, RLS решает,
 // что видно (админу — всё, менеджеру — только его креаторы).
@@ -134,11 +139,16 @@ export async function listVideosWithCounters(creatorId?: string): Promise<VideoR
   });
 }
 
-export async function videoStatsBetween(creatorId: string, range: PeriodRange): Promise<VideoStats[]> {
+export async function videoStatsBetween(
+  creatorId: string,
+  range: PeriodRange,
+  scope: Scope = "all",
+): Promise<VideoStats[]> {
   const { data, error } = await createClient().rpc("video_stats_between", {
     p_creator: creatorId,
     p_from: range.from.toISOString(),
     p_to: range.to.toISOString(),
+    p_only_ours: scope === "ours",
   });
   fail(error);
   return data ?? [];
@@ -255,10 +265,14 @@ export async function videoCommentsSyncedAt(videoId: string): Promise<string | n
   return data?.comments_synced_at ?? null;
 }
 
-export async function creatorsOverview(range: PeriodRange): Promise<CreatorOverview[]> {
+export async function creatorsOverview(
+  range: PeriodRange,
+  scope: Scope = "all",
+): Promise<CreatorOverview[]> {
   const { data, error } = await createClient().rpc("creators_overview", {
     p_from: range.from.toISOString(),
     p_to: range.to.toISOString(),
+    p_only_ours: scope === "ours",
   });
   fail(error);
   return data ?? [];
@@ -273,11 +287,13 @@ export async function creatorsOverview(range: PeriodRange): Promise<CreatorOverv
 export async function dailyViewsAll(
   range: PeriodRange,
   platform: Platform | null = null,
+  scope: Scope = "all",
 ): Promise<DailyViews[]> {
   const { data, error } = await createClient().rpc("daily_views_all", {
     p_from: range.from.toISOString(),
     p_to: range.to.toISOString(),
     p_platform: platform,
+    p_only_ours: scope === "ours",
   });
   fail(error);
   return data ?? [];
@@ -285,14 +301,34 @@ export async function dailyViewsAll(
 
 // Ряд карточки креатора — та же атрибуция по дате публикации, что и у ряда по всем
 // (миграция v21).
-export async function creatorDailyViews(creatorId: string, range: PeriodRange): Promise<DailyViews[]> {
+export async function creatorDailyViews(
+  creatorId: string,
+  range: PeriodRange,
+  scope: Scope = "all",
+): Promise<DailyViews[]> {
   const { data, error } = await createClient().rpc("creator_daily_views", {
     p_creator: creatorId,
     p_from: range.from.toISOString(),
     p_to: range.to.toISOString(),
+    p_only_ours: scope === "ours",
   });
   fail(error);
   return data ?? [];
+}
+
+// Самый ранний снимок видео вообще: с него начинается история счётчиков. Нужен оговорке
+// под полосой периода — «по всем видео данные собраны только за N дн.»: до первого обхода
+// сборщика чисел нет ни у одного ролика, и срок «Всё время» это молча скрывает.
+// RLS сама оставит снимки видимых креаторов, поэтому у менеджера дата будет своя.
+export async function earliestSnapshotAt(): Promise<string | null> {
+  const { data, error } = await createClient()
+    .from("video_snaps")
+    .select("taken_at")
+    .order("taken_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  fail(error);
+  return data?.taken_at ?? null;
 }
 
 // Сводка по всем видимым креаторам за срок — сумма рядов creators_overview.
