@@ -292,10 +292,13 @@ export const ptBR: Dict = {
   topPosts: {
     title: "Melhores vídeos",
     searchPlaceholder: "Buscar por legenda",
-    sortViews: "Mais visualizações",
-    sortNew: "Mais recentes",
+    sortViews: "Visualizações",
+    sortLikes: "Curtidas",
+    sortComments: "Comentários",
+    sortEngagement: "Engajamento",
     empty: "Não há vídeos neste período.",
     noDate: "data desconhecida",
+    scrollHint: "← role →",
   },
 
   topCreators: {
@@ -305,6 +308,10 @@ export const ptBR: Dict = {
     rank: "Posição",
     platform: "Plataforma",
     avgViews: "Média de visualizações/vídeo",
+    published: "Publicações",
+    deltaViews: "Δ visualizações",
+    showAll: "Mostrar todos ({n})",
+    showLess: "Mostrar menos",
   },
 
   videosTable: {

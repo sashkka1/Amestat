@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  ArrowDownRightIcon,
+  ArrowUpRightIcon,
   EyeIcon,
   FlameIcon,
   HeartIcon,
@@ -9,13 +11,26 @@ import {
   VideoIcon,
   type LucideIcon,
 } from "lucide-react";
+import { Area, AreaChart, ResponsiveContainer } from "recharts";
 import { Panel, PanelHead } from "./panel";
 import { changeVs, fmtCompact, fmtNum } from "@/lib/format";
 import { tr, useT } from "@/lib/i18n";
 import type { Totals } from "@/lib/queries";
+import type { DailyViews } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-export type Kpi = { key: string; label: string; icon: LucideIcon; value: number; prev: number };
+// `series` — дневной ряд за тот же срок, из которого сложилось `value`; его нет у счётчиков,
+// которых база по дням не отдаёт (вовлечённость, число видео), и тогда спарклайн не рисуется.
+// `color` — цвет ряда на «Динамике»: один счётчик — один цвет во всём дашборде.
+export type Kpi = {
+  key: string;
+  label: string;
+  icon: LucideIcon;
+  value: number;
+  prev: number;
+  series?: number[];
+  color?: string;
+};
 
 // Шесть плиток одной карточкой, разделённые вертикальными линиями.
 //
@@ -49,6 +64,7 @@ export function KpiRow({ items, collapseKey }: { items: Kpi[]; collapseKey?: str
 function Tile({ kpi }: { kpi: Kpi }) {
   const Icon = kpi.icon;
   const change = changeVs(kpi.value, kpi.prev);
+  const Arrow = change.tone === "up" ? ArrowUpRightIcon : change.tone === "down" ? ArrowDownRightIcon : null;
   return (
     <div className="flex flex-col gap-1 p-4">
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -63,26 +79,77 @@ function Tile({ kpi }: { kpi: Kpi }) {
       </p>
       <p
         className={cn(
-          "text-xs tabular-nums",
+          "flex items-center gap-0.5 text-xs tabular-nums",
           change.tone === "up" && "text-[var(--up)]",
           change.tone === "down" && "text-[var(--down)]",
           change.tone === "flat" && "text-muted-foreground",
         )}
       >
+        {Arrow && <Arrow className="size-3 shrink-0" />}
         {change.text}
       </p>
+      <Sparkline kpi={kpi} />
     </div>
   );
 }
 
+// Ход счётчика по дням внутри плитки: ни осей, ни сетки, ни подписей — только форма.
+// Ряда нет (счётчик по дням не считается) или в нём меньше двух точек — линии нет вовсе:
+// одна точка формы не рисует, а прямая по ней соврала бы про «ровно».
+function Sparkline({ kpi }: { kpi: Kpi }) {
+  const series = kpi.series;
+  if (!series || series.length < 2) return null;
+  const color = kpi.color ?? "var(--chart-1)";
+  const rows = series.map((v, i) => ({ i, v }));
+  const id = `spark-${kpi.key}`;
+  // mt-auto — линия прижата к низу плитки: у соседей без ряда её нет, и без этого
+  // спарклайны стояли бы на разной высоте.
+  return (
+    <div className="mt-auto h-7 w-full" aria-hidden>
+      <ResponsiveContainer width="100%" height="100%">
+        <AreaChart data={rows} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
+          <defs>
+            <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={color} stopOpacity={0.35} />
+              <stop offset="100%" stopColor={color} stopOpacity={0.02} />
+            </linearGradient>
+          </defs>
+          <Area
+            type="monotone"
+            dataKey="v"
+            stroke={color}
+            strokeWidth={1.5}
+            fill={`url(#${id})`}
+            dot={false}
+            isAnimationActive={false}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+// Дневной ряд одного счётчика из накопительных значений базы — тем же правилом, что и
+// «Динамика» по дням: разность с предыдущим днём, у первого дня ноль (предыдущего нет),
+// отрицательные приросты гасятся в ноль (площадка иногда занижает счётчик задним числом).
+function dailySeries(daily: DailyViews[], key: "views" | "likes" | "comments" | "shares"): number[] {
+  return daily.map((d, i) => (i === 0 ? 0 : Math.max(d[key] - daily[i - 1][key], 0)));
+}
+
 // Шесть счётчиков сводки в том порядке, в каком они стоят на макете.
-export function totalsToKpis(now: Totals, prev: Totals): Kpi[] {
+//
+// `daily` необязателен: у кого дневного ряда нет, у того плитка остаётся без спарклайна.
+// Своего ряда по дням нет ни у вовлечённости, ни у числа видео — база их по дням не отдаёт,
+// и складывать их из чужих рядов значило бы рисовать выдуманное.
+export function totalsToKpis(now: Totals, prev: Totals, daily?: DailyViews[]): Kpi[] {
+  const series = (key: "views" | "likes" | "comments" | "shares") =>
+    daily && daily.length > 1 ? dailySeries(daily, key) : undefined;
   return [
-    { key: "views", label: tr("metric.views"), icon: EyeIcon, value: now.views, prev: prev.views },
+    { key: "views", label: tr("metric.views"), icon: EyeIcon, value: now.views, prev: prev.views, series: series("views"), color: "var(--chart-1)" },
     { key: "eng", label: tr("metric.engagement"), icon: FlameIcon, value: now.engagement, prev: prev.engagement },
-    { key: "likes", label: tr("metric.likes"), icon: HeartIcon, value: now.likes, prev: prev.likes },
-    { key: "comments", label: tr("metric.comments"), icon: MessageCircleIcon, value: now.comments, prev: prev.comments },
-    { key: "shares", label: tr("metric.shares"), icon: Share2Icon, value: now.shares, prev: prev.shares },
+    { key: "likes", label: tr("metric.likes"), icon: HeartIcon, value: now.likes, prev: prev.likes, series: series("likes"), color: "var(--chart-3)" },
+    { key: "comments", label: tr("metric.comments"), icon: MessageCircleIcon, value: now.comments, prev: prev.comments, series: series("comments"), color: "var(--chart-4)" },
+    { key: "shares", label: tr("metric.shares"), icon: Share2Icon, value: now.shares, prev: prev.shares, series: series("shares"), color: "var(--chart-5)" },
     { key: "videos", label: tr("metric.videos"), icon: VideoIcon, value: now.videos, prev: prev.videos },
   ];
 }

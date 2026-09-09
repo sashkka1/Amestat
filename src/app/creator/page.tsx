@@ -67,6 +67,8 @@ function CreatorRoute() {
   const t = useT();
   const params = useSearchParams();
   const id = params.get("id") ?? "";
+  // `?video=` — какой ролик открыть сразу: с ним сюда ведут карточки «Лучших видео».
+  const videoId = params.get("video");
   if (!UUID_RE.test(id)) {
     return (
       <Page title={t("creator.title")}>
@@ -74,10 +76,10 @@ function CreatorRoute() {
       </Page>
     );
   }
-  return <CreatorView id={id} />;
+  return <CreatorView id={id} videoId={videoId} />;
 }
 
-function CreatorView({ id }: { id: string }) {
+function CreatorView({ id, videoId }: { id: string; videoId: string | null }) {
   const t = useT();
   const { data, error, loading, reload } = useLoader(() => loadCreator(id), [id]);
   // Креатора отредактировали — перечитать и шапку, и статистику.
@@ -131,7 +133,12 @@ function CreatorView({ id }: { id: string }) {
             assigned={data.assigned}
             onChanged={refresh}
           />
-          <CreatorStats creator={creator} period={period} refreshKey={version} />
+          <CreatorStats
+            creator={creator}
+            period={period}
+            refreshKey={version}
+            initialVideoId={videoId}
+          />
         </>
       ) : null}
     </Page>

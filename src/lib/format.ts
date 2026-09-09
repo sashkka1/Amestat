@@ -96,14 +96,34 @@ function decimalSep(): string {
 
 export type Change = { text: string; tone: "up" | "down" | "flat" };
 
+// Разница с прошлым в процентах, округлённая: до десятых у мелких изменений, до целых у
+// крупных. null — прошлое ноль, сравнивать не с чем.
+function roundedPct(now: number, prev: number): number | null {
+  if (prev === 0) return null;
+  const pct = ((now - prev) / prev) * 100;
+  return Math.abs(pct) >= 10 ? Math.round(pct) : Math.round(pct * 10) / 10;
+}
+
+function toneOf(rounded: number): Change["tone"] {
+  return rounded > 0 ? "up" : rounded < 0 ? "down" : "flat";
+}
+
 // Сравнение с прошлым сроком той же длины. Прошлое — ноль: сравнивать не с чем.
 export function changeVs(now: number, prev: number): Change {
-  if (prev === 0) return { text: "—", tone: "flat" };
-  const pct = ((now - prev) / prev) * 100;
-  const rounded = Math.abs(pct) >= 10 ? Math.round(pct) : Math.round(pct * 10) / 10;
+  const rounded = roundedPct(now, prev);
+  if (rounded === null) return { text: "—", tone: "flat" };
   const sign = rounded > 0 ? "+" : "";
   const text = tr("format.vsPrev", { pct: `${sign}${rounded.toLocaleString(locale())}` });
-  return { text, tone: rounded > 0 ? "up" : rounded < 0 ? "down" : "flat" };
+  return { text, tone: toneOf(rounded) };
+}
+
+// То же сравнение, но без слов — «+12%». Для ячейки таблицы, где на фразу «к прошлому
+// периоду» места нет, а колонка и так про неё.
+export function changePct(now: number, prev: number): Change {
+  const rounded = roundedPct(now, prev);
+  if (rounded === null) return { text: "—", tone: "flat" };
+  const sign = rounded > 0 ? "+" : "";
+  return { text: `${sign}${rounded.toLocaleString(locale())}%`, tone: toneOf(rounded) };
 }
 
 // Вовлечённость видео в процентах: (лайки + комментарии + репосты) / просмотры.

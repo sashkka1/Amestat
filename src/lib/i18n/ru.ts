@@ -304,10 +304,14 @@ export const ru = {
   topPosts: {
     title: "Лучшие видео",
     searchPlaceholder: "Поиск по подписи",
-    sortViews: "Больше просмотров",
-    sortNew: "Новые",
+    sortViews: "Просмотры",
+    sortLikes: "Лайки",
+    sortComments: "Комментарии",
+    sortEngagement: "Вовлечённость",
     empty: "Видео за этот срок нет.",
     noDate: "дата неизвестна",
+    // Подсказка под лентой: карточек больше, чем влезает в ширину.
+    scrollHint: "← прокрути →",
   },
 
   topCreators: {
@@ -317,6 +321,10 @@ export const ru = {
     rank: "Ранг",
     platform: "Платформа",
     avgViews: "Ср. просмотров/видео",
+    published: "Публикаций",
+    deltaViews: "Δ просмотров",
+    showAll: "Показать все ({n})",
+    showLess: "Свернуть",
   },
 
   videosTable: {

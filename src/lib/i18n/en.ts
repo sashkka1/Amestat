@@ -292,10 +292,13 @@ export const en: Dict = {
   topPosts: {
     title: "Top videos",
     searchPlaceholder: "Search by caption",
-    sortViews: "Most views",
-    sortNew: "Newest",
+    sortViews: "Views",
+    sortLikes: "Likes",
+    sortComments: "Comments",
+    sortEngagement: "Engagement",
     empty: "No videos in this range.",
     noDate: "date unknown",
+    scrollHint: "← scroll →",
   },
 
   topCreators: {
@@ -305,6 +308,10 @@ export const en: Dict = {
     rank: "Rank",
     platform: "Platform",
     avgViews: "Avg. views/video",
+    published: "Posts",
+    deltaViews: "Δ views",
+    showAll: "Show all ({n})",
+    showLess: "Show less",
   },
 
   videosTable: {

@@ -155,7 +155,9 @@ function Dashboard() {
           {stats.error ? (
             <PageError error={stats.error} />
           ) : totals && prevTotals ? (
-            <KpiRow items={totalsToKpis(totals, prevTotals)} collapseKey="kpi" />
+            /* Дневной ряд у плиток тот же, что рисует «Динамика»: спарклайн в плитке —
+               это её кусок, а не отдельный расчёт. */
+            <KpiRow items={totalsToKpis(totals, prevTotals, stats.data?.daily)} collapseKey="kpi" />
           ) : (
             <Skeleton className="h-28 w-full" />
           )}
@@ -171,7 +173,7 @@ function Dashboard() {
           {nowRows ? (
             <TopCreators
               collapseKey="top-creators"
-              rows={buildCreatorRows(creators, nowRows)}
+              rows={buildCreatorRows(creators, nowRows, prevRows ?? [])}
               countLabel={
                 platformFilter === "all"
                   ? t("topCreators.countAll")

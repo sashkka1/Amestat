@@ -90,16 +90,28 @@ export function CreatorStats({
   creator,
   period,
   refreshKey,
+  initialVideoId = null,
 }: {
   creator: Creator;
   period: PeriodState;
   // Меняется снаружи (креатора отредактировали) — данные перечитываются.
   refreshKey: number;
+  // `?video=` в адресе: карточка «Лучших видео» ведёт сюда с уже открытым роликом.
+  initialVideoId?: string | null;
 }) {
   const t = useT();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [failed, setFailed] = useState<{ key: string; error: string } | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialVideoId);
+
+  // Переход на ту же страницу с другим `?video=` компонент не пересоздаёт (маршрут тот же),
+  // поэтому открытое видео сверяется с адресом прямо в рендере — это тот самый случай
+  // «состояние подправляется при смене свойства», для которого эффект не нужен.
+  const [lastFromUrl, setLastFromUrl] = useState<string | null>(initialVideoId);
+  if (initialVideoId !== lastFromUrl) {
+    setLastFromUrl(initialVideoId);
+    if (initialVideoId) setSelectedId(initialVideoId);
+  }
 
   const range = period.range;
   const previous = period.previous;
@@ -204,11 +216,15 @@ export function CreatorStats({
       .filter((r) => publishedIn(r.publishedAt, loaded.range))
       .map((r) => ({
         id: r.id,
+        creatorId: r.creatorId,
         caption: r.caption,
         coverUrl: r.coverUrl,
         url: r.url,
         publishedAt: r.publishedAt,
         views: r.views,
+        likes: r.likes,
+        comments: r.comments,
+        shares: r.shares,
         creatorName: r.creatorName,
         handle: r.handle,
         platform: r.platform,

@@ -38,11 +38,15 @@ export function toTableRows(videos: VideoRow[], creators: Creator[]): VideoTable
 export function toPosts(rows: VideoTableRow[]): PostItem[] {
   return rows.map((r) => ({
     id: r.id,
+    creatorId: r.creatorId,
     caption: r.caption,
     coverUrl: r.coverUrl,
     url: r.url,
     publishedAt: r.publishedAt,
     views: r.views,
+    likes: r.likes,
+    comments: r.comments,
+    shares: r.shares,
     creatorName: r.creatorName,
     handle: r.handle,
     platform: r.platform,
