@@ -20,6 +20,10 @@ import type { PeriodRange } from "./period";
 // что видно (админу — всё, менеджеру — только его креаторы).
 
 const VIDEO_LIMIT = 2000;
+// Пачка id в одном запросе снимков: адрес запроса с id ограничен длиной, а ответ — тысячей строк.
+const LATEST_BATCH = 200;
+// Страница списка видео: ровно потолок PostgREST.
+const PAGE = 1000;
 
 function fail(error: { message: string } | null): void {
   if (error) throw new Error(error.message);
@@ -87,22 +91,37 @@ export type VideoRow = Video & {
 
 export async function listVideosWithCounters(creatorId?: string): Promise<VideoRow[]> {
   const supabase = createClient();
-  let videosQuery = supabase
-    .from("videos")
-    .select("*")
-    .order("published_at", { ascending: false, nullsFirst: false })
-    .limit(VIDEO_LIMIT);
-  if (creatorId) videosQuery = videosQuery.eq("creator_id", creatorId);
+  // Страницами по PAGE: `limit(2000)` PostgREST молча урезал бы до 1000 — тот же потолок,
+  // что и у снимков ниже.
+  const videos: Video[] = [];
+  for (let from = 0; from < VIDEO_LIMIT; from += PAGE) {
+    let q = supabase
+      .from("videos")
+      .select("*")
+      .order("published_at", { ascending: false, nullsFirst: false })
+      .range(from, Math.min(from + PAGE, VIDEO_LIMIT) - 1);
+    if (creatorId) q = q.eq("creator_id", creatorId);
+    const res = await q;
+    fail(res.error);
+    const page = res.data ?? [];
+    videos.push(...page);
+    if (page.length < PAGE) break;
+  }
 
-  const [videosRes, latestRes] = await Promise.all([
-    videosQuery,
-    supabase.from("video_latest").select("*"),
-  ]);
-  fail(videosRes.error);
-  fail(latestRes.error);
-
-  const byId = new Map<string, VideoLatest>((latestRes.data ?? []).map((l) => [l.video_id, l]));
-  return (videosRes.data ?? []).map((v) => {
+  // Снимки — только для прочитанных видео и пачками: PostgREST молча режет ответ на 1000
+  // строках, и когда видео в базе стало 1090, последние 90 на главной остались с нулями
+  // (владелец, 2026-09-09: «на новых видео нет ни просмотров, ни лайков»).
+  const byId = new Map<string, VideoLatest>();
+  const ids = videos.map((v) => v.id);
+  for (let i = 0; i < ids.length; i += LATEST_BATCH) {
+    const latestRes = await supabase
+      .from("video_latest")
+      .select("*")
+      .in("video_id", ids.slice(i, i + LATEST_BATCH));
+    fail(latestRes.error);
+    for (const l of latestRes.data ?? []) byId.set(l.video_id, l);
+  }
+  return videos.map((v) => {
     const l = byId.get(v.id);
     return {
       ...v,
