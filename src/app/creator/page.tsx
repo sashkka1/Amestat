@@ -116,17 +116,9 @@ function CreatorView({ id, videoId }: { id: string; videoId: string | null }) {
     // имя остаётся: его ставит docTitle.
     <Page
       docTitle={name}
+      toolbar={<PeriodBar period={period} compare={compare.on} onCompare={compare.set} scope={scope} onScope={setScope} />}
       actions={<SyncButton scope={id} pageCreatorIds={pageCreatorIds} onDone={refresh} />}
     >
-      {/* Полоса периода вместо прежней пилюли в шапке: чем ограничена страница по времени
-          и по видео — в одном месте, как на дашборде. */}
-      <PeriodBar
-        period={period}
-        compare={compare.on}
-        onCompare={compare.set}
-        scope={scope}
-        onScope={setScope}
-      />
 
       {error ? (
         <PageError error={error} />

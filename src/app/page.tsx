@@ -189,12 +189,8 @@ function Dashboard() {
 
   return (
     <Page
-      title={t("nav.dashboard")}
-      subtitle={
-        platformFilter === "all"
-          ? t("dashboard.subtitleAll")
-          : t("dashboard.subtitlePlatform", { platform: platformFilterLabel(platformFilter) })
-      }
+      docTitle={t("nav.dashboard")}
+      toolbar={<PeriodBar period={period} compare={compare.on} onCompare={compare.set} scope={scope} onScope={setScope} />}
       actions={
         <>
           <PlatformSwitch state={platform} />
@@ -202,15 +198,6 @@ function Dashboard() {
         </>
       }
     >
-      {/* Пилюля срока переехала из шапки сюда: полоса собирает в одном месте всё, чем
-          ограничена страница, и рядом с ней есть место для подписи о прошлом сроке. */}
-      <PeriodBar
-        period={period}
-        compare={compare.on}
-        onCompare={compare.set}
-        scope={scope}
-        onScope={setScope}
-      />
 
       {base.error ? (
         <PageError error={base.error} />

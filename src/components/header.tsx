@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button";
 import { logout } from "@/lib/api/auth";
 import { useT, type TKey } from "@/lib/i18n";
 import { useProfile } from "@/lib/profile-context";
-import { profileName } from "@/lib/api/profiles";
 import { cn } from "@/lib/utils";
 
 // ⚠️ Дашборда во вкладках нет (владелец, 2026-09-09): на главную ведёт сама надпись
@@ -78,10 +77,6 @@ export function Header() {
             );
           })}
         </nav>
-        <span className="hidden text-xs text-muted-foreground sm:inline">
-          {profileName(profile)}
-          {` · ${profile.role === "admin" ? t("nav.admin") : t("nav.manager")}`}
-        </span>
         <LangSwitch />
         <Button variant="ghost" size="sm" title={t("common.logout")} onClick={onLogout} disabled={busy}>
           <LogOutIcon data-icon="inline-start" />

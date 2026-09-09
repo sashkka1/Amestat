@@ -91,10 +91,10 @@ export function CreatorHeader({
   }
 
   return (
-    <section className="flex flex-col gap-3 rounded-xl border bg-card p-4 shadow-sm">
-      <div className="flex gap-4">
-        <Avatar src={creator.avatar_url} name={name} size={72} />
-        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+    <section className="flex flex-col gap-2 rounded-xl border bg-card px-4 py-3 shadow-sm">
+      <div className="flex items-center gap-3">
+        <Avatar src={creator.avatar_url} name={name} size={44} />
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <div className="flex flex-wrap items-start justify-between gap-2">
             {/* Только хэндл (владелец, 2026-09-09): имя креатора не показываем нигде на
                 странице — оно остаётся в диалоге правки и в заголовке вкладки. */}
@@ -104,7 +104,7 @@ export function CreatorHeader({
                   href={creator.profile_url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-lg font-semibold tracking-tight hover:text-muted-foreground"
+                  className="inline-flex items-center gap-1 text-base font-semibold tracking-tight hover:text-muted-foreground"
                 >
                   @{creator.handle}
                   <ExternalLinkIcon className="size-3.5" />
