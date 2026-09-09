@@ -155,21 +155,22 @@ function Dashboard() {
           {stats.error ? (
             <PageError error={stats.error} />
           ) : totals && prevTotals ? (
-            <KpiRow items={totalsToKpis(totals, prevTotals)} />
+            <KpiRow items={totalsToKpis(totals, prevTotals)} collapseKey="kpi" />
           ) : (
             <Skeleton className="h-28 w-full" />
           )}
 
           {stats.data ? (
-            <PerformanceChart data={stats.data.daily} />
+            <PerformanceChart data={stats.data.daily} collapseKey="chart" />
           ) : (
             <Skeleton className="h-72 w-full" />
           )}
 
-          <TopPosts posts={topPosts} />
+          <TopPosts posts={topPosts} collapseKey="top-posts" />
 
           {nowRows ? (
             <TopCreators
+              collapseKey="top-creators"
               rows={buildCreatorRows(creators, nowRows)}
               countLabel={
                 platformFilter === "all"
@@ -181,7 +182,12 @@ function Dashboard() {
             <Skeleton className="h-56 w-full" />
           )}
 
-          <VideosTable rows={tableRows} title={t("dashboard.newVideos")} defaultSort="published" />
+          <VideosTable
+            rows={tableRows}
+            title={t("dashboard.newVideos")}
+            defaultSort="published"
+            collapseKey="new-videos"
+          />
         </>
       )}
     </Page>

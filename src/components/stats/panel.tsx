@@ -1,3 +1,8 @@
+"use client";
+
+import { Children, createContext, isValidElement, useContext } from "react";
+import { ChevronDownIcon } from "lucide-react";
+import { useCollapsed } from "@/lib/collapsed";
 import { cn } from "@/lib/utils";
 
 // Белая карточка на сером фоне: одна рамка, радиус 12, тень-волосок.
@@ -6,7 +11,29 @@ import { cn } from "@/lib/utils";
 // минимальная ширина по умолчанию равна ширине содержимого. Без него широкая таблица
 // растягивает саму карточку за край окна и её обрезает, вместо того чтобы прокручиваться
 // внутри (прокрутку даёт обёртка в `ui/table`). `overflow-hidden` держит углы скруглёнными.
-export function Panel({ className, children }: { className?: string; children: React.ReactNode }) {
+//
+// `collapseKey` — карточка сворачивается по щелчку в заголовок, ровно как панель «Ход
+// обновления»: положение живёт в localStorage под этим ключом (`lib/collapsed.ts`).
+// ⚠️ Сворачивание — только показ: данные грузятся как раньше, свёрнутая карточка ничего
+// не отменяет и ничего не откладывает.
+export function Panel({
+  className,
+  collapseKey,
+  children,
+}: {
+  className?: string;
+  collapseKey?: string;
+  children: React.ReactNode;
+}) {
+  if (collapseKey === undefined) return <PanelBox className={className}>{children}</PanelBox>;
+  return (
+    <CollapsiblePanel collapseKey={collapseKey} className={className}>
+      {children}
+    </CollapsiblePanel>
+  );
+}
+
+function PanelBox({ className, children }: { className?: string; children: React.ReactNode }) {
   return (
     <section className={cn("min-w-0 overflow-hidden rounded-xl border bg-card shadow-sm", className)}>
       {children}
@@ -14,7 +41,43 @@ export function Panel({ className, children }: { className?: string; children: R
   );
 }
 
-// Шапка карточки: заголовок слева, управление справа.
+type Collapse = { open: boolean; toggle: () => void };
+
+// Заголовок узнаёт про сворачивание отсюда: шапку рисует `PanelHead`, а состоянием владеет
+// карточка — иначе каждый вызов PanelHead пришлось бы снабжать тем же ключом второй раз.
+const CollapseCtx = createContext<Collapse | null>(null);
+
+// Свёрнутая карточка показывает только шапку. Отбираем её по типу элемента: у всех карточек
+// `PanelHead` стоит первым ребёнком, а всё остальное — содержимое.
+function CollapsiblePanel({
+  collapseKey,
+  className,
+  children,
+}: {
+  collapseKey: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  const collapse = useCollapsed(collapseKey);
+  const kids = Children.toArray(children);
+  const heads = kids.filter((node) => isValidElement(node) && node.type === PanelHead);
+  const body = kids.filter((node) => !(isValidElement(node) && node.type === PanelHead));
+  return (
+    <CollapseCtx.Provider value={collapse}>
+      <PanelBox className={className}>
+        {heads}
+        {collapse.open && body}
+      </PanelBox>
+    </CollapseCtx.Provider>
+  );
+}
+
+// Шапка карточки: заголовок слева, управление справа. У сворачиваемой карточки заголовок —
+// кнопка с шевроном (тот же вид, что у панели «Ход обновления»), а управление прячется
+// вместе с содержимым: у свёрнутого блока видны только название и подпись.
+//
+// ⚠️ Кнопкой становится именно левая половина, а не вся строка: справа живут поля поиска и
+// переключатели, а вложить их внутрь `<button>` нельзя.
 export function PanelHead({
   title,
   subtitle,
@@ -26,13 +89,36 @@ export function PanelHead({
   children?: React.ReactNode;
   className?: string;
 }) {
+  const collapse = useContext(CollapseCtx);
+  const text = (
+    <div className="min-w-0">
+      <h2 className="text-sm font-semibold tracking-tight">{title}</h2>
+      {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
+    </div>
+  );
   return (
     <div className={cn("flex flex-wrap items-center justify-between gap-3 px-4 py-3", className)}>
-      <div className="min-w-0">
-        <h2 className="text-sm font-semibold tracking-tight">{title}</h2>
-        {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
-      </div>
-      {children && <div className="flex flex-wrap items-center gap-2">{children}</div>}
+      {collapse ? (
+        <button
+          type="button"
+          onClick={collapse.toggle}
+          aria-expanded={collapse.open}
+          className="flex min-w-0 items-center gap-2 rounded-md text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        >
+          <ChevronDownIcon
+            className={cn(
+              "size-4 shrink-0 text-muted-foreground transition-transform",
+              !collapse.open && "-rotate-90",
+            )}
+          />
+          {text}
+        </button>
+      ) : (
+        text
+      )}
+      {children && (!collapse || collapse.open) && (
+        <div className="flex flex-wrap items-center gap-2">{children}</div>
+      )}
     </div>
   );
 }

@@ -43,10 +43,12 @@ export function TopCreators({
   rows,
   limit,
   countLabel,
+  collapseKey,
 }: {
   rows: CreatorRow[];
   limit?: number;
   countLabel?: string;
+  collapseKey?: string;
 }) {
   const t = useT();
   const [sortKey, setSortKey] = useState<Key>("views");
@@ -65,7 +67,7 @@ export function TopCreators({
   }
 
   return (
-    <Panel>
+    <Panel collapseKey={collapseKey}>
       <PanelHead
         title={t("topCreators.title")}
         subtitle={`${countLabel ?? t("topCreators.countAll")}: ${rows.length}`}

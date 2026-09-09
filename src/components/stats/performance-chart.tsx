@@ -34,10 +34,12 @@ export function PerformanceChart({
   data,
   right,
   title,
+  collapseKey,
 }: {
   data: DailyViews[];
   right?: React.ReactNode;
   title?: string;
+  collapseKey?: string;
 }) {
   const t = useT();
   const [mode, setMode] = useState<Mode>("daily");
@@ -66,7 +68,7 @@ export function PerformanceChart({
   }
 
   return (
-    <Panel>
+    <Panel collapseKey={collapseKey}>
       <PanelHead title={title ?? t("chart.title")}>
         {right}
         <div className="flex items-center gap-0.5 rounded-lg border p-0.5 text-xs">

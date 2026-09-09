@@ -170,6 +170,8 @@ export const ru = {
   dashboard: {
     subtitleAll: "Сводка по всем креаторам",
     subtitlePlatform: "Сводка по {platform}",
+    // Название блока плиток: своего заголовка у них нет, а сворачиваемому блоку он нужен.
+    kpiTitle: "Показатели",
     newVideos: "Новые видео",
   },
 

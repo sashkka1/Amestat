@@ -31,11 +31,13 @@ export function TopPosts({
   title,
   limit = 10,
   showCreator = true,
+  collapseKey,
 }: {
   posts: PostItem[];
   title?: string;
   limit?: number;
   showCreator?: boolean;
+  collapseKey?: string;
 }) {
   const t = useT();
   const [search, setSearch] = useState("");
@@ -54,7 +56,7 @@ export function TopPosts({
   }, [posts, search, sort, limit]);
 
   return (
-    <Panel>
+    <Panel collapseKey={collapseKey}>
       <PanelHead title={title ?? t("topPosts.title")}>
         <div className="relative w-44">
           <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />

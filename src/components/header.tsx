@@ -12,17 +12,16 @@ import { useProfile } from "@/lib/profile-context";
 import { profileName } from "@/lib/api/profiles";
 import { cn } from "@/lib/utils";
 
+// ⚠️ Дашборда во вкладках нет (владелец, 2026-09-09): на главную ведёт сама надпись
+// «Amestat» слева, и она же подсвечивается, когда мы на ней. Ключ `nav.dashboard` остаётся —
+// он заголовок самой страницы.
 const ADMIN_NAV: { href: string; label: TKey }[] = [
-  { href: "/", label: "nav.dashboard" },
   { href: "/creators/", label: "nav.creators" },
   { href: "/managers/", label: "nav.managers" },
   { href: "/archive/", label: "nav.archive" },
 ];
 
-const MANAGER_NAV: { href: string; label: TKey }[] = [
-  { href: "/", label: "nav.dashboard" },
-  { href: "/creators/", label: "nav.creators" },
-];
+const MANAGER_NAV: { href: string; label: TKey }[] = [{ href: "/creators/", label: "nav.creators" }];
 
 // Шапка со вкладками. Что видно, решает роль: архив и менеджеры — только админу.
 // Переключатель языка стоит в правом верхнем углу, рядом с именем и выходом.
@@ -48,7 +47,16 @@ export function Header() {
   return (
     <header className="sticky top-0 z-20 border-b bg-card/95 backdrop-blur">
       <div className="mx-auto flex max-w-[88rem] flex-wrap items-center gap-x-5 gap-y-2 px-5 py-2.5">
-        <Link href="/" className="text-base font-semibold tracking-tight">
+        <Link
+          href="/"
+          aria-current={isActive(pathname, "/") ? "page" : undefined}
+          className={cn(
+            "text-base font-semibold tracking-tight transition-colors",
+            isActive(pathname, "/")
+              ? "text-foreground underline decoration-2 underline-offset-4"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
           Amestat
         </Link>
         <nav className="flex min-w-0 flex-1 flex-wrap items-center gap-1">

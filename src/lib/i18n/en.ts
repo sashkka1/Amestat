@@ -159,6 +159,7 @@ export const en: Dict = {
   dashboard: {
     subtitleAll: "Summary across all creators",
     subtitlePlatform: "Summary for {platform}",
+    kpiTitle: "Metrics",
     newVideos: "New videos",
   },
 

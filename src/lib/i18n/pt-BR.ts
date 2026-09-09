@@ -159,6 +159,7 @@ export const ptBR: Dict = {
   dashboard: {
     subtitleAll: "Resumo de todos os criadores",
     subtitlePlatform: "Resumo de {platform}",
+    kpiTitle: "Métricas",
     newVideos: "Vídeos novos",
   },
 

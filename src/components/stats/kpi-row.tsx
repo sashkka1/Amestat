@@ -9,21 +9,40 @@ import {
   VideoIcon,
   type LucideIcon,
 } from "lucide-react";
+import { Panel, PanelHead } from "./panel";
 import { changeVs, fmtCompact, fmtNum } from "@/lib/format";
-import { tr } from "@/lib/i18n";
+import { tr, useT } from "@/lib/i18n";
 import type { Totals } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
 export type Kpi = { key: string; label: string; icon: LucideIcon; value: number; prev: number };
 
 // Шесть плиток одной карточкой, разделённые вертикальными линиями.
-export function KpiRow({ items }: { items: Kpi[] }) {
-  return (
-    <div className="grid grid-cols-2 divide-x divide-y divide-border overflow-hidden rounded-xl border bg-card shadow-sm sm:grid-cols-3 xl:grid-cols-6 xl:divide-y-0">
+//
+// `collapseKey` — плитки сворачиваются, как остальные блоки дашборда. Тогда у них появляется
+// шапка с названием (сами по себе плитки заголовка не имеют), а рамку и фон даёт `Panel`.
+export function KpiRow({ items, collapseKey }: { items: Kpi[]; collapseKey?: string }) {
+  const t = useT();
+  const grid = (
+    <div
+      className={cn(
+        "grid grid-cols-2 divide-x divide-y divide-border sm:grid-cols-3 xl:grid-cols-6 xl:divide-y-0",
+        collapseKey === undefined
+          ? "overflow-hidden rounded-xl border bg-card shadow-sm"
+          : "border-t",
+      )}
+    >
       {items.map((k) => (
         <Tile key={k.key} kpi={k} />
       ))}
     </div>
+  );
+  if (collapseKey === undefined) return grid;
+  return (
+    <Panel collapseKey={collapseKey}>
+      <PanelHead title={t("dashboard.kpiTitle")} />
+      {grid}
+    </Panel>
   );
 }
 

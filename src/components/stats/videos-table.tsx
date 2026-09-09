@@ -73,9 +73,11 @@ export function VideosTable({
   onSetState,
   onRowClick,
   selectedId,
+  collapseKey,
 }: {
   rows: VideoTableRow[];
   title?: string;
+  collapseKey?: string;
   showCreator?: boolean;
   defaultSort?: Key;
   // Задан — появляется колонка «Состояние» с переключателем «не наше / смотрим / наше».
@@ -121,7 +123,7 @@ export function VideosTable({
   }
 
   return (
-    <Panel>
+    <Panel collapseKey={collapseKey}>
       <PanelHead
         title={title ?? t("videosTable.title")}
         subtitle={t("videosTable.count", {
