@@ -38,12 +38,10 @@ const TIP_STYLE = {
 
 const AXIS_TICK = { fontSize: 10, fill: "var(--muted-foreground)" } as const;
 
-// Накопительный ряд базы → прирост за день: то же правило, что у «Динамики» и спарклайнов
-// в плитках. У первого дня предыдущего нет, поэтому ноль; падение счётчика гасится в ноль.
-function dailyDelta(rows: DailyViews[]): Map<string, number> {
-  const out = new Map<string, number>();
-  rows.forEach((d, i) => out.set(d.day, i === 0 ? 0 : Math.max(d.views - rows[i - 1].views, 0)));
-  return out;
+// Прирост просмотров по дням, разложенный по дню: база отдаёт его как есть (миграция v20),
+// здесь остаётся только разложить ряд по сетке дней страницы.
+function viewsByDay(rows: DailyViews[]): Map<string, number> {
+  return new Map(rows.map((d) => [d.day, d.views]));
 }
 
 // Публикации по дням: у видео дата с временем, а столбец — местные сутки.
@@ -85,8 +83,8 @@ export function OverviewCards({
   const postsTotal = useMemo(() => postRows.reduce((s, r) => s + r.n, 0), [postRows]);
 
   const trendRows = useMemo(() => {
-    const tk = dailyDelta(tiktok);
-    const ig = dailyDelta(instagram);
+    const tk = viewsByDay(tiktok);
+    const ig = viewsByDay(instagram);
     return days.map((day) => ({ day, tiktok: tk.get(day) ?? 0, instagram: ig.get(day) ?? 0 }));
   }, [days, tiktok, instagram]);
 

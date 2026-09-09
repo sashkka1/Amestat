@@ -16,6 +16,7 @@ import { fmtCompact, fmtDayAxis, fmtNum } from "@/lib/format";
 import { useT, type TKey } from "@/lib/i18n";
 import { toDateInputValue, type PeriodRange } from "@/lib/period";
 import { creatorDailyViews } from "@/lib/queries";
+import { runningTotal } from "@/lib/stats";
 import type { DailyViews } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -51,12 +52,10 @@ export type ChartCreator = { id: string; name: string };
 type Row = Record<string, number | string> & { day: string };
 type Column = { key: string; values: number[] };
 
-// Накопительный ряд базы → то, что рисуем: «накопительно» — сами суммы, «по дням» — разность
-// с предыдущим днём. У первого дня предыдущего нет, поэтому там ноль, а не всплеск; падение
-// счётчика (площадка иногда занижает его задним числом) гасится в ноль, а не рисуется вниз.
+// Ряд базы → то, что рисуем. База отдаёт прирост за день (миграция v20), поэтому «по дням» —
+// это её значения как есть, а «накопительно» — бегущая сумма от начала срока.
 function toMode(values: number[], mode: Mode): number[] {
-  if (mode === "total") return values;
-  return values.map((v, i) => (i === 0 ? 0 : Math.max(v - values[i - 1], 0)));
+  return mode === "total" ? runningTotal(values) : values;
 }
 
 // Понедельник той недели, в которую попал день: по нему дни собираются в недельные столбцы,
@@ -69,8 +68,8 @@ function weekStart(iso: string): string {
 }
 
 // Колонки значений → строки recharts. Неделя суммирует свои дни, но только в режиме «по дням»:
-// в «накопительно» значения уже накопленные, и складывать их значило бы посчитать одно и то же
-// семь раз — там неделя берёт значение своего последнего дня.
+// в «накопительно» значения уже сложены бегущей суммой, и складывать их снова значило бы
+// посчитать одно и то же семь раз — там неделя берёт значение своего последнего дня.
 function buildRows(days: string[], cols: Column[], bucket: Bucket, mode: Mode): Row[] {
   if (bucket === "day") {
     return days.map((day, i) => {
@@ -102,9 +101,9 @@ function buildRows(days: string[], cols: Column[], bucket: Bucket, mode: Mode): 
 // и держатся в состоянии по ключу «срок + пятёрка» — переключение туда-обратно базу не дёргает.
 type CreatorSeries = { key: string; days: string[]; cols: Column[] };
 
-// «Динамика»: пять рядов по дням (миграция v4). База отдаёт накопительные счётчики на
-// конец каждого дня, поэтому «накопительно» — это сами суммы, а «по дням» — разность
-// с предыдущим днём. У первого дня предыдущего нет, поэтому там ноль, а не всплеск.
+// «Динамика»: пять рядов по дням (миграции v4 и v20). База отдаёт прирост за день по правилам
+// базовой линии `video_stats_between`, поэтому «по дням» — её значения как есть, а
+// «накопительно» — бегущая сумма приростов от начала срока.
 //
 // `range` и `creators` нужны только режиму «По креаторам»: без них третий сегмент не рисуется
 // вовсе (так карточка креатора и живёт — там сравнивать не с кем).

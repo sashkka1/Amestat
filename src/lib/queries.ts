@@ -279,6 +279,8 @@ export async function dailyViewsAll(
   return data ?? [];
 }
 
+// Ряд карточки креатора. Как и daily_views_all — прирост за день, а не накопленная сумма
+// (миграция v20).
 export async function creatorDailyViews(creatorId: string, range: PeriodRange): Promise<DailyViews[]> {
   const { data, error } = await createClient().rpc("creator_daily_views", {
     p_creator: creatorId,

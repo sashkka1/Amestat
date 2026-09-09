@@ -361,8 +361,10 @@ export type VideoStats = {
   saves_delta: number;
 };
 
-// Результат RPC creator_daily_views и daily_views_all (миграция v4): пять счётчиков
-// на конец каждого дня. Значения накопительные — «по дням» сайт считает разностью.
+// Результат RPC creator_daily_views и daily_views_all (миграции v4 и v20): пять счётчиков
+// по дням. ⚠️ Значения — ПРИРОСТ за день по правилам базовой линии `video_stats_between`,
+// а не накопленная сумма: сайт рисует их как есть, а «накопительно» складывает бегущей
+// суммой (`runningTotal` в lib/stats.ts).
 export type DailyViews = {
   day: string;
   views: number;

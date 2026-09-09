@@ -9,6 +9,16 @@ export function sum(values: Iterable<number | null | undefined>): number {
   return total;
 }
 
+// Бегущая сумма ряда: дневные приросты → «накопительно от начала срока».
+//
+// ⚠️ База отдаёт дневные ряды уже приростом (миграция v20), поэтому обратного действия —
+// разности соседних дней — на клиенте нет нигде. Раньше их было три копии, и каждая
+// засчитывала первый день видео его полной историей.
+export function runningTotal(values: number[]): number[] {
+  let acc = 0;
+  return values.map((v) => (acc += v));
+}
+
 // Медиана; пустой набор → null. null/undefined внутри не считаются.
 export function median(values: Iterable<number | null | undefined>): number | null {
   const nums: number[] = [];

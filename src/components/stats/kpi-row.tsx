@@ -134,13 +134,6 @@ function Sparkline({ kpi }: { kpi: Kpi }) {
   );
 }
 
-// Дневной ряд одного счётчика из накопительных значений базы — тем же правилом, что и
-// «Динамика» по дням: разность с предыдущим днём, у первого дня ноль (предыдущего нет),
-// отрицательные приросты гасятся в ноль (площадка иногда занижает счётчик задним числом).
-function dailySeries(daily: DailyViews[], key: "views" | "likes" | "comments" | "shares"): number[] {
-  return daily.map((d, i) => (i === 0 ? 0 : Math.max(d[key] - daily[i - 1][key], 0)));
-}
-
 // Шесть счётчиков сводки в том порядке, в каком они стоят на макете.
 //
 // `daily` необязателен: у кого дневного ряда нет, у того плитка остаётся без спарклайна.
@@ -150,8 +143,10 @@ function dailySeries(daily: DailyViews[], key: "views" | "likes" | "comments" | 
 // `prev` — null, когда сравнение выключено полосой периода: тогда прошлый срок вообще
 // не читался, и дельту брать неоткуда.
 export function totalsToKpis(now: Totals, prev: Totals | null, daily?: DailyViews[]): Kpi[] {
+  // Ряд базы — уже прирост за день (миграция v20): спарклайн рисует его как есть, ничего
+  // не вычитая. Раньше здесь была третья копия разности соседних дней.
   const series = (key: "views" | "likes" | "comments" | "shares") =>
-    daily && daily.length > 1 ? dailySeries(daily, key) : undefined;
+    daily && daily.length > 1 ? daily.map((d) => d[key]) : undefined;
   const was = (key: keyof Totals) => (prev ? prev[key] : null);
   return [
     { key: "views", label: tr("metric.views"), icon: EyeIcon, value: now.views, prev: was("views"), series: series("views"), color: "var(--chart-1)" },
