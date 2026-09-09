@@ -11,9 +11,15 @@
 // Список TikTok отдаёт от новых к старым, поэтому «неделя» — не фильтр в конце, а ранний
 // выход: как только в пришедшей пачке оказалось видео старше недели, дальше листать незачем.
 // Отфильтровать всё равно надо: в последней пачке приезжают и старые соседи по странице.
+//
+// Охват (`scope.videos`, миграция v17): 'all' — как выше; 'ours' — листаем, пока не встретились
+// все отслеживаемые видео креатора (наши и жёлтые), но не дольше `scope.maxPages` прокруток.
+// ⚠️ Всё, что пришло в пролистанной части, кладётся в базу как обычно: снимок счётчиков достаётся
+// даром вместе со списком. Правила остановки — чистые функции в `scope.mjs`.
 
 import { launchFresh } from "./browser.mjs";
 import { notice } from "./notices.mjs";
+import { listStop, listRounds, missingTracked, filterDepth } from "./scope.mjs";
 
 const PROFILE_TIMEOUT_MS = 45_000;
 const SCROLL_ROUNDS = 80;      // потолок кругов прокрутки
@@ -22,13 +28,16 @@ const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const STOP_SCREEN = /Drag the slider|puzzle|captcha|Something went wrong|Verify to continue/i;
 
 const num = (x) => (x === null || x === undefined || x === "" ? null : Number(x));
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Один заход браузером: свежий профиль, прокрутка до конца (или до первого видео старше
  * `since`), всё закрыть. `since` — граница в мс эпохи или null, если глубина 'all'.
+ * `scope` — охват: `{ videos: 'all'|'ours', trackedIds, maxPages }`.
  */
-async function attempt(handle, { browserChoice, log, since = null }) {
+async function attempt(handle, { browserChoice, log, since = null, scope = null }) {
+  const mode = scope?.videos === "ours" ? "ours" : "all";
+  const trackedIds = mode === "ours" ? scope?.trackedIds ?? [] : [];
+  const rounds = listRounds(mode, scope?.maxPages, SCROLL_ROUNDS);
   const { ctx, cleanup, describe } = await launchFresh(browserChoice);
   log?.(`  браузер: ${describe}`);
   try {
@@ -92,8 +101,14 @@ async function attempt(handle, { browserChoice, log, since = null }) {
       avatar: user.avatarLarger || user.avatarMedium || null,
     };
 
-    let stale = 0;
-    for (let i = 0; i < SCROLL_ROUNDS && hasMore && stale < STALE_ROUNDS && !reachedOld; i++) {
+    // Прокрутка. Решение «листать дальше или хватит» отдано `listStop`: при охвате «всё» это
+    // прежнее правило (конец списка или видео старше недели), при «только наши» — «все
+    // отслеживаемые встретились». Пустые круги (`stale`) обрывают прокрутку при любом охвате:
+    // если список перестал расти, дальше его всё равно не будет.
+    let stale = 0, pages = 0;
+    for (; pages < rounds; pages++) {
+      if (listStop({ mode, trackedIds, seenIds: [...seen.keys()], reachedOld, hasMore }).stop) break;
+      if (stale >= STALE_ROUNDS) break;
       const before = seen.size;
       await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
       await page.mouse.wheel(0, 3000);
@@ -128,12 +143,19 @@ async function attempt(handle, { browserChoice, log, since = null }) {
     });
     // Неделя: в базу идёт только свежее, но «пришедшими» считаем всё, что отдал TikTok —
     // ноль видео за неделю у активного профиля повтором не лечится, а пустой ответ лечится.
-    const videos = since === null
-      ? all
-      : all.filter((v) => v.publishedAt !== null && Date.parse(v.publishedAt) >= since);
+    // ⚠️ Отслеживаемые видео неделя не отсекает: за старыми нашими охват «только наши» и листал.
+    const videos = filterDepth(all, since, trackedIds);
 
     log?.(`  ответов item_list ${responses} (пустых ${empty}), видео ${all.length}, hasMore=${hasMore}, стоп-экран=${stopAfter}`);
-    if (since !== null) log?.(`  за неделю: ${videos.length} из ${all.length} пришедших${reachedOld ? " (прокрутка остановлена: пошли видео старше недели)" : ""}`);
+    if (mode === "ours") {
+      const missing = missingTracked(trackedIds, [...seen.keys()]);
+      log?.(`  охват: только наши — отслеживаемых видео ${trackedIds.length}, найдено ${trackedIds.length - missing.length} за ${pages} прокруток`);
+      if (missing.length > 0) {
+        log?.(`  не найдено ${missing.length} наших/жёлтых видео за ${pages} прокруток`);
+        notice("list", `@${handle}: не найдено ${missing.length} наших/жёлтых видео за ${pages} прокруток (охват «только наши»)`);
+      }
+    }
+    if (since !== null) log?.(`  за неделю: ${videos.length} из ${all.length} пришедших${reachedOld && mode !== "ours" ? " (прокрутка остановлена: пошли видео старше недели)" : ""}${mode === "ours" ? " (с отслеживаемыми, они остаются при любой давности)" : ""}`);
     return { profile, videos, rawCount: all.length, stopScreen: stopAfter };
   } finally {
     await cleanup();
@@ -144,18 +166,19 @@ async function attempt(handle, { browserChoice, log, since = null }) {
  * Сбор креатора TikTok.
  * `creator` — строка из `creators` (нужен `handle`).
  * `depth` — 'all' (весь список) или 'week' (только последние 7 дней).
+ * `scope` — охват: `{ videos: 'all'|'ours', trackedIds, maxPages }`; при 'ours' прокрутка идёт
+ * до тех пор, пока не встретятся все отслеживаемые видео креатора.
  * Отдаёт `{ profile, videos }`; при беде бросает Error с русским текстом.
  */
-export async function collectTikTok(creator, { browserChoice = "", retryPauseMs = 20_000, depth = "all", log } = {}) {
+export async function collectTikTok(creator, { browserChoice = "", depth = "all", scope = null, log } = {}) {
   const handle = String(creator.handle || "").replace(/^@/, "");
   if (!handle) throw new Error("у креатора пустой handle");
   const since = depth === "week" ? Date.now() - WEEK_MS : null;
 
-  const first = await attempt(handle, { browserChoice, log, since });
-  // Решение о повторе — по пришедшим видео, а не по оставшимся после фильтра недели:
-  // «за неделю ноль» бывает у живого профиля, который просто молчал, и повтор тут не поможет.
-  const enough = first.rawCount > 0 || !first.profile.videosCount;
-  if (enough) {
+  const first = await attempt(handle, { browserChoice, log, since, scope });
+  // Решение — по пришедшим видео, а не по оставшимся после фильтра недели: «за неделю ноль»
+  // бывает у живого профиля, который просто молчал.
+  if (first.rawCount > 0 || !first.profile.videosCount) {
     if (first.rawCount === 0 && first.stopScreen) {
       notice("stop", `@${handle}: стоп-экран TikTok`);
       throw new Error(`стоп-экран TikTok у @${handle}`);
@@ -163,19 +186,15 @@ export async function collectTikTok(creator, { browserChoice = "", retryPauseMs 
     return { profile: first.profile, videos: first.videos };
   }
 
-  // Ноль видео при непустом профиле — обычно «выдохшийся» профиль браузера.
-  // Одна повторная попытка в новом временном профиле, после паузы. Глубина та же.
-  log?.(`  видео 0 при ${first.profile.videosCount} по профилю — повтор в новом профиле через ${Math.round(retryPauseMs / 1000)} с`);
-  notice("list", `@${handle}: список видео пуст при ${first.profile.videosCount} по профилю — повтор в новом профиле`);
-  await sleep(retryPauseMs);
-  const second = await attempt(handle, { browserChoice, log, since });
-  if (second.rawCount === 0) {
-    if (second.stopScreen) {
-      notice("stop", `@${handle}: стоп-экран TikTok и на второй попытке`);
-      throw new Error(`стоп-экран TikTok у @${handle}`);
-    }
-    notice("list", `@${handle}: список видео пуст после двух попыток (по профилю ${second.profile.videosCount})`);
-    throw new Error(`список видео пуст после двух попыток: @${handle} (по профилю ${second.profile.videosCount})`);
+  if (first.stopScreen) {
+    notice("stop", `@${handle}: стоп-экран TikTok`);
+    throw new Error(`стоп-экран TikTok у @${handle}`);
   }
-  return { profile: second.profile, videos: second.videos };
+  // ⚠️ Второй попытки в новом профиле здесь БОЛЬШЕ НЕТ (владелец, 2026-09-09). Пустой
+  // `item_list` при непустом профиле значит, что TikTok придержал наш домашний адрес, — а
+  // придержанному адресу и новый профиль ответит той же пустотой. Прежний повтор стоил ещё
+  // одного запуска браузера и полутора минут, и он же сжигал лимит запусков (`tiktok-gate.mjs`),
+  // из-за которого следующие креаторы получали то же самое. Ждать надо не профиль, а паузу.
+  notice("list", `@${handle}: TikTok не отдал список (защита по адресу; по профилю ${first.profile.videosCount} видео)`);
+  throw new Error(`TikTok не отдал список (защита по адресу; по профилю ${first.profile.videosCount} видео): @${handle}`);
 }

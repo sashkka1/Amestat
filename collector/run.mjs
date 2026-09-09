@@ -5,6 +5,9 @@
 //   node run.mjs --failed-only                          — только те, у кого осталась ошибка
 //   node run.mjs --no-comments                          — не снимать тексты комментариев вовсе
 //   node run.mjs --no-replies                           — снять корневые, ветки ответов не раскрывать
+//   node run.mjs --only-ours                            — охват «только наши»: листать список лишь
+//                                                         до тех пор, пока не встретятся все наши
+//                                                         и жёлтые видео креатора
 //   node run.mjs --trigger schedule|catchup|manual|retry — чем помечен обход (по умолчанию manual)
 //
 // Печатает ход дела построчно и завершается кодом 0 (все собрались) или 1 (кто-то нет).
@@ -19,7 +22,7 @@ const opt = (name, fallback = null) => {
 const has = (name) => argv.includes(name);
 
 if (has("--help") || has("-h")) {
-  console.log("node run.mjs [--creator <uuid>] [--depth all|week] [--failed-only] [--no-comments] [--no-replies] [--all-videos] [--trigger manual|schedule|catchup|retry]");
+  console.log("node run.mjs [--creator <uuid>] [--depth all|week] [--only-ours] [--failed-only] [--no-comments] [--no-replies] [--all-videos] [--trigger manual|schedule|catchup|retry]");
   process.exit(0);
 }
 
@@ -31,6 +34,8 @@ const comments = !has("--no-comments");
 const replies = !has("--no-replies");
 // `--all-videos` — галочка «Комментарии и у не наших видео»: обычно тексты снимаются только у наших.
 const allVideos = has("--all-videos");
+// `--only-ours` — охват из матрицы обновления: 'ours' вместо 'all' (миграция v17).
+const videos = has("--only-ours") ? "ours" : "all";
 const trigger = opt("--trigger", "manual");
 if (!["manual", "schedule", "catchup", "retry"].includes(trigger)) {
   console.error(`✗ --trigger бывает только manual, schedule, catchup или retry, а не «${trigger}»`);
@@ -45,7 +50,7 @@ if (!["all", "week"].includes(depth)) {
 const started = Date.now();
 let result;
 try {
-  result = await runSync({ trigger, creatorId, failedOnly, depth, comments, replies, allVideos, onLog: (line) => console.log(line) });
+  result = await runSync({ trigger, creatorId, failedOnly, depth, videos, comments, replies, allVideos, onLog: (line) => console.log(line) });
 } catch (e) {
   // Сюда попадает только то, что случилось до первой строки в базе (например, нет .env.local).
   console.error(`✗ ${String(e?.message ?? e).split("\n")[0]}`);

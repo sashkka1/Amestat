@@ -2,7 +2,13 @@
 //
 // Четыре повода для обхода:
 //   1. Догон при старте — компьютер спал или был выключен, слот прошёл без обхода (`catchup`).
-//   2. Слот расписания — 10:00, 13:00, 17:00 по местному времени (`schedule`).
+//   2. Слот расписания — 13:00 по местному времени (`schedule`; часы задаются `AMESTAT_SLOTS`,
+//      глубина — `AMESTAT_SLOT_DEPTH`, по умолчанию «всё»: владелец, 2026-09-09 — «в ежедневном
+//      обновлении пусть всё обновляется»).
+//      ⚠️ Слот ПРОПУСКАЕТСЯ, если сегодня до него уже завершился обход по всем креаторам —
+//      неважно, по кнопке с сайта, руками или догоном (владелец, 2026-09-09). Второй заход
+//      браузера в тот же день не приносит новых цифр, а TikTok от очереди запусков отвечает
+//      пустотой. То же правило действует и на догон пропущенного слота.
 //   3. Кнопка «Обновить» на сайте — строка в `sync_requests` (`manual`). Слышим её через
 //      Realtime, а раз в минуту ещё и спрашиваем базу сами: подписка умеет тихо отвалиться,
 //      и тогда просьба владельца висела бы до перезапуска.
@@ -17,11 +23,19 @@
 // складываются по «или» — `true` поглощает `false` того же охвата и глубины. Иначе просьба
 // «всё, с комментариями» и просьба «всё, без комментариев» дали бы два обхода подряд, а
 // человек, попросивший комментарии, всё равно должен их получить.
+// ⚠️ Так же складывается охват видео (`videos`, миграция v17): хоть одна просьба «всё» — обход
+// идёт по всему списку. Расписание, догон и повтор после слота ходят с «всё» всегда; охват
+// «только наши» наследует лишь повтор ручной просьбы — у той, которую он повторяет.
 //
 // Цепочка при неудаче: неудачный `schedule`/`catchup` → через час `retry` только по
 // неудавшимся → если и он неудачен, одно сообщение владельцу в Telegram. Повтор ровно один:
-// после него следующий шанс — следующий слот. Просьбы с сайта в эту цепочку не входят —
-// их итог человек видит на сайте сам.
+// после него следующий шанс — следующий слот.
+//
+// ⚠️ Своя, короткая цепочка есть и у РУЧНОЙ просьбы (владелец, 2026-09-09): если обход
+// `manual` свалила защита TikTok по адресу, резидент сам назначает один повтор через
+// `AMESTAT_MANUAL_RETRY_MIN` минут (пусто — 25) — `trigger retry`, только по неудавшимся,
+// без письма при назначении. Повтор отменяется, если к сроку по тем креаторам уже прошёл
+// удачный обход. Всё остальное про просьбы с сайта по-прежнему человек видит сам.
 //
 // Про свои беды резидент сообщает сам: отвалившийся Realtime, просьба, пойманная опросом
 // вместо подписки, назначенный повтор и молчащая база уходят замечаниями (`notices.mjs`) —
@@ -49,7 +63,11 @@ import { resolve } from "node:path";
 import { loadEnv, collectorDir } from "./env.mjs";
 import { get, patch } from "./db.mjs";
 import { runSync, busy } from "./sync.mjs";
-import { missedSlot, nextSlot, retryDue } from "./schedule.mjs";
+import {
+  missedSlot, nextSlot, retryDue,
+  slotAlreadyCovered, addressProtectionHandles, manualRetryAt, retryStillNeeded,
+} from "./schedule.mjs";
+import { logSystem } from "./synclog.mjs";
 import { groupRequests } from "./requests.mjs";
 import { resolveBrowser, killLeftoverBrowsers } from "./browser.mjs";
 import { sendTelegram } from "./telegram.mjs";
@@ -126,8 +144,10 @@ function remember(row, source) {
   const replies = row.replies !== false;
   // А этот — `default false`: нет поля — значит, только наши видео, как всегда.
   const allVideos = row.all_videos === true;
-  pending.set(id, { id, creator_id: row.creator_id ?? null, requested_by: row.requested_by ?? null, depth, comments, replies, allVideos });
-  log(`просьба #${id} (${row.creator_id ? `креатор ${row.creator_id}` : "все"}, глубина ${depthWord(depth)}, комментарии ${comments ? "да" : "нет"}, ветки ${replies ? "да" : "нет"}${allVideos ? ", и не наши видео" : ""}) — ${source}`);
+  // Охват списка (v17): `default 'all'` в базе; нет поля вовсе (старая просьба) — тоже «всё».
+  const videos = row.videos === "ours" ? "ours" : "all";
+  pending.set(id, { id, creator_id: row.creator_id ?? null, requested_by: row.requested_by ?? null, depth, videos, comments, replies, allVideos });
+  log(`просьба #${id} (${row.creator_id ? `креатор ${row.creator_id}` : "все"}, глубина ${depthWord(depth)}, комментарии ${comments ? "да" : "нет"}, ветки ${replies ? "да" : "нет"}${allVideos ? ", и не наши видео" : ""}${videos === "ours" ? " · только наши" : ""}) — ${source}`);
   return id;
 }
 
@@ -170,7 +190,7 @@ let retryAt = null;
  * просроченный, который пойдёт сразу), — строка в лог: это письмо владелец уже получал в тот
  * раз, когда повтор назначался впервые, а результат обхода придёт своим письмом.
  */
-function planRetry(due, slotLabel, { fresh = false } = {}) {
+function planRetry(due, slotLabel, { fresh = false, kind = "schedule", handles = [], videos = "all" } = {}) {
   if (retryTimer) {
     log(`повтор уже назначен на ${retryAt.toLocaleString()} — второй не завожу`);
     return;
@@ -180,12 +200,20 @@ function planRetry(due, slotLabel, { fresh = false } = {}) {
   retryTimer = setTimeout(() => {
     retryTimer = null;
     retryAt = null;
-    runRetry(slotLabel).catch((e) => {
+    runRetry(slotLabel, { handles, videos }).catch((e) => {
       const text = String(e?.message ?? e).split("\n")[0];
       log(`повтор сорвался: ${text}`);
       residentNotice("run", `повтор сорвался: ${text}`);
     });
   }, delay);
+  if (kind === "manual") {
+    // Повтор ручной просьбы: письма при назначении нет вовсе — человек стоит у сайта и
+    // видит там и неудачу, и следующий обход. В журнал сайта строка всё же уходит.
+    const text = `повтор ручной просьбы назначен на ${hhmm(due)} (через ${Math.round(delay / 60_000)} мин): защита TikTok по адресу у ${handles.map((h) => `@${h}`).join(", ")}`;
+    log(text);
+    void logSystem(text, { level: "warn" });
+    return;
+  }
   log(`повтор ${fresh ? "назначен" : "восстановлен"} на ${due.toLocaleString()} (через ${Math.round(delay / 60_000)} мин), слот ${slotLabel}${fresh ? "" : " — письмо не шлю, оно уже уходило"}`);
   if (fresh) residentNotice("retry", `обход слота ${slotLabel} не удался — повтор назначен на ${due.toLocaleTimeString()}`);
 }
@@ -206,14 +234,14 @@ async function callOwner({ slotLabel, retryLabel, error }) {
   if (sent) log("владельцу отправлено сообщение в Telegram");
 }
 
-async function runRetry(slotLabel) {
+async function runRetry(slotLabel, { handles = [], videos = "all" } = {}) {
   if (stopping) return;
   const retryLabel = hhmm(new Date());
 
   // Ошибки могло уже не остаться: следующий слот, догон или просьба с сайта успели собрать всех.
   let failedCreators;
   try {
-    failedCreators = await get("creators?select=id,handle&sync_error=not.is.null");
+    failedCreators = await get("creators?select=id,handle,sync_error&sync_error=not.is.null");
   } catch (e) {
     // База недоступна — повтор не смог даже начаться. Это как раз тот случай, когда
     // владельцу надо сказать: сам он этого не увидит, сайт тоже читает из базы.
@@ -226,21 +254,72 @@ async function runRetry(slotLabel) {
     log("повтор пропущен: ни у кого не осталось ошибки");
     return;
   }
+  // Повтор ручной просьбы назван поимённо: к сроку по ТЕМ креаторам мог пройти удачный обход,
+  // и тогда будить браузер незачем — чужие ошибки этот повтор не чинит.
+  if (handles.length > 0 && !retryStillNeeded(failedCreators, handles)) {
+    const text = `повтор ручной просьбы отменён: по ${handles.map((h) => `@${h}`).join(", ")} уже прошёл удачный обход`;
+    log(text);
+    void logSystem(text, { level: "info" });
+    return;
+  }
 
   log(`повтор по неудавшимся (${failedCreators.map((c) => `@${c.handle}`).join(", ")})`);
   // `slotLabel` уходит в обход: неудача повтора скажется строкой в его собственном письме,
   // а второго письма (прежний `callOwner`) больше нет.
   // Расписание, догон и повтор всегда снимают всё: комментарии и ветки. Галочки бывают только
   // у просьбы с сайта — там их ставит человек.
-  const res = await launch({ trigger: "retry", failedOnly: true, depth: "all", comments: true, replies: true, slotLabel });
+  // ⚠️ Охват — исключение: повтор ПОСЛЕ РУЧНОЙ просьбы наследует её охват («только наши»),
+  // а повтор после слота идёт с полным, как и сам слот.
+  const res = await launch({ trigger: "retry", failedOnly: true, depth: env.slotDepth, videos, comments: true, replies: true, slotLabel });
   if (!res.ok) log(`вторая неудача подряд после слота ${slotLabel} — сказано письмом обхода #${res.runId ?? "?"}`);
 }
 
-/** Обход по расписанию или догон: неудача заводит повтор через час. */
+/**
+ * Был ли сегодня, до сих пор, завершённый обход по ВСЕМ креаторам. Отдаёт момент его конца
+ * или null. База не ответила — считаем, что не было: пропустить слот из-за молчания базы
+ * значит потерять сегодняшний срез, а лишний обход всего лишь стоит времени.
+ */
+async function coveredToday(now = new Date()) {
+  try {
+    const runs = await get("sync_runs?select=scope,finished_at&scope=eq.all&finished_at=not.is.null&order=finished_at.desc&limit=10");
+    return slotAlreadyCovered(now, runs);
+  } catch (e) {
+    const text = String(e?.message ?? e).split("\n")[0];
+    log(`не спросилось, был ли сегодня обход по всем: ${text}`);
+    dbResult("проверка сегодняшнего обхода", false, text);
+    return null;
+  }
+}
+
+/**
+ * Обход по расписанию или догон: неудача заводит повтор через час.
+ * ⚠️ Сначала проверка «сегодня уже обошли всех» — слот пропускается вовсе (владелец, 2026-09-09).
+ */
 async function runScheduled(trigger, slot) {
-  const res = await launch({ trigger, depth: "all", comments: true, replies: true });
-  if (!res.ok && !stopping) planRetry(new Date(Date.now() + env.retryMs), hhmm(slot ?? new Date()), { fresh: true });
+  const label = hhmm(slot ?? new Date());
+  const covered = await coveredToday();
+  if (covered) {
+    const text = `слот ${label} пропущен: сегодня уже был обход по всем в ${hhmm(covered)}`;
+    log(text);
+    void logSystem(text, { level: "info" });
+    return { ok: true, skipped: true, done: 0, failed: 0, runId: null };
+  }
+  const res = await launch({ trigger, depth: env.slotDepth, comments: true, replies: true });
+  if (!res.ok && !stopping) planRetry(new Date(Date.now() + env.retryMs), label, { fresh: true });
   return res;
+}
+
+/**
+ * Ручная просьба свалилась на защите TikTok по адресу — назначаем один повтор через
+ * `AMESTAT_MANUAL_RETRY_MIN` минут. Письма при назначении нет; если и повтор не удастся,
+ * замечание придёт письмом самого обхода, как у обычного повтора.
+ */
+function planManualRetry(res, videos = "all") {
+  if (stopping) return;
+  const handles = addressProtectionHandles(res?.failures);
+  if (handles.length === 0) return;
+  const label = `${hhmm(new Date())} (ручная просьба)`;
+  planRetry(manualRetryAt(new Date(), env.manualRetryMin), label, { kind: "manual", handles, videos });
 }
 
 async function drain() {
@@ -252,16 +331,21 @@ async function drain() {
       pending.clear();
       for (const r of rows) handled.add(r.id);
       for (const group of groupRequests(rows)) {
-        await launch({
+        const res = await launch({
           trigger: "manual",
           creatorId: group.creatorId,
           depth: group.depth,
+          videos: group.videos,
           comments: group.comments,
           replies: group.replies,
           allVideos: group.allVideos,
           requestedBy: group.requestedBy,
           requestIds: group.ids,
         });
+        // Свалила защита TikTok по адресу — через 25 минут попробуем сами, один раз.
+        // Повтор идёт с охватом ИСХОДНОЙ просьбы: человек просил «только наши» — второй заход
+        // не должен молча стать полным и стоить тех же минут, ради которых охват и заведён.
+        planManualRetry(res, group.videos);
         if (stopping) break;
       }
     }
@@ -281,7 +365,7 @@ const browser = (() => {
 // Прогрев: первые полторы минуты сеть только поднимается (особенно если компьютер спал), и
 // её отказы владельцу не нужны — они уходят в лог и никуда больше.
 startWarmup("старта");
-log(`резидент запущен. Браузер: ${browser}. Пауза между креаторами TikTok ${Math.round(env.pauseMs / 1000)} с. Повтор после неудачи через ${Math.round(env.retryMs / 60_000)} мин. Instagram: ${env.igSource}. Логи: ${logsDir}`);
+log(`резидент запущен. Браузер: ${browser}. Слоты: ${env.slotHours.map((h) => `${String(h).padStart(2, "0")}:00`).join(", ")} (глубина ${depthWord(env.slotDepth)}). Пауза между креаторами TikTok ${Math.round(env.pauseMs / 1000)} с. Запусков TikTok не больше ${env.ttLaunchLimit} за ${Math.round(env.ttWindowMs / 60_000)} мин. Повтор после неудачи через ${Math.round(env.retryMs / 60_000)} мин, повтор ручной просьбы через ${env.manualRetryMin} мин. Instagram: ${env.igSource}. Логи: ${logsDir}`);
 
 // 0. Остатки прошлых обходов: упавший обход оставляет окно Opera на нашем профиле, а оно и
 //    память держит, и не даёт подняться следующему браузеру. Свои окна владельца не трогаем —
@@ -297,7 +381,7 @@ try {
 }
 
 // 1. Часы: каждую минуту смотрим, не наступил ли слот.
-let nextAt = nextSlot(new Date());
+let nextAt = nextSlot(new Date(), env.slotHours);
 log(`следующий слот: ${nextAt.toLocaleString()}`);
 let lastTickAt = Date.now();
 const tick = setInterval(() => {
@@ -312,7 +396,7 @@ const tick = setInterval(() => {
   }
   if (now >= nextAt) {
     const slot = nextAt;
-    nextAt = nextSlot(now);
+    nextAt = nextSlot(now, env.slotHours);
     log(`слот ${slot.toLocaleTimeString()} — обход по расписанию. Следующий: ${nextAt.toLocaleString()}`);
     runScheduled("schedule", slot).catch((e) => {
       const text = String(e?.message ?? e).split("\n")[0];
@@ -391,7 +475,7 @@ const channel = supabase
 let firstPoll = true;
 async function poll() {
   try {
-    const rows = await get("sync_requests?select=id,creator_id,requested_by,depth,comments,replies,all_videos,seen_at,taken_at&taken_at=is.null&order=id.asc");
+    const rows = await get("sync_requests?select=id,creator_id,requested_by,depth,videos,comments,replies,all_videos,seen_at,taken_at&taken_at=is.null&order=id.asc");
     const fresh = [];
     for (const row of rows) {
       const id = remember(row, "опрос");
@@ -473,7 +557,7 @@ try {
 try {
   const runs = await get("sync_runs?select=started_at&order=started_at.desc&limit=1");
   const last = runs[0]?.started_at ? new Date(runs[0].started_at) : null;
-  const missed = missedSlot(new Date(), last);
+  const missed = missedSlot(new Date(), last, env.slotHours);
   log(`последний обход: ${last ? last.toLocaleString() : "не было ни одного"}; пропущенный слот: ${missed ? missed.toLocaleTimeString() : "нет"}`);
   if (missed && !stopping) await runScheduled("catchup", missed);
 } catch (e) {

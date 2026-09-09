@@ -23,6 +23,12 @@
 // Глубина (`depth`): 'all' — весь список до потолка, 'week' — только последние 7 дней.
 // Список идёт от новых к старым, поэтому «неделя» — ранний выход, а не фильтр в конце;
 // отфильтровать всё равно надо: в последней пачке приезжают старые соседи по странице.
+//
+// Охват (`scope.videos`, миграция v17): 'ours' — лента листается, пока не встретятся все
+// отслеживаемые видео креатора (наши и жёлтые), но не дольше `scope.maxPages` кругов; правила —
+// чистые функции в `scope.mjs`. ⚠️ Главная экономия здесь не в ленте, а во вкладке Reels: она
+// открывается только ради просмотров, и при «только наши» — лишь если среди отслеживаемых есть
+// клипы. У чужих видео просмотры не спрашиваются вовсе.
 
 // Браузер поднимается общим `launchProfile()` из `browser.mjs` — тем же, которым ходят за
 // комментариями: там уже живут проверка профиля, свой срок на запуск и вторая попытка (Opera
@@ -35,6 +41,7 @@
 // Свой браузер модуль поднимает только когда его зовут в одиночку (разовая проверка, тест).
 import { launchProfile, PROFILE_OPERA, trimTraffic } from "./browser.mjs";
 import { notice, sessionHint } from "./notices.mjs";
+import { listStop, listRounds, missingTracked, filterDepth } from "./scope.mjs";
 
 // Куда странице профиля вообще можно ходить. Всё остальное отсекается (`trimTraffic`), плюс
 // независимо от хоста — видео (`media`) и шрифты.
@@ -220,12 +227,17 @@ async function scrollRound(page) {
  * `creator` — строка из `creators` (нужен `handle`).
  * `depth` — 'all' (весь список до потолка) или 'week' (только последние 7 дней).
  * `ctx` — уже открытый браузер полосы; нет его — модуль поднимает свой и сам же закрывает.
+ * `scope` — охват: `{ videos: 'all'|'ours', trackedIds, maxPages }`.
  * Отдаёт ту же форму, что и TikTok: `{ profile, videos }`; при беде — Error с русским текстом.
  */
-export async function collectInstagramWeb(creator, { depth = "all", browserChoice = "", ctx: shared = null, log } = {}) {
+export async function collectInstagramWeb(creator, { depth = "all", browserChoice = "", ctx: shared = null, scope = null, log } = {}) {
   const handle = String(creator?.handle ?? "").replace(/^@/, "");
   if (!handle) throw new Error("у креатора пустой handle");
   const since = depth === "week" ? Date.now() - WEEK_MS : null;
+  const mode = scope?.videos === "ours" ? "ours" : "all";
+  const trackedIds = mode === "ours" ? scope?.trackedIds ?? [] : [];
+  const tracked = new Set(trackedIds.map((id) => String(id)));
+  const feedRounds = listRounds(mode, scope?.maxPages, FEED_ROUNDS);
 
   // Нет профиля, не поднялся браузер — оба текста приходят из `launchProfile`; своих слов
   // добавляем ровно одно, чтобы в `sync_error` было видно площадку.
@@ -353,9 +365,13 @@ export async function collectInstagramWeb(creator, { depth = "all", browserChoic
     if (!gotSomething()) throw new Error(`Instagram: профиль не найден: @${handle}`);
     log?.(`  счётчики профиля: подписчики ${stats.followers.value ?? "?"} (${stats.followers.from}${stats.followers.approx ? ", ПРИБЛИЗИТЕЛЬНО" : ""}), подписки ${stats.following.value ?? "?"} (${stats.following.from}), публикаций ${stats.posts.value ?? "?"} (${stats.posts.from})`);
 
-    // Лента: листаем до конца, до потолка или до первой публикации старше недели.
-    let stale = 0;
-    for (let i = 0; i < FEED_ROUNDS && hasNext && stale < STALE_ROUNDS && !reachedOld && posts.size < MAX_POSTS; i++) {
+    // Лента: листаем до конца, до потолка или до первой публикации старше недели; при охвате
+    // «только наши» — пока не встретились все отслеживаемые (`listStop` в `scope.mjs`).
+    // Пустые круги и потолок публикаций обрывают прокрутку при любом охвате.
+    let stale = 0, feedPages = 0;
+    for (; feedPages < feedRounds; feedPages++) {
+      if (listStop({ mode, trackedIds, seenIds: [...posts.keys()], reachedOld, hasMore: hasNext }).stop) break;
+      if (stale >= STALE_ROUNDS || posts.size >= MAX_POSTS) break;
       const before = posts.size;
       await scrollRound(page);
       stale = posts.size === before ? stale + 1 : 0;
@@ -402,16 +418,28 @@ export async function collectInstagramWeb(creator, { depth = "all", browserChoic
       .slice(0, MAX_POSTS);
 
     // Неделя: в базу идёт только свежее, но «пришедшими» считаем всё, что отдал Instagram.
-    const picked = since === null
-      ? all
-      : all.filter((v) => v.publishedAt !== null && Date.parse(v.publishedAt) >= since);
-    log?.(`  публикаций пришло ${all.length}${hasNext ? "" : " (список кончился)"}${reachedOld ? " (прокрутка остановлена: пошли публикации старше недели)" : ""}`);
-    if (since !== null) log?.(`  за неделю: ${picked.length} из ${all.length} пришедших`);
+    // ⚠️ Отслеживаемые публикации неделя не отсекает: за старыми нашими охват и листал.
+    const picked = filterDepth(all, since, trackedIds);
+    log?.(`  публикаций пришло ${all.length}${hasNext ? "" : " (список кончился)"}${reachedOld && mode !== "ours" ? " (прокрутка остановлена: пошли публикации старше недели)" : ""}`);
+    if (mode === "ours") {
+      const missing = missingTracked(trackedIds, [...posts.keys()]);
+      log?.(`  охват: только наши — отслеживаемых видео ${trackedIds.length}, найдено ${trackedIds.length - missing.length} за ${feedPages} прокруток`);
+      if (missing.length > 0) {
+        log?.(`  не найдено ${missing.length} наших/жёлтых видео за ${feedPages} прокруток`);
+        notice("list", `@${handle}: не найдено ${missing.length} наших/жёлтых видео за ${feedPages} прокруток (охват «только наши»)`);
+      }
+    }
+    if (since !== null) log?.(`  за неделю: ${picked.length} из ${all.length} пришедших${mode === "ours" ? " (с отслеживаемыми, они остаются при любой давности)" : ""}`);
     if (since !== null) log?.(`  закреплённых пропущено: ${pinned.size}`);
 
     // Просмотры живут только на вкладке Reels — и только у клипов.
-    const need = () => picked.filter((v) => v.productType === "clips" && plays.get(v.code) === undefined && plays.get(v.id) === undefined);
+    // ⚠️ При охвате «только наши» просмотры спрашиваются ТОЛЬКО у отслеживаемых клипов: вкладка
+    // Reels — самый долгий шаг Instagram, и открывать её ради чужих видео незачем. Нет своих
+    // клипов среди отслеживаемых — вкладка не открывается вовсе.
+    const wanted = (v) => mode !== "ours" || tracked.has(String(v.id));
+    const need = () => picked.filter((v) => v.productType === "clips" && wanted(v) && plays.get(v.code) === undefined && plays.get(v.id) === undefined);
     const clips = need().length;
+    if (mode === "ours") log?.(`  Reels: при охвате «только наши» отслеживаемых клипов ${clips}${clips === 0 ? " — вкладку не открываем" : ""}`);
     let rounds = 0;
     if (clips > 0) {
       try {
@@ -425,8 +453,11 @@ export async function collectInstagramWeb(creator, { depth = "all", browserChoic
         notice("list", `@${handle}: вкладка Reels не открылась — просмотров не будет (${text})`);
       }
     }
+    // Просмотры кладём всем, у кого они нашлись: вкладка Reels отдаёт целую страницу клипов
+    // разом, и чужие `play_count` приезжают даром. А вот СЧИТАЕМ найденное по тем же, по кому
+    // считали нужное, — иначе при охвате «только наши» выходит «нашлись у 5 из 1 клипов».
     for (const v of picked) v.views = plays.get(v.code) ?? plays.get(v.id) ?? null;
-    const withViews = picked.filter((v) => v.views !== null).length;
+    const withViews = picked.filter((v) => v.views !== null && wanted(v)).length;
     log?.(`  Reels: просмотры нашлись у ${withViews} из ${clips} клипов (кругов ${rounds}, роликов на вкладке ${reelsSeen})`);
 
     if (picked.length === 0 && since === null && (profile.videosCount ?? 0) > 0) {

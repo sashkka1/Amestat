@@ -6,6 +6,9 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+// Разбор часов расписания живёт среди чистых функций расписания — там его и проверяют тесты.
+// ⚠️ `schedule.mjs` сюда НЕ импортируется обратно: часы уходят к нему параметром, и кольца нет.
+import { parseSlots } from "./schedule.mjs";
 
 export const collectorDir = dirname(fileURLToPath(import.meta.url));
 export const envPath = resolve(collectorDir, "..", ".env.local");
@@ -56,6 +59,33 @@ export function loadEnv() {
   const retryMin = retryRaw === "" ? NaN : Number(retryRaw);
   const retryMs = Number.isFinite(retryMin) && retryMin > 0 ? Math.round(retryMin * 60_000) : 60 * 60_000;
 
+  // Часы автоматических обходов. Пусто — один слот, 13:00 (владелец, 2026-09-09: обход «всё»
+  // занимал 14 минут и трижды в день гонял браузер к каждому креатору). Формат — `13` или
+  // `10,13,17`. Разбор — чистая функция `parseSlots` в `schedule.mjs`, чтобы её проверяли тесты.
+  const slotHours = parseSlots(raw.AMESTAT_SLOTS);
+
+  // Глубина автоматического обхода: 'all' (по умолчанию) — весь список видео, 'week' — только
+  // за последние 7 дней. Владелец, 2026-09-09: «в ежедневном обновлении пусть всё обновляется».
+  // ⚠️ Именно этой переменной ставится «неделя», если обход по всему списку окажется долгим.
+  const slotDepthRaw = (raw.AMESTAT_SLOT_DEPTH || "").trim().toLowerCase();
+  const slotDepth = slotDepthRaw === "week" ? "week" : "all";
+
+  // Защита TikTok по адресу: сколько запусков ЧИСТОГО профиля разрешено за скользящее окно.
+  // Пусто — 6 запусков за 15 минут. Счёт общий на все процессы (файл `logs/tiktok-launches.json`).
+  const ttLaunchesRaw = (raw.AMESTAT_TT_LAUNCHES || "").trim();
+  const ttLaunchesNum = ttLaunchesRaw === "" ? NaN : Number(ttLaunchesRaw);
+  const ttLaunchLimit = Number.isFinite(ttLaunchesNum) && ttLaunchesNum > 0 ? Math.round(ttLaunchesNum) : 6;
+
+  const ttWindowRaw = (raw.AMESTAT_TT_WINDOW_MIN || "").trim();
+  const ttWindowNum = ttWindowRaw === "" ? NaN : Number(ttWindowRaw);
+  const ttWindowMs = Number.isFinite(ttWindowNum) && ttWindowNum > 0 ? Math.round(ttWindowNum * 60_000) : 15 * 60_000;
+
+  // Через сколько минут сам собой повторяется РУЧНОЙ обход, который свалила защита TikTok по
+  // адресу. Пусто — 25 минут. Повтор один, письма при назначении нет.
+  const manualRetryRaw = (raw.AMESTAT_MANUAL_RETRY_MIN || "").trim();
+  const manualRetryNum = manualRetryRaw === "" ? NaN : Number(manualRetryRaw);
+  const manualRetryMin = Number.isFinite(manualRetryNum) && manualRetryNum > 0 ? Math.round(manualRetryNum) : 25;
+
   // Комментарии: за сколько последних дней брать видео. По умолчанию 7.
   // Шаг и без того долгий — страница на каждое видео, — а старые обсуждения уже не растут.
   const commentsDaysRaw = (raw.AMESTAT_COMMENTS_DAYS || "").trim();
@@ -72,6 +102,13 @@ export function loadEnv() {
   const repliesMaxRaw = (raw.AMESTAT_REPLIES_MAX || "").trim();
   const repliesMaxNum = repliesMaxRaw === "" ? NaN : Number(repliesMaxRaw);
   const repliesMax = Number.isFinite(repliesMaxNum) && repliesMaxNum > 0 ? Math.round(repliesMaxNum) : 20;
+
+  // Охват «только наши»: сколько прокруток списка отпущено на поиск отслеживаемых видео
+  // (наших и жёлтых). Пусто — 30. Дошли до потолка — остальные отслеживаемые считаются
+  // ненайденными: строка в лог и замечание `[list]`. При охвате «всё» переменная не при чём.
+  const oursPagesRaw = (raw.AMESTAT_OURS_MAX_PAGES || "").trim();
+  const oursPagesNum = oursPagesRaw === "" ? NaN : Number(oursPagesRaw);
+  const oursMaxPages = Number.isFinite(oursPagesNum) && oursPagesNum > 0 ? Math.round(oursPagesNum) : 30;
 
   // Какие коды замечаний НЕ слать в Telegram: список через запятую. Пусто — не глушить ничего.
   const notifyMute = (raw.AMESTAT_NOTIFY_MUTE || "")
@@ -92,9 +129,15 @@ export function loadEnv() {
     browser: raw.AMESTAT_BROWSER || "",
     pauseMs,
     retryMs,
+    slotHours,
+    slotDepth,
+    ttLaunchLimit,
+    ttWindowMs,
+    manualRetryMin,
     commentsDays,
     commentsMax,
     repliesMax,
+    oursMaxPages,
     notifyMute,
     igToken,
     igUserId,

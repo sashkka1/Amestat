@@ -24,6 +24,12 @@
 //     (`PROFILE_OPERA` и `PROFILE_TIKTOK`, копия заводится сама — см. `browser.mjs`).
 //   • Глубина (`depth`) обхода целиком передаётся сборщикам площадок: 'all' — весь список
 //     видео, 'week' — только за последние 7 дней. Снимок профиля делается всегда одинаково.
+//   • Охват видео (`videos`, миграция v17; владелец, 2026-09-09): 'all' — как было всегда,
+//     'ours' — «на лишние видео не смотрим и экономим время». При 'ours' сборщик СНАЧАЛА
+//     спрашивает у базы отслеживаемые видео креатора (`ours` или `watch`) и листает список
+//     ровно до тех пор, пока все они не встретятся (правила — `scope.mjs`). Расписание, догон
+//     и повтор ходят с 'all' всегда. ⚠️ Тексты комментариев охват не меняет: они и так только
+//     у наших, жёлтые получают одни счётчики.
 //   • Повтор после неудачи (`failedOnly`) берёт только тех, у кого в `creators.sync_error`
 //     что-то есть: успевшие собраться второй раз за час не тревожатся.
 //   • Тексты комментариев — отдельный шаг ПОСЛЕ снимков видео и только по свежим роликам
@@ -38,6 +44,12 @@
 //   • Картинки Instagram на чужих адресах не остаются: аватар и обложки перекладываются в
 //     свой бакет (`images.mjs`), в базу идёт наш публичный адрес. Причина — в `images.mjs`;
 //     у TikTok картинки показываются как есть, и его это не касается вовсе.
+//   • Запусков чистого профиля TikTok — не больше `AMESTAT_TT_LAUNCHES` за `AMESTAT_TT_WINDOW_MIN`
+//     минут на весь компьютер (`tiktok-gate.mjs`). Окно кончилось — полоса TikTok ЖДЁТ, пишет об
+//     этом в журнал и кладёт в `sync_runs.current_handles` строку «пауза TikTok до HH:MM».
+//     Полосу Instagram ожидание не задевает: полосы идут через `Promise.all`.
+//   • Каждая строка лога уезжает в `sync_log` ПО ХОДУ дела (`synclog.mjs`, миграция v16) —
+//     сайт показывает администратору живой журнал. `sync_runs.log` (весь текст в конце) остался.
 
 import { get, patch, insertMany, insertReturning, upsert } from "./db.mjs";
 import { loadEnv } from "./env.mjs";
@@ -49,6 +61,8 @@ import { collectInstagramComments } from "./comments-instagram.mjs";
 import { launchProfile, trimTraffic, ensureProfileCopy, PROFILE_OPERA, PROFILE_TIKTOK } from "./browser.mjs";
 import { rehostImage, isOurs, avatarPath, coverPath } from "./images.mjs";
 import { notice, startRun, reportRun, takeSessionHints } from "./notices.mjs";
+import { takeLaunchSlot } from "./tiktok-gate.mjs";
+import { startSyncLog, pushSyncLog, stopSyncLog } from "./synclog.mjs";
 import { basename } from "node:path";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -77,6 +91,10 @@ let chain = Promise.resolve();
 let pending = 0;
 
 const short = (e) => String(e?.message ?? e).split("\n")[0];
+const hhmm = (date) => {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(date.getHours())}:${p(date.getMinutes())}`;
+};
 
 /** В какую полосу идёт креатор. Чистая функция: её проверяют тесты. */
 export function laneOf(creator) {
@@ -105,20 +123,41 @@ export function pauseAfter(lane, error = null) {
   return !(error && /профиль не найден/i.test(String(error)));
 }
 
-/** Кто собирает этого креатора. Instagram — по IG_SOURCE (graph | web). */
-function pickCollector(creator, env, depth, ctx) {
+/**
+ * Кто собирает этого креатора. Instagram — по IG_SOURCE (graph | web).
+ * `scope` — охват списка: `{ videos: 'all'|'ours', trackedIds, maxPages }`. Graph API листает
+ * по-своему (там страницы дешёвые и правило прокрутки не при чём) — ему охват не передаётся.
+ */
+function pickCollector(creator, env, depth, ctx, scope) {
   const platform = creator.platform ?? "tiktok";
   if (platform === "tiktok") {
-    return (log) => collectTikTok(creator, { browserChoice: env.browser, retryPauseMs: env.pauseMs, depth, log });
+    return (log) => collectTikTok(creator, { browserChoice: env.browser, depth, scope, log });
   }
   if (platform === "instagram") {
     if (env.igSource === "graph") {
       return (log) => collectInstagramGraph(creator, { token: env.igToken, userId: env.igUserId, depth, log });
     }
     // Браузер полосы уже поднят и уже с перехватом: свой модуль не заводит.
-    return (log) => collectInstagramWeb(creator, { browserChoice: env.browser, depth, ctx, log });
+    return (log) => collectInstagramWeb(creator, { browserChoice: env.browser, depth, ctx, scope, log });
   }
   throw new Error(`неизвестная площадка: ${platform}`);
+}
+
+/**
+ * Отслеживаемые видео креатора: наши (`ours`) и жёлтые (`watch`). Нужны охвату 'ours' — по ним
+ * список листается ровно до тех пор, пока все они не встретятся.
+ * База не ответила — отдаём `null`: тогда охват для этого креатора опускается до 'all'. Лишняя
+ * работа лучше необновлённых наших видео.
+ */
+async function trackedVideos(creatorId, log) {
+  try {
+    const rows = await get(`videos?select=id,published_at&creator_id=eq.${encodeURIComponent(creatorId)}&or=(ours.eq.true,watch.eq.true)`);
+    return rows.map((r) => ({ id: String(r.id), publishedAt: r.published_at ?? null }));
+  } catch (e) {
+    log?.(`  отслеживаемые видео не спросились: ${short(e)}`);
+    notice("db", `отслеживаемые видео не спросились: ${short(e)}`);
+    return null;
+  }
 }
 
 /**
@@ -247,7 +286,8 @@ async function rehostInstagram(creator, profile, videos, log) {
 }
 
 /**
- * При каком числе комментариев тексты этих видео снимались в прошлый раз.
+ * При каком числе комментариев тексты этих видео снимались в прошлый раз — и что это за видео:
+ * наше (`ours`), жёлтое (`watch`, миграция v17) или чужое.
  * База не ответила — шаг из-за этого не встаёт: считаем, что не знаем ничего, и снимаем всё
  * (лишняя работа лучше потерянных комментариев).
  */
@@ -256,8 +296,8 @@ async function syncedCounts(ids, log) {
   try {
     for (let i = 0; i < ids.length; i += 100) {
       const list = ids.slice(i, i + 100).map((id) => `"${encodeURIComponent(id)}"`).join(",");
-      for (const row of await get(`videos?select=id,comments_synced_count,ours&id=in.(${list})`)) {
-        out.set(String(row.id), { count: row.comments_synced_count ?? null, ours: row.ours !== false });
+      for (const row of await get(`videos?select=id,comments_synced_count,ours,watch&id=in.(${list})`)) {
+        out.set(String(row.id), { count: row.comments_synced_count ?? null, ours: row.ours !== false, watch: row.watch === true });
       }
     }
   } catch (e) {
@@ -274,30 +314,39 @@ async function syncedCounts(ids, log) {
  *     «всю остальную информацию» — по нашим). Флаг `allVideos` (просьба «и не наши видео» из
  *     матрицы) снимает это условие. Видео, о котором база не сказала (нет строки), — считается
  *     нашим: лишняя работа лучше потерянных комментариев;
+ *   • ⚠️ ЖЁЛТЫЕ (`videos.watch`, миграция v17) текстов НЕ получают: «смотрим историю» — это
+ *     счётчики (владелец, 2026-09-09). В счёт они идут отдельной строкой лога, чтобы было
+ *     видно, чего именно мы не снимали;
  *   • видео, у которого число комментариев ровно то же, что при прошлом съёме
  *     (`videos.comments_synced_count`), пропускается: обсуждение не двигалось, а страница
  *     на видео стоит минуты. Первый раз (`null` или неизвестно) — снимаем всегда.
- * `known` — Map id → `{ count, ours }` (старый вид «id → число» тоже понимается).
- * Отдаёт `{ picked, unchanged, foreign }`. Чистая функция: её проверяют тесты.
+ * `known` — Map id → `{ count, ours, watch }` (старый вид «id → число» тоже понимается).
+ * Отдаёт `{ picked, unchanged, foreign, watched }`: `watched` — жёлтые, `foreign` — совсем
+ * чужие; текстов не получают ни те ни другие, но в логе они названы порознь.
+ * Чистая функция: её проверяют тесты.
  */
 export function pickComments(videos, known, sinceMs, { allVideos = false } = {}) {
-  const picked = [], unchanged = [], foreign = [];
+  const picked = [], unchanged = [], foreign = [], watched = [];
   for (const v of videos ?? []) {
     const count = v.comments ?? 0;
     if (count <= 0) continue;
     if (v.publishedAt === null || v.publishedAt === undefined) continue;
     if (Date.parse(v.publishedAt) < sinceMs) continue;
     const row = known?.get(String(v.id));
-    const was = row !== null && typeof row === "object" ? row.count : row;
-    const ours = row !== null && typeof row === "object" ? row.ours !== false : true;
+    const known_ = row !== null && typeof row === "object";
+    const was = known_ ? row.count : row;
+    const ours = known_ ? row.ours !== false : true;
+    const watch = known_ ? row.watch === true : false;
     if (!ours && !allVideos) {
-      foreign.push(v);
+      // Жёлтое видео — не наше: тексты у него не снимаются так же, как у чужого. Разница
+      // только в строке лога: владелец должен видеть, что за историей мы всё-таки следим.
+      (watch ? watched : foreign).push(v);
       continue;
     }
     if (was !== null && was !== undefined && Number(was) === Number(count)) unchanged.push(v);
     else picked.push(v);
   }
-  return { picked, unchanged, foreign };
+  return { picked, unchanged, foreign, watched };
 }
 
 /**
@@ -325,15 +374,20 @@ async function collectComments(creator, videos, env, lane, flags, log) {
 
   const since = Date.now() - env.commentsDays * DAY_MS;
   const known = await syncedCounts(videos.map((v) => v.id), log);
-  const { picked, unchanged, foreign } = pickComments(videos, known, since, { allVideos: flags.allVideos });
+  const { picked, unchanged, foreign, watched } = pickComments(videos, known, since, { allVideos: flags.allVideos });
   const same = unchanged.length > 0 ? `, без изменений: ${unchanged.length} видео` : "";
-  const alien = foreign.length > 0 ? `, не наших: ${foreign.length} видео` : "";
+  // Чужие и жёлтые считаются порознь: у обоих текстов нет, но жёлтое мы смотрим намеренно.
+  const skipped = [
+    foreign.length > 0 ? `не наших: ${foreign.length}` : null,
+    watched.length > 0 ? `жёлтых: ${watched.length}` : null,
+  ].filter(Boolean).join(", ");
+  const alien = skipped ? `, ${skipped}` : "";
   if (picked.length === 0) {
     log?.(`  комментарии: видео 0, собрано 0, не вышло 0 (свежих с новыми комментариями нет за ${env.commentsDays} дн.${same}${alien})`);
     return;
   }
   if (unchanged.length > 0) log?.(`  комментарии: без изменений: ${unchanged.length} видео — их не открываем`);
-  if (foreign.length > 0) log?.(`  комментарии: не наших: ${foreign.length} видео — тексты у них не снимаем (нужны — просьба «и не наши видео»)`);
+  if (skipped) log?.(`  комментарии: ${skipped} — тексты не снимаем (нужны — просьба «и не наши видео»)`);
   if (flags.allVideos) log?.(`  комментарии: просьба «и не наши видео» — снимаем у всех свежих`);
 
   let ctx = null;
@@ -394,7 +448,24 @@ async function collectOne(creator, env, depth, lane, flags, log) {
   // TikTok свой список видео берёт чистым одноразовым профилем и браузера полосы не трогает.
   const instagramWeb = (creator.platform ?? "tiktok") === "instagram" && env.igSource !== "graph";
   const ctx = instagramWeb ? await lane.ctx(log) : null;
-  const collect = pickCollector(creator, env, depth, ctx);
+
+  // Охват «только наши»: список отслеживаемых видео спрашивается ДО браузера — по нему решается,
+  // докуда листать. Не спросился — опускаемся до охвата «всё» на этого креатора.
+  const scope = { videos: "all", trackedIds: [], maxPages: env.oursMaxPages };
+  if (flags.videos === "ours") {
+    const tracked = await trackedVideos(creator.id, log);
+    if (tracked === null) {
+      log?.("  охват: только наши — список отслеживаемых не спросился, идём по всему списку");
+    } else {
+      scope.videos = "ours";
+      scope.trackedIds = tracked.map((t) => t.id);
+      const dates = tracked.map((t) => t.publishedAt).filter(Boolean).sort();
+      const oldest = dates.length > 0 ? `, самое старое от ${String(dates[0]).slice(0, 10)}` : "";
+      log?.(`  охват: только наши — отслеживаемых видео ${scope.trackedIds.length}${oldest}${scope.trackedIds.length === 0 ? " (берём только первую страницу списка)" : ""}`);
+    }
+  }
+
+  const collect = pickCollector(creator, env, depth, ctx, scope);
   const { profile, videos } = await collect(log);
   const takenAt = new Date().toISOString();
   const instagram = (creator.platform ?? "tiktok") === "instagram";
@@ -458,12 +529,19 @@ async function collectOne(creator, env, depth, lane, flags, log) {
   return { videos: videos.length, followers: profile.followers };
 }
 
-async function doSync({ trigger, creatorId, failedOnly, depth, comments, replies, allVideos, requestedBy, requestIds, slotLabel, onLog }) {
+async function doSync({ trigger, creatorId, failedOnly, depth, videos, comments, replies, allVideos, requestedBy, requestIds, slotLabel, onLog }) {
   const env = loadEnv();
   const lines = [];
-  const log = (text) => {
+  /**
+   * Строка лога обхода. Уходит сразу в три места: в память (`sync_runs.log` в конце), тому, кто
+   * обход завёл (консоль или файл резидента), и в живой журнал `sync_log` для сайта (v16).
+   * `meta` — `{ source, handle, level }` для журнала; по умолчанию строка считается общей
+   * (`system`), полосы передают `source: "browser"` и своего креатора.
+   */
+  const log = (text, meta = {}) => {
     lines.push(text);
     onLog?.(text);
+    pushSyncLog(text, meta);
   };
   const failures = [];
   // Замечания копятся с этой минуты и уезжают владельцу одним сообщением в самом конце —
@@ -476,12 +554,18 @@ async function doSync({ trigger, creatorId, failedOnly, depth, comments, replies
       trigger,
       scope: failedOnly ? "failed" : creatorId ?? "all",
       depth,
+      // Охват видео этого обхода (v17): 'all' или 'ours'. Сайт читает его из строки обхода.
+      videos,
       comments,
       replies,
       all_videos: allVideos,
       requested_by: requestedBy ?? null,
+      // Каким путём шёл обход (v16). Провайдеры отложены — у нас всегда браузер.
+      source: "browser",
     });
     runId = run?.id ?? null;
+    // С этой минуты каждая строка лога уезжает в `sync_log` по ходу дела, а не в конце.
+    startSyncLog(runId, (line) => onLog?.(line));
   } catch (e) {
     // База недоступна с первого шага — обхода не будет, но исключением никого не роняем:
     // и CLI, и резидент должны увидеть внятную строку, а не стек.
@@ -493,7 +577,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, comments, replies
     return { runId: null, ok: false, done: 0, failed: 0, error: text, failures, depth, log: lines.join("\n") };
   }
   const who = failedOnly ? "только неудавшиеся" : creatorId ? `креатор ${creatorId}` : "все";
-  log(`обход #${runId} (${trigger}, ${who}, глубина ${depth === "week" ? "неделя" : "всё"}, комментарии ${comments ? "да" : "нет"}, ветки ${replies ? "да" : "нет"}${allVideos ? ", и не наши видео" : ""})`);
+  log(`обход #${runId} (${trigger}, ${who}, глубина ${depth === "week" ? "неделя" : "всё"}, комментарии ${comments ? "да" : "нет"}, ветки ${replies ? "да" : "нет"}${allVideos ? ", и не наши видео" : ""}${videos === "ours" ? " · только наши" : ""})`);
 
   // Просьбы забраны этим обходом — сайт перестаёт показывать «в очереди».
   if (requestIds?.length && runId) {
@@ -508,7 +592,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, comments, replies
   }
 
   let done = 0, failed = 0, firstError = null;
-  const flags = { comments, replies, allVideos };
+  const flags = { comments, replies, allVideos, videos };
   try {
     const where = `${creatorId ? `&id=eq.${creatorId}` : ""}${failedOnly ? "&sync_error=not.is.null" : ""}`;
     const creators = await get(`creators?select=${CREATOR_FIELDS}${where}&order=sort_order.asc,added_at.asc`);
@@ -521,6 +605,9 @@ async function doSync({ trigger, creatorId, failedOnly, depth, comments, replies
      * выполнено, на сколько ещё»). После каждого креатора в `sync_runs` уезжают счётчики и
      * те, кого собираем сейчас — по одному на полосу. Не уехало — обход не страдает: это
      * подсказка на кнопке, а не результат.
+     * ⚠️ В `current` кладётся ГОТОВАЯ строка для сайта, а не голый handle: полоса TikTok на
+     * время паузы по лимиту запусков пишет туда «пауза TikTok до HH:MM», и «@» перед этим
+     * был бы бессмыслицей.
      */
     const current = new Map();
     let progressFailed = 0;
@@ -531,7 +618,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, comments, replies
           creators_total: creators.length,
           creators_done: done,
           creators_failed: failed,
-          current_handles: [...current.values()].map((h) => `@${h}`),
+          current_handles: [...current.values()],
           progress_at: new Date().toISOString(),
         });
       } catch (e) {
@@ -550,16 +637,39 @@ async function doSync({ trigger, creatorId, failedOnly, depth, comments, replies
       if (list.length === 0) return { kind, spent: 0, done: 0 };
       const cfg = LANES[kind];
       const lane = laneBrowser(kind, env);
-      const say = (text) => log(`${cfg.tag} ${text}`);
+      // Кого полоса собирает прямо сейчас — чтобы строка журнала знала своего креатора.
+      let who = null;
+      const say = (text) => log(`${cfg.tag} ${text}`, { source: "browser", handle: who });
       const startedLane = Date.now();
       let laneDone = 0;
       say(`полоса ${cfg.name}: креаторов ${list.length}`);
       try {
         for (let i = 0; i < list.length; i++) {
           const creator = list[i];
+          who = creator.handle;
           say(`@${creator.handle} (${creator.platform})`);
-          current.set(kind, creator.handle);
+          current.set(kind, `@${creator.handle}`);
           await progress();
+          // Полоса TikTok поднимает ЧИСТЫЙ профиль на каждого креатора, а таких запусков с
+          // одного адреса площадка терпит немного. Кончилось окно — ждём его освобождения,
+          // и это ожидание видно и в журнале, и на кнопке сайта. Полосу Instagram оно не
+          // задевает вовсе: полосы идут через Promise.all.
+          if (kind === "tt") {
+            await takeLaunchSlot({
+              limit: env.ttLaunchLimit,
+              windowMs: env.ttWindowMs,
+              onWait: (until) => {
+                say(`ждём паузу TikTok до ${hhmm(until)} (${env.ttLaunchLimit} запусков за ${Math.round(env.ttWindowMs / 60_000)} мин)`);
+                current.set(kind, `пауза TikTok до ${hhmm(until)}`);
+                void progress();
+              },
+              onFree: (waited) => {
+                say(`пауза TikTok кончилась, ждали ${Math.round(waited / 60_000)} мин`);
+                current.set(kind, `@${creator.handle}`);
+                void progress();
+              },
+            });
+          }
           const started = Date.now();
           let error = null;
           try {
@@ -582,6 +692,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, comments, replies
             }
           }
           current.delete(kind);
+          who = null;
           await progress();
           const spent = Date.now() - started;
           if (spent > SLOW_CREATOR_MS) notice("slow", `@${creator.handle}: собирался ${Math.round(spent / 60_000)} мин`);
@@ -640,13 +751,18 @@ async function doSync({ trigger, creatorId, failedOnly, depth, comments, replies
         notice("db", `итог обхода #${runId} не записался: ${text}`);
       }
     }
+    // Живой журнал закрывается последним и всегда: остаток строк должен лечь в `sync_log`,
+    // чем бы обход ни кончился. Своих исключений он не бросает.
+    await stopSyncLog();
   }
 }
 
 /**
  * Один обход. Пока идёт предыдущий — ждёт его в очереди.
- * `{ trigger: 'schedule'|'catchup'|'manual'|'retry', creatorId?, failedOnly?, depth?,
+ * `{ trigger: 'schedule'|'catchup'|'manual'|'retry', creatorId?, failedOnly?, depth?, videos?,
  *    comments?, replies?, allVideos?, requestedBy?, requestIds?, slotLabel?, onLog? }`
+ * `videos` — охват списка: `'all'` (по умолчанию, как ходят расписание, догон и повтор) или
+ * `'ours'` — листать лишь до тех пор, пока не встретились все наши и жёлтые видео креатора;
  * `comments` — снимать ли тексты комментариев (`false` — шага нет вовсе);
  * `allVideos` — снимать ли тексты и у НЕ наших видео (по умолчанию `false`: только наши,
  * `videos.ours`; расписание, догон и повтор его не ставят никогда);
@@ -659,10 +775,12 @@ async function doSync({ trigger, creatorId, failedOnly, depth, comments, replies
  * `failures` — `[{ handle, error }]` по каждому неудавшемуся креатору: из них резидент
  * собирает сообщение владельцу в Telegram.
  */
-export function runSync({ trigger = "manual", creatorId = null, failedOnly = false, depth = "all", comments = true, replies = true, allVideos = false, requestedBy = null, requestIds = [], slotLabel = null, onLog } = {}) {
+export function runSync({ trigger = "manual", creatorId = null, failedOnly = false, depth = "all", videos = "all", comments = true, replies = true, allVideos = false, requestedBy = null, requestIds = [], slotLabel = null, onLog } = {}) {
   const args = {
     trigger, creatorId, failedOnly,
     depth: depth === "week" ? "week" : "all",
+    // Всё, кроме прямого «только наши», — полный охват: у колонки в базе тоже default 'all'.
+    videos: videos === "ours" ? "ours" : "all",
     comments: comments !== false,
     replies: replies !== false,
     allVideos: allVideos === true,

@@ -181,3 +181,68 @@ test("all_videos склеивается по «или», а без поля — 
   const [plain] = groupRequests([req(3, { comments: true, replies: true })]);
   assert.equal(plain.allVideos, false, "поля нет — только наши, как всегда");
 });
+
+test("all_videos понимается и в разобранном виде: резидент кладёт в очередь allVideos", () => {
+  const [group] = groupRequests([req(1, { allVideos: true })]);
+  assert.equal(group.allVideos, true, "галочка с сайта не должна теряться по дороге через резидент");
+});
+
+// --- Охват видео: всё или только наши (владелец, 2026-09-09; миграция v17) ---
+
+test("охват склеивается по «или»: хоть одна просьба «всё» — обход по всему списку", () => {
+  const groups = groupRequests([
+    req(1, { videos: "ours" }),
+    req(2, { videos: "all" }),
+  ]);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].videos, "all", "просивший весь список не должен остаться без чужих видео");
+});
+
+test("«только наши» получается, лишь когда его просили все просьбы группы", () => {
+  const [group] = groupRequests([req(1, { videos: "ours" }), req(2, { videos: "ours" })]);
+  assert.equal(group.videos, "ours");
+});
+
+test("поля охвата нет вовсе (старая просьба) — считаем «всё»", () => {
+  const [group] = groupRequests([req(1)]);
+  assert.equal(group.videos, "all");
+});
+
+test("поглощённая просьба приносит свой охват покрывающему обходу", () => {
+  const groups = groupRequests([
+    req(1, { creator_id: "c1", depth: "all", videos: "all" }),
+    req(2, { creator_id: null, depth: "all", videos: "ours" }),
+  ]);
+  assert.equal(groups.length, 1, "частная просьба покрыта обходом всех");
+  assert.equal(groups[0].videos, "all", "частная просила весь список — обход всех идёт по всему");
+});
+
+// --- Жёлтые видео: счётчики да, тексты нет ---
+
+test("жёлтое видео считается отдельно от чужого, но текстов не получает тоже", () => {
+  const videos = [video("ours", 10, 1), video("yellow", 10, 1), video("alien", 10, 1)];
+  const known = new Map([
+    ["ours", { count: null, ours: true, watch: false }],
+    ["yellow", { count: null, ours: false, watch: true }],
+    ["alien", { count: null, ours: false, watch: false }],
+  ]);
+  const { picked, foreign, watched } = pickComments(videos, known, SINCE);
+  assert.deepEqual(picked.map((v) => v.id), ["ours"]);
+  assert.deepEqual(watched.map((v) => v.id), ["yellow"], "«смотрим историю» — это счётчики, а не тексты");
+  assert.deepEqual(foreign.map((v) => v.id), ["alien"]);
+});
+
+test("просьба «и не наши видео» снимает тексты и у жёлтых", () => {
+  const known = new Map([["yellow", { count: null, ours: false, watch: true }]]);
+  const { picked, watched, foreign } = pickComments([video("yellow", 4, 1)], known, SINCE, { allVideos: true });
+  assert.deepEqual(picked.map((v) => v.id), ["yellow"]);
+  assert.equal(watched.length, 0);
+  assert.equal(foreign.length, 0);
+});
+
+test("строки без поля watch (старый вид) считаются просто чужими", () => {
+  const known = new Map([["alien", { count: null, ours: false }]]);
+  const { watched, foreign } = pickComments([video("alien", 4, 1)], known, SINCE);
+  assert.equal(watched.length, 0);
+  assert.deepEqual(foreign.map((v) => v.id), ["alien"]);
+});
