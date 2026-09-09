@@ -339,6 +339,17 @@ export type VideoLatest = {
   saves: number | null;
 };
 
+// Результат RPC videos_with_latest (миграция v23): строка videos плюс счётчики последнего
+// снимка. `taken_at` — когда он снят; null, если снимков у видео ещё нет.
+export type VideoWithLatest = Video & {
+  views: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  saves: number;
+  taken_at: string | null;
+};
+
 // Результат RPC video_stats_between.
 export type VideoStats = {
   video_id: string;
@@ -425,22 +436,37 @@ export type Database = {
       video_latest: { Row: VideoLatest; Relationships: Relationships };
     };
     Functions: {
+      // ⚠️ `p_only_ours` есть у всех четырёх функций с миграции v22: охват «Только наши»
+      // считает база, а не клиент.
       video_stats_between: {
-        Args: { p_creator: string; p_from: string; p_to: string };
+        Args: { p_creator: string; p_from: string; p_to: string; p_only_ours?: boolean };
         Returns: VideoStats[];
       };
       creator_daily_views: {
-        Args: { p_creator: string; p_from: string; p_to: string };
+        Args: { p_creator: string; p_from: string; p_to: string; p_only_ours?: boolean };
         Returns: DailyViews[];
       };
       creators_overview: {
-        Args: { p_from: string; p_to: string };
+        Args: { p_from: string; p_to: string; p_only_ours?: boolean };
         Returns: CreatorOverview[];
       };
       // p_platform необязателен (миграция v10): null — все площадки.
       daily_views_all: {
-        Args: { p_from: string; p_to: string; p_platform?: string | null };
+        Args: { p_from: string; p_to: string; p_platform?: string | null; p_only_ours?: boolean };
         Returns: DailyViews[];
+      };
+      // Видео за срок вместе с последним снимком (миграция v23) — вместо пары
+      // «страницы videos» + «пачки video_latest».
+      videos_with_latest: {
+        Args: {
+          p_from: string;
+          p_to: string;
+          p_creator?: string | null;
+          p_platform?: string | null;
+          p_only_ours?: boolean;
+          p_limit?: number;
+        };
+        Returns: VideoWithLatest[];
       };
       // Пароль менеджеру ставит админ, старого не видя (миграция v3).
       admin_set_password: {

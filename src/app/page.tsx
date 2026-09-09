@@ -17,9 +17,8 @@ import {
   creatorsOverview,
   dailyViewsAll,
   listCreators,
-  listVideosWithCounters,
+  listVideosWithLatest,
   sumOverview,
-  type VideoRow,
 } from "@/lib/queries";
 import { earliestAdded, publishedIn, toPosts, toTableRows } from "@/lib/video-rows";
 import { matchesScope, useCompare, useScope } from "@/lib/dashboard-prefs";
@@ -32,14 +31,7 @@ import {
 import { useIsAdmin } from "@/lib/profile-context";
 import { useLoader } from "@/lib/use-loader";
 import { usePeriod } from "@/lib/use-period";
-import type { Creator, DailyViews } from "@/lib/types";
-
-type Base = { creators: Creator[]; videos: VideoRow[] };
-
-async function loadBase(): Promise<Base> {
-  const [creators, videos] = await Promise.all([listCreators(), listVideosWithCounters()]);
-  return { creators, videos };
-}
+import type { DailyViews } from "@/lib/types";
 
 export default function HomePage() {
   return (
@@ -51,8 +43,11 @@ export default function HomePage() {
 
 function Dashboard() {
   const t = useT();
-  const base = useLoader(loadBase, []);
-  const allCreators = useMemo(() => base.data?.creators ?? [], [base.data]);
+  // Список креаторов — единственное, что странице нужно до выбора срока: по нему считается
+  // начало «Всего времени» и фильтр площадки. Видео уехали в загрузку срока (ниже), поэтому
+  // страница показывается сразу, не дожидаясь тысячи строк.
+  const base = useLoader(listCreators, []);
+  const allCreators = useMemo(() => base.data ?? [], [base.data]);
 
   // Переключатель площадки решает всё на странице: сводку, график, видео, креаторов.
   const platform = usePlatformFilter();
@@ -98,12 +93,16 @@ function Dashboard() {
   //
   // ⚠️ Охват тоже уходит в базу (миграция v22) и стоит в списке зависимостей: переключили
   // «Только наши / Все видео» — плитки, «Динамика» и тренд площадок перечитываются.
+  //
+  // ⚠️ Видео читаются здесь же и тем же сроком (миграция v23): один вызов `videos_with_latest`
+  // вместо девяти запросов «страницы videos + пачки video_latest», и он уходит в общий
+  // Promise.all рядом со сводкой. Отсюда берут строки и «Новые видео», и «Лучшие видео».
   const comparing = compare.on;
   const stats = useLoader(async () => {
     if (!period.range) return null;
     const range = period.range;
     const previous = comparing ? period.previous : null;
-    const [now, prev, daily, split] = await Promise.all([
+    const [now, prev, daily, split, videos] = await Promise.all([
       creatorsOverview(range, scope),
       previous ? creatorsOverview(previous, scope) : Promise.resolve(null),
       dailyViewsAll(range, rpcPlatform, scope),
@@ -113,10 +112,11 @@ function Dashboard() {
             dailyViewsAll(range, "instagram", scope),
           ])
         : null,
+      listVideosWithLatest(range, { platform: rpcPlatform, scope }),
     ]);
     const tiktok: DailyViews[] = rpcPlatform === "instagram" ? [] : split ? split[0] : daily;
     const instagram: DailyViews[] = rpcPlatform === "tiktok" ? [] : split ? split[1] : daily;
-    return { now, prev, daily, tiktok, instagram };
+    return { now, prev, daily, tiktok, instagram, videos };
   }, [fromMs, toMs, rpcPlatform, comparing, scope]);
 
   const creatorIds = useMemo(() => new Set(creators.map((c) => c.id)), [creators]);
@@ -137,8 +137,8 @@ function Dashboard() {
   // сужены тем же условием (миграция v22), поэтому клиентский фильтр и серверный отбор
   // говорят про один и тот же набор видео — таблица сходится с плиткой над ней.
   const tableRows = useMemo(
-    () => (base.data ? toTableRows(base.data.videos, creators) : []),
-    [base.data, creators],
+    () => (stats.data ? toTableRows(stats.data.videos, creators) : []),
+    [stats.data, creators],
   );
   const scopedRows = useMemo(
     () => tableRows.filter((r) => matchesScope(scope, r.state)),
@@ -238,7 +238,11 @@ function Dashboard() {
             <Skeleton className="h-56 w-full" />
           )}
 
-          <TopPosts posts={topPosts} collapseKey="top-posts" />
+          {stats.data ? (
+            <TopPosts posts={topPosts} collapseKey="top-posts" />
+          ) : (
+            <Skeleton className="h-56 w-full" />
+          )}
 
           {nowRows ? (
             <TopCreators
@@ -254,12 +258,16 @@ function Dashboard() {
             <Skeleton className="h-56 w-full" />
           )}
 
-          <VideosTable
-            rows={scopedRows}
-            title={t("dashboard.newVideos")}
-            defaultSort="published"
-            collapseKey="new-videos"
-          />
+          {stats.data ? (
+            <VideosTable
+              rows={scopedRows}
+              title={t("dashboard.newVideos")}
+              defaultSort="published"
+              collapseKey="new-videos"
+            />
+          ) : (
+            <Skeleton className="h-56 w-full" />
+          )}
         </>
       )}
     </Page>

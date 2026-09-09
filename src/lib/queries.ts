@@ -9,10 +9,9 @@ import type {
   DailyViews,
   Platform,
   Tag,
-  Video,
   VideoComment,
-  VideoLatest,
   VideoStats,
+  VideoWithLatest,
 } from "./types";
 import type { PeriodRange } from "./period";
 import type { Scope } from "./dashboard-prefs";
@@ -25,8 +24,6 @@ import type { Scope } from "./dashboard-prefs";
 // что видно (админу — всё, менеджеру — только его креаторы).
 
 const VIDEO_LIMIT = 2000;
-// Пачка id в одном запросе снимков: адрес запроса с id ограничен длиной, а ответ — тысячей строк.
-const LATEST_BATCH = 200;
 // Страница списка видео: ровно потолок PostgREST.
 const PAGE = 1000;
 
@@ -83,60 +80,48 @@ export async function listArchive(): Promise<CreatorArchive[]> {
   return data ?? [];
 }
 
-// Видео со свежими счётчиками. Связи «видео → video_latest» в схеме нет (это вид без
-// внешнего ключа), поэтому берём двумя запросами и сшиваем по id — на наших объёмах
-// (сотни видео) это один лишний запрос, а не проблема.
-export type VideoRow = Video & {
-  views: number;
-  likes: number;
-  comments: number;
-  shares: number;
-  saves: number;
-};
+// Видео за срок вместе со свежим снимком — ОДИН вызов `videos_with_latest` (миграция v23).
+//
+// Было до v23: список видео страницами по 1000, а затем счётчики — пачками по 200 id из вида
+// `video_latest`. На 1234 видео это девять запросов подряд, и каждый упирался в RLS, которая
+// звала `can_see_creator()` на каждую строку: одни только снимки отнимали ~6 с. Теперь срок,
+// площадка и охват уходят в базу, а связь «видео → последний снимок» делает lateral внутри.
+//
+// ⚠️ Видео без даты публикации не приходят вовсе: у страницы есть срок, а положить их некуда.
+//
+// ⚠️ Потолок PostgREST в 1000 строк действует и на ответ функции, поэтому за сроком «Всё
+// время» (1234 видео) идём страницами через Range. Молча урезанный ответ здесь — это ровно
+// та беда, что владелец видел 2026-09-09: «на новых видео нет ни просмотров, ни лайков».
+// Порядок внутри функции доопределён по id, иначе на стыке страниц строки задваивались бы.
+export type VideoRow = VideoWithLatest;
 
-export async function listVideosWithCounters(creatorId?: string): Promise<VideoRow[]> {
+export async function listVideosWithLatest(
+  range: PeriodRange,
+  {
+    creatorId = null,
+    platform = null,
+    scope = "all",
+  }: { creatorId?: string | null; platform?: Platform | null; scope?: Scope } = {},
+): Promise<VideoRow[]> {
   const supabase = createClient();
-  // Страницами по PAGE: `limit(2000)` PostgREST молча урезал бы до 1000 — тот же потолок,
-  // что и у снимков ниже.
-  const videos: Video[] = [];
+  const rows: VideoRow[] = [];
   for (let from = 0; from < VIDEO_LIMIT; from += PAGE) {
-    let q = supabase
-      .from("videos")
-      .select("*")
-      .order("published_at", { ascending: false, nullsFirst: false })
+    const { data, error } = await supabase
+      .rpc("videos_with_latest", {
+        p_from: range.from.toISOString(),
+        p_to: range.to.toISOString(),
+        p_creator: creatorId,
+        p_platform: platform,
+        p_only_ours: scope === "ours",
+        p_limit: VIDEO_LIMIT,
+      })
       .range(from, Math.min(from + PAGE, VIDEO_LIMIT) - 1);
-    if (creatorId) q = q.eq("creator_id", creatorId);
-    const res = await q;
-    fail(res.error);
-    const page = res.data ?? [];
-    videos.push(...page);
+    fail(error);
+    const page = data ?? [];
+    rows.push(...page);
     if (page.length < PAGE) break;
   }
-
-  // Снимки — только для прочитанных видео и пачками: PostgREST молча режет ответ на 1000
-  // строках, и когда видео в базе стало 1090, последние 90 на главной остались с нулями
-  // (владелец, 2026-09-09: «на новых видео нет ни просмотров, ни лайков»).
-  const byId = new Map<string, VideoLatest>();
-  const ids = videos.map((v) => v.id);
-  for (let i = 0; i < ids.length; i += LATEST_BATCH) {
-    const latestRes = await supabase
-      .from("video_latest")
-      .select("*")
-      .in("video_id", ids.slice(i, i + LATEST_BATCH));
-    fail(latestRes.error);
-    for (const l of latestRes.data ?? []) byId.set(l.video_id, l);
-  }
-  return videos.map((v) => {
-    const l = byId.get(v.id);
-    return {
-      ...v,
-      views: l?.views ?? 0,
-      likes: l?.likes ?? 0,
-      comments: l?.comments ?? 0,
-      shares: l?.shares ?? 0,
-      saves: l?.saves ?? 0,
-    };
-  });
+  return rows;
 }
 
 export async function videoStatsBetween(

@@ -46,12 +46,9 @@ export function AuthGate({ children, role }: { children: React.ReactNode; role?:
       }
     }
 
-    void supabase.auth.getSession().then(({ data }) => {
-      if (!alive) return;
-      if (data.session) void check(data.session.user.id);
-      else router.replace("/login/");
-    });
-
+    // Только подписка, без отдельного getSession(): supabase-js сразу отдаёт сюда событие
+    // INITIAL_SESSION с сессией из localStorage. Раньше здесь стояли оба вызова, и профиль
+    // ждал, пока разрешится первый из них, — лишний шаг перед первым запросом страницы.
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!alive) return;
       if (session) void check(session.user.id);
