@@ -116,7 +116,7 @@ function CreatorView({ id, videoId }: { id: string; videoId: string | null }) {
     // имя остаётся: его ставит docTitle.
     <Page
       docTitle={name}
-      toolbar={<PeriodBar period={period} compare={compare.on} onCompare={compare.set} scope={scope} onScope={setScope} />}
+      toolbar={<PeriodBar period={period} compare={compare.on} onCompare={compare.set} scope={scope} onScope={setScope} runScope={id} />}
       actions={<SyncButton scope={id} pageCreatorIds={pageCreatorIds} onDone={refresh} />}
     >
 

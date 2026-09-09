@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { AuthGate } from "@/components/auth-gate";
 import { Page, PageError, PageSkeleton } from "@/components/page";
 import { Avatar } from "@/components/avatar";
+import { CreatorLabel } from "@/components/creator-label";
 import { PlatformChip } from "@/components/platform";
 import { PlatformSwitch } from "@/components/platform-switch";
 import { LocalTime } from "@/components/local-time";
@@ -90,10 +91,12 @@ function ArchiveScreen() {
                           className="flex items-center gap-2 hover:underline"
                         >
                           <Avatar src={a.avatar_url} name={name} size={28} />
-                          <span className="min-w-0">
-                            <span className="block truncate font-medium">{name}</span>
-                            <span className="block truncate text-xs text-muted-foreground">@{a.handle}</span>
-                          </span>
+                          <CreatorLabel
+                            platform={a.platform}
+                            name={a.display_name}
+                            handle={a.handle}
+                            className="font-medium"
+                          />
                         </a>
                       </TableCell>
                       <TableCell>

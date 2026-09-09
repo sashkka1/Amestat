@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { AuthGate } from "@/components/auth-gate";
 import { Page, PageError, PageSkeleton } from "@/components/page";
 import { Avatar } from "@/components/avatar";
+import { CreatorLabel } from "@/components/creator-label";
 import { PlatformChip } from "@/components/platform";
 import { PlatformSwitch } from "@/components/platform-switch";
 import { LocalTime } from "@/components/local-time";
@@ -260,9 +261,12 @@ function ManagerView({ id }: { id: string }) {
                         : t("manager.noFreeOnPlatform")}
                     </SelectItem>
                   ) : (
+                    // Пункт списка — та же подпись, что в таблицах: иконка площадки, имя
+                    // и ник (владелец, 2026-09-09). Без иконки одинаковые ники с разных
+                    // площадок в одном списке не различить.
                     free.map((c) => (
                       <SelectItem key={c.id} value={c.id}>
-                        {c.display_name || c.handle} · @{c.handle}
+                        <CreatorLabel platform={c.platform} name={c.display_name} handle={c.handle} />
                       </SelectItem>
                     ))
                   )}
@@ -293,10 +297,12 @@ function ManagerView({ id }: { id: string }) {
                         <TableCell>
                           <Link href={`/creator/?id=${c.id}`} className="flex items-center gap-2 hover:underline">
                             <Avatar src={c.avatar_url} name={cname} size={28} />
-                            <span className="min-w-0">
-                              <span className="block truncate font-medium">{cname}</span>
-                              <span className="block truncate text-xs text-muted-foreground">@{c.handle}</span>
-                            </span>
+                            <CreatorLabel
+                              platform={c.platform}
+                              name={c.display_name}
+                              handle={c.handle}
+                              className="font-medium"
+                            />
                           </Link>
                         </TableCell>
                         <TableCell>

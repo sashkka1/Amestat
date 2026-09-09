@@ -6,6 +6,7 @@ import { SearchIcon } from "lucide-react";
 import { AuthGate } from "@/components/auth-gate";
 import { Page, PageError, PageSkeleton } from "@/components/page";
 import { Avatar } from "@/components/avatar";
+import { CreatorLabel } from "@/components/creator-label";
 import { PlatformSwitch } from "@/components/platform-switch";
 import { TagPill } from "@/components/tag-pill";
 import { LocalTime } from "@/components/local-time";
@@ -382,12 +383,12 @@ function CreatorsScreen() {
                           className="flex items-center gap-2 hover:underline"
                         >
                           <Avatar src={r.creator.avatar_url} name={name} size={30} />
-                          <span className="min-w-0">
-                            <span className="block truncate font-medium">{name}</span>
-                            <span className="block truncate text-xs text-muted-foreground">
-                              @{r.creator.handle}
-                            </span>
-                          </span>
+                          <CreatorLabel
+                            platform={r.creator.platform}
+                            name={r.creator.display_name}
+                            handle={r.creator.handle}
+                            className="font-medium"
+                          />
                         </Link>
                       </TableCell>
                       <TableCell>

@@ -301,21 +301,6 @@ export async function creatorDailyViews(
   return data ?? [];
 }
 
-// Самый ранний снимок видео вообще: с него начинается история счётчиков. Нужен оговорке
-// под полосой периода — «по всем видео данные собраны только за N дн.»: до первого обхода
-// сборщика чисел нет ни у одного ролика, и срок «Всё время» это молча скрывает.
-// RLS сама оставит снимки видимых креаторов, поэтому у менеджера дата будет своя.
-export async function earliestSnapshotAt(): Promise<string | null> {
-  const { data, error } = await createClient()
-    .from("video_snaps")
-    .select("taken_at")
-    .order("taken_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-  fail(error);
-  return data?.taken_at ?? null;
-}
-
 // Сводка по всем видимым креаторам за срок — сумма рядов creators_overview.
 export type Totals = {
   views: number;

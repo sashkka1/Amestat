@@ -207,6 +207,12 @@ export function PerformanceChart({
     return buildRows(days, cols, bucket, mode);
   }, [byCreators, fresh, data, mode, bucket]);
 
+  // Есть ли хоть одна ненулевая точка среди видимых серий.
+  const allZero = useMemo(
+    () => rows.length > 0 && rows.every((r) => Object.entries(r).every(([k, v]) => k === "day" || !v)),
+    [rows],
+  );
+
   const colorByKey = useMemo(
     () => Object.fromEntries(items.map((i) => [i.key, i.color])),
     [items],
@@ -294,7 +300,14 @@ export function PerformanceChart({
       {rows.length === 0 ? (
         <Empty>{empty}</Empty>
       ) : (
-        <div className="h-64 w-full px-2 sm:h-72">
+        <div className="relative h-64 w-full px-2 sm:h-72">
+          {/* Все точки нулевые — за период публикаций нет: плоская линия у нуля выглядит как
+              «график не нарисовался» (владелец, 2026-09-09), поэтому говорим словами. */}
+          {allZero && (
+            <p className="pointer-events-none absolute inset-x-0 top-1/2 z-10 -translate-y-1/2 text-center text-sm text-muted-foreground">
+              {t("chart.noPublications")}
+            </p>
+          )}
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart data={rows} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
               <defs>

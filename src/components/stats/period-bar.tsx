@@ -6,8 +6,9 @@ import { ArrowLeftRightIcon } from "lucide-react";
 import { PeriodChip } from "@/components/period-chip";
 import { Button } from "@/components/ui/button";
 import { SCOPES, scopeLabel, type Scope } from "@/lib/dashboard-prefs";
-import { fmtDayLong, fmtDayYear } from "@/lib/format";
-import { earliestSnapshotAt } from "@/lib/queries";
+import { fmtDateTime, fmtDayYear } from "@/lib/format";
+import { latestRun } from "@/lib/api/sync";
+import { depthWord } from "@/lib/sync-phase";
 import { useT } from "@/lib/i18n";
 import type { PeriodState } from "@/lib/use-period";
 import { cn } from "@/lib/utils";
@@ -19,17 +20,9 @@ import { cn } from "@/lib/utils";
 // ⚠️ Охват теперь считает база (миграция v22), поэтому прежней серой строки «часть блоков
 // охвату не подчиняется» нет вовсе: подчиняются все.
 //
-// Осталась другая оговорка, и она про «Все видео»: счётчики есть только с первого обхода
-// сборщика, а срок «Всё время» уходит к дате добавления креатора. Не сказать об этом —
-// значит показать пустой хвост графика как провал.
-
-// Дней от самого раннего снимка до сегодня, включительно: снимок сегодня — это «1 дн.»,
-// вчерашний — «2 дн.».
-function daysSince(iso: string, now: number): number {
-  const day = 86_400_000;
-  const from = Math.floor(new Date(iso).getTime() / day);
-  return Math.max(1, Math.floor(now / day) - from + 1);
-}
+// Осталась другая оговорка, и она про «Все видео»: свежесть чисел упирается в последний
+// обход сборщика — когда он был и на какую глубину ходил. Не сказать об этом — значит
+// показать пустой хвост графика как провал.
 
 export function PeriodBar({
   period,
@@ -37,6 +30,7 @@ export function PeriodBar({
   onCompare,
   scope,
   onScope,
+  runScope = null,
   className,
 }: {
   period: PeriodState;
@@ -44,44 +38,40 @@ export function PeriodBar({
   onCompare: (on: boolean) => void;
   scope: Scope;
   onScope: (next: Scope) => void;
+  // Чей обход показывать в оговорке: null — любой последний, иначе id креатора.
+  runScope?: string | null;
   className?: string;
 }) {
   const t = useT();
   const previous = period.previous;
 
-  // С какого дня в базе вообще есть счётчики. Читается один раз: это одна строка, и меняется
-  // она только при первом в жизни обходе.
-  // Число дней считается здесь же, при чтении: часы — не чистая функция, и спрашивать их
-  // в теле рендера нельзя. Дата остаётся строкой ISO: её оформление зависит от языка.
-  // ⚠️ Три состояния, а не два: «ещё не читали», «снимков нет вовсе» и «есть с такого-то дня».
-  // Не прочиталось (ошибка) — остаёмся в первом: сказать «данных ещё нет» вместо «не смогли
-  // спросить» значило бы соврать про глубину истории.
-  const [history, setHistory] = useState<"unread" | "empty" | { iso: string; days: number }>(
-    "unread",
-  );
+  // Последний завершённый обход: когда обновлялись и за какой срок снимались данные
+  // (владелец, 2026-09-09: «мне нужно понять, за какой период актуальные данные и когда
+  // последний раз обновлял»). Читается один раз при монтировании.
+  const [last, setLast] = useState<"unread" | "empty" | { when: string; depth: string }>("unread");
   useEffect(() => {
     let alive = true;
-    earliestSnapshotAt().then(
-      (iso) => {
-        if (!alive) return;
-        setHistory(iso === null ? "empty" : { iso, days: daysSince(iso, Date.now()) });
-      },
-      () => {
-        // Оговорки просто не будет.
-      },
-    );
+    latestRun(runScope ?? undefined).then((res) => {
+      if (!alive || !res.ok) return;
+      const run = res.data;
+      if (!run || !run.finished_at) {
+        setLast("empty");
+        return;
+      }
+      setLast({ when: fmtDateTime(run.finished_at), depth: depthWord(run.depth, run.depth_from, run.depth_to) });
+    });
     return () => {
       alive = false;
     };
-  }, []);
+  }, [runScope]);
 
   // Текст оговорки для тоста при переключении на «Все видео».
   const note =
-    history === "unread"
+    last === "unread"
       ? null
-      : history === "empty"
+      : last === "empty"
         ? t("periodBar.allVideosNoteEmpty")
-        : t("periodBar.allVideosNote", { days: history.days, date: fmtDayLong(history.iso) });
+        : t("periodBar.allVideosNote", { when: last.when, depth: last.depth });
 
   // Оговорки живут только всплывашками (владелец, 2026-09-09: «пусть уведомляшка показывается,
   // но больше ничего не нужно — текстовый дубляж не нужен»): каждое переключение на «Все видео»

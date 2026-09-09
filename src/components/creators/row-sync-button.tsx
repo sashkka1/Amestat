@@ -11,7 +11,7 @@ import {
   SyncPickGroup,
   SyncSummary,
   SyncVideosGroup,
-  allVideosWord,
+  allVideosFlag,
   pickWords,
   videosWord,
   useSyncRange,
@@ -42,10 +42,7 @@ export function RowSyncButton({
   const [open, setOpen] = useState(false);
   // «Что снимать» — то же, что в попапе кнопки над страницей: выбор общий и запоминается.
   const { comments, replies } = useSyncOptions();
-  // Кроме третьего блока: «и у не наших видео» не запоминается и гаснет при каждом
-  // открытии попапа — как и у кнопки над страницей.
-  const [allVideos, setAllVideos] = useState(false);
-  // Глубина тоже не запоминается: попап открывается на неделе — она быстрее.
+  // Глубина не запоминается: попап открывается на неделе — она быстрее.
   const [depth, setDepth] = useState<SyncDepth>("week");
   // Охват списка видео (миграция v17). Умолчание — «только наши»: ради экономии времени
   // охват и вводился. Как и глубина, не запоминается и сбрасывается при каждом открытии.
@@ -61,7 +58,6 @@ export function RowSyncButton({
     (next: boolean) => {
       setOpen(next);
       if (!next) return;
-      setAllVideos(false);
       setDepth("week");
       setVideos("ours");
       setMaxVideos(null);
@@ -93,8 +89,8 @@ export function RowSyncButton({
     );
   }
 
-  // Без comments «и у не наших» не значит ничего — гасим и здесь, как у кнопки над страницей.
-  const pick: SyncPick = { comments, replies, allVideos: comments && videos !== "ours" && allVideos, videos };
+  // У кого брать тексты, решает охват: флаг выводится, а не выбирается (владелец, 2026-09-09).
+  const pick: SyncPick = { comments, replies, allVideos: allVideosFlag({ comments, videos }), videos };
 
   // Границы уходят только у глубины «Период»: у остальных база требует пустых колонок.
   const asked = depth === "range" ? (range.range ?? undefined) : undefined;
@@ -119,7 +115,7 @@ export function RowSyncButton({
       <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)] gap-3">
         <SyncDepthAndMax depth={depth} onDepth={setDepth} range={range} maxVideos={maxVideos} onMaxVideos={setMaxVideos} />
         <SyncVideosGroup videos={videos} onVideos={setVideos} />
-        <SyncPickGroup allVideos={allVideos} onAllVideos={setAllVideos} oursOnly={videos === "ours"} />
+        <SyncPickGroup />
         <SyncSummary
           parts={[
             t("sync.summaryThisCreator"),
@@ -127,7 +123,6 @@ export function RowSyncButton({
             maxVideosWord(maxVideos),
             videosWord(pick.videos),
             pickWords(pick),
-            pick.allVideos && allVideosWord(),
           ]}
         />
         {/* Выбран «Период», а даты не годятся — просить нечего; почему, сказано под полями. */}

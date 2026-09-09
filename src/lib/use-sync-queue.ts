@@ -6,7 +6,6 @@ import { openRequests, requestSync, requestsByIds, runsByIds } from "@/lib/api/s
 import { createClient } from "@/lib/supabase/client";
 import {
   POLL_MS,
-  allVideosTail,
   depthTail,
   maxVideosTail,
   progressText,
@@ -153,8 +152,8 @@ export function useSyncQueue(creatorIds: string[], onDone: () => void): SyncQueu
     if (done.length > 0) {
       const res = runsResult(done);
       // Те же хвосты, что у кнопки «Обновить»: на какую глубину шёл обход, с каким потолком
-      // видео, брал ли тексты у не наших видео и шёл ли сокращённым охватом списка.
-      const tail = depthTail(done) + maxVideosTail(done) + allVideosTail(done) + videosTail(done);
+      // видео и шёл ли он сокращённым охватом списка.
+      const tail = depthTail(done) + maxVideosTail(done) + videosTail(done);
       if (res.ok) toast.success(res.text + tail);
       else toast.error(res.text + tail);
     }

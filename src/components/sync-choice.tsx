@@ -313,31 +313,17 @@ export function SyncVideosGroup({
   );
 }
 
-// Что снимать. Первые два блока запоминаются (`useSyncOptions`), третий приходит параметрами
-// и гаснет при каждом открытии попапа — правило не изменилось, изменился только вид.
-export function SyncPickGroup({
-  allVideos,
-  onAllVideos,
-  oursOnly = false,
-}: {
-  allVideos: boolean;
-  onAllVideos: (on: boolean) => void;
-  // Охват «Только наши»: лишние видео не смотрим вовсе, значит и тексты у не наших взять не
-  // из чего — блок гаснет, а не молчаливо противоречит сводке.
-  oursOnly?: boolean;
-}) {
+// Что снимать. Оба блока запоминаются (`useSyncOptions`).
+//
+// 🔴 Третьего блока, «И у не наших видео», больше нет (владелец, 2026-09-09): у кого брать
+// тексты, решает охват списка (`SyncVideosGroup`), а не отдельная галочка. Флаг просьбы
+// `all_videos` теперь выводится — `comments && videos === 'all'`: охват «Всё» значит тексты
+// у всех видео глубины, «Только наши» — у наших и жёлтых. Два способа сказать одно и то же
+// разъезжались: можно было выбрать «Только наши» и включить «и у не наших».
+export function SyncPickGroup() {
   const t = useT();
   const { comments, replies, setComments, setReplies } = useSyncOptions();
   const noCommentsTitle = t("syncChoice.noCommentsTitle");
-  const oursOnlyTitle = t("syncChoice.oursOnlyTitle");
-
-  // Сняли «Комментарии» — гаснут оба нижних блока: без текстов снимать нечего ни в ветках,
-  // ни у не наших видео. `replies` гасит сам стор, а третий — вот эта строка.
-  function toggleComments() {
-    const on = !comments;
-    setComments(on);
-    if (!on) onAllVideos(false);
-  }
 
   return (
     <SyncGroup title={t("syncChoice.pickGroup")}>
@@ -345,7 +331,7 @@ export function SyncPickGroup({
         label={t("syncChoice.comments")}
         hint={t("syncChoice.commentsHint")}
         selected={comments}
-        onClick={toggleComments}
+        onClick={() => setComments(!comments)}
       />
       <SyncChoiceBlock
         label={t("syncChoice.replies")}
@@ -354,15 +340,6 @@ export function SyncPickGroup({
         disabled={!comments}
         title={comments ? undefined : noCommentsTitle}
         onClick={() => setReplies(!replies)}
-      />
-      <SyncChoiceBlock
-        className="col-span-2"
-        label={t("syncChoice.allVideos")}
-        hint={t("syncChoice.allVideosHint")}
-        selected={comments && !oursOnly && allVideos}
-        disabled={!comments || oursOnly}
-        title={!comments ? noCommentsTitle : oursOnly ? oursOnlyTitle : undefined}
-        onClick={() => onAllVideos(!allVideos)}
       />
     </SyncGroup>
   );
@@ -379,11 +356,13 @@ export function pickWords(pick: SyncPick): string {
   return tr(pick.replies ? "syncChoice.wordCommentsReplies" : "syncChoice.wordComments");
 }
 
-// Слово блока «И у не наших видео» в сводке. Раньше было «все видео», но так теперь зовётся
-// охват списка (VIDEOS_WORD.all) — одно и то же слово о двух разных вещах в одной строке
-// сводки читалось бы как противоречие: «только наши · все видео».
-export function allVideosWord(): string {
-  return tr("syncChoice.wordAllVideos");
+// 🔴 Флаг просьбы `all_videos` не выбирается, а выводится (владелец, 2026-09-09): у кого
+// брать тексты комментариев, решает охват списка. «Всё» — у всех видео глубины, «Только
+// наши» — у наших и жёлтых. Без комментариев флаг не значит ничего.
+// Считается здесь по одному разу: обе кнопки («Обновить» над страницей и кнопка строки
+// списка) обязаны собирать просьбу одинаково.
+export function allVideosFlag(pick: { comments: boolean; videos: SyncVideos }): boolean {
+  return pick.comments && pick.videos === "all";
 }
 
 // Сводка выбора одной строкой: «Все креаторы · TikTok · неделя · комментарии и ветки».

@@ -17,7 +17,7 @@ import {
   SyncPickGroup,
   SyncSummary,
   SyncVideosGroup,
-  allVideosWord,
+  allVideosFlag,
   pickWords,
   videosWord,
   useSyncRange,
@@ -35,8 +35,6 @@ import { useIsAdmin } from "@/lib/profile-context";
 import { listCreators } from "@/lib/queries";
 import {
   POLL_MS,
-  allVideosTail,
-  allVideosText,
   depthTail,
   depthWord,
   estimateText,
@@ -133,10 +131,6 @@ export function SyncButton({
   const isAdmin = useIsAdmin();
   // Что снимать: галочки попапа, общие с кнопкой в строке списка.
   const { comments, replies } = useSyncOptions();
-  // Третья галочка — «комментарии и у не наших видео». В отличие от двух первых, она не
-  // запоминается: тяжёлый обход должен быть осознанным каждый раз, поэтому её состояние
-  // живёт здесь и гаснет при каждом открытии попапа.
-  const [allVideos, setAllVideos] = useState(false);
   // Кого обходить и на какую глубину. Ничего не запоминают: попап открывается «все креаторы,
   // последняя неделя» — неделя быстрее, а долгий обход должен выбираться руками.
   const [target, setTarget] = useState<Target>("all");
@@ -163,11 +157,8 @@ export function SyncButton({
   // площадки нет, а знать, чей обход ждём, надо.
   const [askedPlatform, setAskedPlatform] = useState<PlatformFilter>("all");
   const askedPlatformRef = useRef<PlatformFilter>("all");
-  // «Все видео» ушедшей просьбы: в отличие от площадки, база его помнит, поэтому после
-  // перезагрузки страницы флаг восстанавливается из самой просьбы.
-  const [askedAllVideos, setAskedAllVideos] = useState(false);
-  // Охват ушедшей просьбы — как и «все видео», база его помнит, поэтому после перезагрузки
-  // страницы он восстанавливается из самой просьбы.
+  // Охват ушедшей просьбы: в отличие от площадки, база его помнит, поэтому после
+  // перезагрузки страницы он восстанавливается из самой просьбы.
   const [askedVideos, setAskedVideos] = useState<SyncVideos>("all");
   // Хвост глубины ушедшей просьбы: «· месяц», «· 01.09–09.09» или пусто у 'all' и 'week'.
   // Готовой строкой, а не тремя полями: считать его умеет одно место — depthTail.
@@ -221,7 +212,6 @@ export function SyncButton({
     const tail = platformTail(askedPlatformRef.current);
     askedPlatformRef.current = "all";
     setAskedPlatform("all");
-    setAskedAllVideos(false);
     setAskedVideos("all");
     setAskedDepth("");
     setAskedMaxVideos("");
@@ -234,7 +224,6 @@ export function SyncButton({
         tail +
         depthTail(finished ?? []) +
         maxVideosTail(finished ?? []) +
-        allVideosTail(finished ?? []) +
         videosTail(finished ?? []);
       if (res.ok) toast.success(res.text + full);
       else toast.error(res.text + full);
@@ -264,7 +253,6 @@ export function SyncButton({
       const now = stage(reqs);
       setSeenAny(now.seenAny);
       setNotified(now.notified);
-      setAskedAllVideos(reqs.some((r) => r.all_videos));
       setAskedVideos(reqs.every((r) => r.videos === "ours") ? "ours" : "all");
       setAskedDepth(depthTail(reqs));
       setAskedMaxVideos(maxVideosTail(reqs));
@@ -346,7 +334,6 @@ export function SyncButton({
         const now = stage(waitingReqs);
         setSeenAny(now.seenAny);
         setNotified(now.notified);
-        setAskedAllVideos(waitingReqs.some((r) => r.all_videos));
         setAskedVideos(waitingReqs.every((r) => r.videos === "ours") ? "ours" : "all");
         setAskedDepth(depthTail(waitingReqs));
         setAskedMaxVideos(maxVideosTail(waitingReqs));
@@ -447,9 +434,8 @@ export function SyncButton({
       }
       setHint(false);
       setPlatform(startPlatform);
-      // Каждое открытие — с чистого листа: ни «все видео», ни глубина, ни охват, ни потолок
-      // видео не наследуются от прошлой просьбы.
-      setAllVideos(false);
+      // Каждое открытие — с чистого листа: ни глубина, ни охват, ни потолок видео не
+      // наследуются от прошлой просьбы.
       setTarget("all");
       setDepth("week");
       setVideos("ours");
@@ -512,7 +498,6 @@ export function SyncButton({
     setError(null);
     askedPlatformRef.current = platform;
     setAskedPlatform(platform);
-    setAskedAllVideos(comments && videos !== "ours" && allVideos);
     setAskedVideos(videos);
     // Хвост глубины считаем тем же depthTail, что читает строки базы: строка состояния
     // должна называть просьбу так же и до того, как её оттуда перечитали.
@@ -531,8 +516,8 @@ export function SyncButton({
       creatorIds,
       depth,
       range: asked,
-      // Без comments «и у не наших» не значит ничего — гасим на всякий случай и здесь.
-      pick: { comments, replies, allVideos: comments && videos !== "ours" && allVideos, videos },
+      // Флаг выводится из охвата, а не выбирается (владелец, 2026-09-09).
+      pick: { comments, replies, allVideos: allVideosFlag({ comments, videos }), videos },
       maxVideos,
     });
     setSending(false);
@@ -541,7 +526,6 @@ export function SyncButton({
       // Просьба не завелась — ждать нечего, и площадка ушедшей просьбы больше не наша.
       askedPlatformRef.current = "all";
       setAskedPlatform("all");
-      setAskedAllVideos(false);
       setAskedVideos("all");
       setAskedDepth("");
       setAskedMaxVideos("");
@@ -587,7 +571,7 @@ export function SyncButton({
   const rangeBlocked = depth === "range" && range.range === null;
   // Сколько креаторов на странице после площадки — и в подсказке блока, и в сводке.
   const pageCount = (pageTargetIds ?? pageIds ?? []).length;
-  const pick: SyncPick = { comments, replies, allVideos: comments && videos !== "ours" && allVideos, videos };
+  const pick: SyncPick = { comments, replies, allVideos: allVideosFlag({ comments, videos }), videos };
 
   // Чей обход идёт — подпись серым над строкой хода. Нужна, когда владелец сам ничего не
   // просил: обход мог завестись по расписанию, догоном или повтором.
@@ -632,7 +616,6 @@ export function SyncButton({
           platformTail(askedPlatform) +
           askedDepth +
           askedMaxVideos +
-          (askedAllVideos ? allVideosText() : "") +
           (askedVideos === "ours" ? oursOnlyText() : "")
         ) : run ? (
           <>
@@ -648,8 +631,6 @@ export function SyncButton({
             {/* Обход шёл без текстов комментариев — счётчики свежие, а тексты остались
                 от прошлого раза, и знать об этом надо до того, как их станут читать. */}
             {run.comments === false && ` · ${t("sync.noCommentsTail")}`}
-            {/* Наоборот: обход шёл и по не нашим видео — тексты у них свежие, а это редкость. */}
-            {run.all_videos && allVideosText()}
             {/* Обход шёл сокращённым охватом: не наши и не жёлтые видео он не смотрел,
                 и их счётчики остались от прошлого раза (миграция v17). */}
             {run.videos === "ours" && oursOnlyText()}
@@ -742,7 +723,7 @@ export function SyncButton({
               <SyncDepthAndMax depth={depth} onDepth={setDepth} range={range} maxVideos={maxVideos} onMaxVideos={setMaxVideos} />
               {/* Охват списка видео: тот же блок, что в попапе строки списка (миграция v17). */}
               <SyncVideosGroup videos={videos} onVideos={setVideos} />
-              <SyncPickGroup allVideos={allVideos} onAllVideos={setAllVideos} oursOnly={videos === "ours"} />
+              <SyncPickGroup />
               {/* Единственная строка объяснений под блоками: список креаторов не прочитался или
                   у выбранной площадки некого обходить. */}
               {creatorsError ? (
@@ -766,7 +747,6 @@ export function SyncButton({
                   maxVideosWord(maxVideos),
                   videosWord(pick.videos),
                   pickWords(pick),
-                  pick.allVideos && allVideosWord(),
                 ]}
               />
               <SyncLaunchButton

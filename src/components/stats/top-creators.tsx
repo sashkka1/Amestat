@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Avatar } from "@/components/avatar";
+import { CreatorLabel } from "@/components/creator-label";
 import { PlatformChip } from "@/components/platform";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -125,12 +126,12 @@ export function TopCreators({
                       className="flex items-center gap-2 hover:underline"
                     >
                       <Avatar src={r.creator.avatar_url} name={name} size={28} />
-                      <span className="min-w-0">
-                        <span className="block truncate font-medium">{name}</span>
-                        <span className="block truncate text-xs text-muted-foreground">
-                          @{r.creator.handle}
-                        </span>
-                      </span>
+                      <CreatorLabel
+                        platform={r.creator.platform}
+                        name={r.creator.display_name}
+                        handle={r.creator.handle}
+                        className="font-medium"
+                      />
                     </Link>
                   </TableCell>
                   <TableCell>
