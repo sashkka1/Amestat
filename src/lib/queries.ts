@@ -144,6 +144,22 @@ export async function videoStatsBetween(creatorId: string, range: PeriodRange): 
   return data ?? [];
 }
 
+// Жёлтые видео креатора — те, у которых `watch = true` (миграция v17). Отдельным запросом,
+// как comments_synced_at: функция video_stats_between про эту колонку не знает, а карточке
+// креатора состояние видео нужно целиком. Читаются только id жёлтых — их единицы.
+export async function listVideoWatch(creatorId: string): Promise<Set<string>> {
+  const { data, error } = await createClient()
+    .from("videos")
+    .select("id")
+    .eq("creator_id", creatorId)
+    .eq("watch", true)
+    // Тот же потолок, что у PostgREST: молча урезанный ответ здесь означал бы видео,
+    // которое в таблице внезапно перестало быть жёлтым.
+    .limit(PAGE);
+  fail(error);
+  return new Set((data ?? []).map((v) => v.id));
+}
+
 // Подписчики на концах срока. Снимка до начала может не быть (история началась позже) —
 // тогда началом считается первый снимок внутри срока, как в функциях по видео.
 export async function creatorFollowers(

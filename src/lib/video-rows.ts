@@ -3,6 +3,7 @@ import type { PostItem } from "@/components/stats/top-posts";
 import type { Creator } from "./types";
 import type { VideoRow } from "./queries";
 import type { PeriodRange } from "./period";
+import { videoState } from "./video-state";
 
 // Видео из базы → строка таблицы и карточка «лучших видео». Креатор подтягивается по id:
 // в базе связь есть, но отдельным запросом мы её уже прочитали.
@@ -28,7 +29,7 @@ export function toTableRows(videos: VideoRow[], creators: Creator[]): VideoTable
         comments: v.comments,
         shares: v.shares,
         saves: v.saves,
-        ours: v.ours,
+        state: videoState(v),
       },
     ];
   });

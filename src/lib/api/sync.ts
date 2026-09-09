@@ -1,12 +1,20 @@
 import { createClient } from "@/lib/supabase/client";
-import type { SyncDepth, SyncPick, SyncRequest, SyncRequestInsert, SyncRun } from "@/lib/types";
+import type {
+  SyncDepth,
+  SyncLogRow,
+  SyncPick,
+  SyncRequest,
+  SyncRequestInsert,
+  SyncRun,
+} from "@/lib/types";
 import { fail, type ActionResult } from "./result";
 
 // Мост «сайт → сборщик дома». Сервера нет: сайт кладёт просьбу в sync_requests, сборщик
 // слушает вставки через Realtime, ставит taken_at и пишет обход в sync_runs (миграция v6).
 // Глубина обхода — depth: all (весь список видео) или week (только за 7 дней), миграция v7.
-// Что снимать — pick (миграции v12 и v13): тексты комментариев, ветки ответов и надо ли
-// брать тексты у не наших видео.
+// Что снимать — pick (миграции v12, v13 и v17): тексты комментариев, ветки ответов, надо ли
+// брать тексты у не наших видео и с каким охватом листать список (все видео или только наши
+// и жёлтые).
 
 // Попросить обход: creatorIds — по строке на каждого креатора, null — одна строка на всех.
 // Строк может быть несколько, поэтому возвращаются все id: кнопка следит за ними разом.
@@ -29,8 +37,14 @@ export async function requestSync({
   if (!auth.user) return fail("Сессия кончилась — войдите заново");
 
   const requestedBy = auth.user.id;
-  // Имена колонок базы, а не полей попапа: all_videos — тот же флаг, что pick.allVideos.
-  const flags = { comments: pick.comments, replies: pick.replies, all_videos: pick.allVideos };
+  // Имена колонок базы, а не полей попапа: all_videos — тот же флаг, что pick.allVideos,
+  // videos — охват списка ('all' | 'ours', миграция v17).
+  const flags = {
+    comments: pick.comments,
+    replies: pick.replies,
+    all_videos: pick.allVideos,
+    videos: pick.videos,
+  };
   const rows: SyncRequestInsert[] =
     creatorIds === null
       ? [{ requested_by: requestedBy, creator_id: null, depth, ...flags }]
@@ -87,6 +101,33 @@ export async function requestsByIds(ids: number[]): Promise<ActionResult<SyncReq
   if (ids.length === 0) return { ok: true, data: [] };
   const { data, error } = await createClient().from("sync_requests").select("*").in("id", ids);
   if (error) return fail(`Не удалось прочитать просьбу: ${error.message}`);
+  return { ok: true, data: data ?? [] };
+}
+
+// Страница журнала обхода. 500, а не «сколько есть»: PostgREST сам режет ответ на 1000
+// строках и делает это молча — на длинном обходе конец журнала просто не приехал бы.
+// Поэтому журнал всегда читается страницами по возрастанию id, а следующая берётся по
+// `id > after` последней прочитанной.
+export const SYNC_LOG_PAGE = 500;
+
+// Строки журнала одного обхода, по возрастанию id. after — id последней уже прочитанной
+// строки: 0 (или без него) читает журнал с начала. Таблицу пускает читать только
+// администратор (RLS, миграция v16) — у менеджера этот запрос вернул бы пусто, и звать его
+// у него незачем: панель хода обновления ему не рендерится вовсе.
+export async function syncLog(
+  runId: number,
+  opts?: { after?: number; limit?: number },
+): Promise<ActionResult<SyncLogRow[]>> {
+  const after = opts?.after ?? 0;
+  const limit = Math.min(opts?.limit ?? SYNC_LOG_PAGE, SYNC_LOG_PAGE);
+  const { data, error } = await createClient()
+    .from("sync_log")
+    .select("*")
+    .eq("run_id", runId)
+    .gt("id", after)
+    .order("id", { ascending: true })
+    .limit(limit);
+  if (error) return fail(`Не удалось прочитать журнал обхода: ${error.message}`);
   return { ok: true, data: data ?? [] };
 }
 

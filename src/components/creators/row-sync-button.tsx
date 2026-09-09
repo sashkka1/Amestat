@@ -6,16 +6,19 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useSyncOptions } from "@/components/sync-options";
 import {
+  ALL_VIDEOS_WORD,
   DEPTH_WORD,
   SyncDepthGroup,
   SyncLaunchButton,
   SyncPickGroup,
   SyncSummary,
+  SyncVideosGroup,
+  VIDEOS_WORD,
   pickWords,
 } from "@/components/sync-choice";
 import { PHASE_TEXT, UNAVAILABLE_TITLE } from "@/lib/sync-phase";
 import type { RowSync } from "@/lib/use-sync-queue";
-import type { SyncDepth, SyncPick } from "@/lib/types";
+import type { SyncDepth, SyncPick, SyncVideos } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 // Кнопка обновления в строке списка креаторов. Блоков «Кого» и «Площадка» здесь нет: охват
@@ -39,12 +42,16 @@ export function RowSyncButton({
   const [allVideos, setAllVideos] = useState(false);
   // Глубина тоже не запоминается: попап открывается на неделе — она быстрее.
   const [depth, setDepth] = useState<SyncDepth>("week");
+  // Охват списка видео (миграция v17). Умолчание — «только наши»: ради экономии времени
+  // охват и вводился. Как и глубина, не запоминается и сбрасывается при каждом открытии.
+  const [videos, setVideos] = useState<SyncVideos>("ours");
 
   const openChange = useCallback((next: boolean) => {
     setOpen(next);
     if (!next) return;
     setAllVideos(false);
     setDepth("week");
+    setVideos("ours");
   }, []);
 
   if (state) {
@@ -65,8 +72,8 @@ export function RowSyncButton({
     );
   }
 
-  // Без comments «все видео» не значит ничего — гасим и здесь, как у кнопки над страницей.
-  const pick: SyncPick = { comments, replies, allVideos: comments && allVideos };
+  // Без comments «и у не наших» не значит ничего — гасим и здесь, как у кнопки над страницей.
+  const pick: SyncPick = { comments, replies, allVideos: comments && videos !== "ours" && allVideos, videos };
 
   function ask() {
     setOpen(false);
@@ -82,13 +89,15 @@ export function RowSyncButton({
       </PopoverTrigger>
       <PopoverContent align="end" className="w-96 max-w-[calc(100vw-2rem)]">
         <SyncDepthGroup depth={depth} onDepth={setDepth} />
-        <SyncPickGroup allVideos={allVideos} onAllVideos={setAllVideos} />
+        <SyncVideosGroup videos={videos} onVideos={setVideos} />
+        <SyncPickGroup allVideos={allVideos} onAllVideos={setAllVideos} oursOnly={videos === "ours"} />
         <SyncSummary
           parts={[
             "Этот креатор",
             DEPTH_WORD[depth],
+            VIDEOS_WORD[pick.videos],
             pickWords(pick),
-            pick.allVideos && "все видео",
+            pick.allVideos && ALL_VIDEOS_WORD,
           ]}
         />
         <SyncLaunchButton disabled={false} sending={false} onClick={ask} />

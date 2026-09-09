@@ -6,11 +6,21 @@ export type Platform = "tiktok" | "instagram";
 export type SyncTrigger = "schedule" | "catchup" | "manual" | "retry";
 // Глубина обхода (миграция v7): all — весь список видео, week — только за последние 7 дней.
 export type SyncDepth = "all" | "week";
-// Что снимать в этом обходе — три флага просьбы (миграции v12 и v13). Ходят вместе: их
-// выбирают одними и теми же галочками попапа, и порознь ни одно место их не собирает.
+// Охват видео в обходе (миграция v17): all — весь список, как в ежедневном обходе;
+// ours — список листается лишь до наших и жёлтых видео, остальные не смотрим и экономим
+// время. Расписание всегда ходит с 'all'.
+export type SyncVideos = "all" | "ours";
+// Что снимать в этом обходе — флаги просьбы (миграции v12, v13 и v17). Ходят вместе: их
+// выбирают одними и теми же блоками попапа, и порознь ни одно место их не собирает.
 // - comments — тексты комментариев; replies — ветки ответов под ними (без comments не бывает);
-// - allVideos — снимать тексты и у не наших видео (обычно только у `videos.ours = true`).
-export type SyncPick = { comments: boolean; replies: boolean; allVideos: boolean };
+// - allVideos — снимать тексты и у не наших видео (обычно только у `videos.ours = true`);
+// - videos — охват списка видео: все или только наши и жёлтые.
+export type SyncPick = {
+  comments: boolean;
+  replies: boolean;
+  allVideos: boolean;
+  videos: SyncVideos;
+};
 export type Role = "admin" | "manager";
 
 export type Profile = {
@@ -150,11 +160,14 @@ export type Video = {
   // «Наше» — снимать подробности (тексты комментариев, ветки), а не «считать в статистике»
   // (миграция v15): общие счётчики идут по всем видео. Ставит триггер, меняет пользователь.
   ours: boolean;
+  // «Жёлтое» (миграция v17): не наше, но историю счётчиков собираем. Смысл имеет только при
+  // ours = false; пара читается и пишется вместе — `lib/video-state.ts`.
+  watch: boolean;
   // Когда сборщик последний раз снимал тексты комментариев (миграция v11); null — ещё не снимал.
   comments_synced_at: string | null;
 };
 
-export type VideoUpdate = { ours?: boolean };
+export type VideoUpdate = { ours?: boolean; watch?: boolean };
 
 // Тексты комментариев площадки (миграция v11). Пишет только сборщик; сайт читает то,
 // что пускает can_see_creator через видео. Ключ — пара (video_id, id).
@@ -205,6 +218,8 @@ export type SyncRun = {
   replies: boolean;
   // Тексты снимались и у не наших видео (миграция v13). Расписание его не ставит никогда.
   all_videos: boolean;
+  // С каким охватом видео шёл обход (миграция v17). Расписание всегда 'all'.
+  videos: SyncVideos;
   // Ход обхода, видимый с сайта (миграция v14). creators_done и creators_failed сборщик
   // теперь двигает после каждого креатора, а не пишет один раз в конце.
   // creators_total — сколько всего в этом обходе; null — список ещё не отобран.
@@ -214,6 +229,35 @@ export type SyncRun = {
   current_handles: string[];
   // Когда последний раз двигались счётчики.
   progress_at: string | null;
+  // Каким путём шёл обход в целом (миграция v16): 'providers' | 'browser' | 'mixed'.
+  source: string | null;
+  // Итог по аккаунтам провайдеров за обход (миграция v16). Сайт его пока не показывает,
+  // поэтому форма не разбирается: строка обхода читается через select('*') целиком.
+  accounts: unknown[];
+};
+
+// Уровень строки журнала обхода: обычная, предупреждение, ошибка.
+export type SyncLogLevel = "info" | "warn" | "error";
+
+// Строка живого журнала обхода (миграция v16). Пишет только сборщик, читает по RLS только
+// администратор — менеджеру таблица не видна вовсе, и сайт её у него не спрашивает.
+export type SyncLogRow = {
+  id: number;
+  // Обход, к которому строка относится; null — обход уже удалён (on delete cascade их уносит).
+  run_id: number | null;
+  at: string;
+  level: SyncLogLevel;
+  // Откуда пришли данные строки: ensembledata | apify | browser | system.
+  source: string;
+  // Метка аккаунта провайдера: «ED#1», «Apify#2»; null — строка не про аккаунт.
+  account: string | null;
+  creator_handle: string | null;
+  text: string;
+  // Сколько стоила операция и сколько осталось у аккаунта после неё — в его единицах.
+  units_spent: number | null;
+  units_left: number | null;
+  // Единица счёта аккаунта: 'units' (EnsembleData, в день) или 'usd' (Apify, в месяц).
+  units_kind: string | null;
 };
 
 // Просьба «обновить» с сайта (миграция v6). Сайт вставляет, сборщик дома забирает:
@@ -236,12 +280,14 @@ export type SyncRequest = {
   // Снимать тексты и у не наших видео (миграция v13): обычно они берутся только у
   // `videos.ours = true`, а счётчики — у всех. Тоже гаснет без comments.
   all_videos: boolean;
+  // Охват списка видео (миграция v17): 'all' — весь список; 'ours' — только наши и жёлтые.
+  videos: SyncVideos;
   // База сама (pg_cron) написала владельцу в Telegram: просьбу никто не принял за 3 минуты.
   notified_at: string | null;
 };
 
-// Остальное ставит база: requested_at, depth, comments, replies и all_videos — по умолчанию,
-// taken_at и run_id — сборщик.
+// Остальное ставит база: requested_at, depth, comments, replies, all_videos и videos —
+// по умолчанию, taken_at и run_id — сборщик.
 export type SyncRequestInsert = {
   requested_by: string;
   creator_id?: string | null;
@@ -249,6 +295,7 @@ export type SyncRequestInsert = {
   comments?: boolean;
   replies?: boolean;
   all_videos?: boolean;
+  videos?: SyncVideos;
 };
 
 export type CreatorLatest = {
@@ -277,7 +324,8 @@ export type VideoStats = {
   caption: string;
   cover_url: string | null;
   url: string;
-  // «Наше»: суммы и медианы сайт считает только по таким строкам.
+  // «Наше»: у таких видео снимаются подробности. ⚠️ Колонки `videos.watch` (жёлтое,
+  // миграция v17) функция не отдаёт — жёлтые id страница дочитывает `listVideoWatch`.
   ours: boolean;
   views_now: number | null;
   likes_now: number | null;
@@ -340,6 +388,7 @@ export type Database = {
       video_snaps: { Row: VideoSnap; Insert: never; Update: never; Relationships: Relationships };
       video_comments: { Row: VideoComment; Insert: never; Update: never; Relationships: Relationships };
       sync_runs: { Row: SyncRun; Insert: never; Update: never; Relationships: Relationships };
+      sync_log: { Row: SyncLogRow; Insert: never; Update: never; Relationships: Relationships };
       sync_requests: {
         Row: SyncRequest;
         Insert: SyncRequestInsert;

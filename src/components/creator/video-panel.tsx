@@ -7,11 +7,13 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Panel } from "@/components/stats/panel";
+import { VideoStateToggle } from "@/components/video-state-toggle";
 import { VideoHistoryChart } from "./daily-chart";
 import { VideoComments } from "./video-comments";
 import { videoHistory } from "@/lib/queries";
 import { describeVsMedian } from "@/lib/stats";
 import { fmtDateTime, fmtDelta, fmtNum } from "@/lib/format";
+import type { VideoState } from "@/lib/video-state";
 import type { Platform, VideoStats } from "@/lib/types";
 
 export const PANEL_METRICS = [
@@ -26,12 +28,18 @@ export type MetricKey = (typeof PANEL_METRICS)[number]["key"];
 // Выбранное видео: сравнение с медианой креатора за срок и своя история по снимкам.
 export function VideoPanel({
   row,
+  state,
+  onState,
   medians,
   platform,
   refreshKey,
   onClose,
 }: {
   row: VideoStats;
+  // Состояние видео и его переключатель — те же, что в строке таблицы: `videos.ours` из
+  // самой строки, `videos.watch` карточка креатора дочитывает отдельно (миграция v17).
+  state: VideoState;
+  onState: (next: VideoState) => void;
   medians: Record<MetricKey, number | null>;
   // Площадка креатора: по ней строятся ссылки на авторов комментариев.
   platform: Platform;
@@ -85,10 +93,8 @@ export function VideoPanel({
             Открыть на площадке
             <ExternalLinkIcon className="size-3" />
           </a>
-          <p className="text-xs text-muted-foreground">
-            опубликовано: {fmtDateTime(row.published_at)}
-            {!row.ours && " · не наше"}
-          </p>
+          <p className="text-xs text-muted-foreground">опубликовано: {fmtDateTime(row.published_at)}</p>
+          <VideoStateToggle state={state} onChange={onState} withLabels className="self-start" />
         </div>
       </div>
 

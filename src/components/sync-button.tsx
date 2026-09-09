@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useSyncOptions } from "@/components/sync-options";
 import {
+  ALL_VIDEOS_WORD,
   DEPTH_WORD,
   SyncChoiceBlock,
   SyncDepthGroup,
@@ -16,6 +17,8 @@ import {
   SyncLaunchButton,
   SyncPickGroup,
   SyncSummary,
+  SyncVideosGroup,
+  VIDEOS_WORD,
   pickWords,
 } from "@/components/sync-choice";
 import { createClient } from "@/lib/supabase/client";
@@ -29,6 +32,7 @@ import {
 import { listCreators } from "@/lib/queries";
 import {
   ALL_VIDEOS_TEXT,
+  OURS_ONLY_TEXT,
   PHASE_TEXT,
   POLL_MS,
   UNAVAILABLE_TEXT,
@@ -37,9 +41,10 @@ import {
   runsResult,
   stage,
   triggerText,
+  videosTail,
   type Phase,
 } from "@/lib/sync-phase";
-import type { Creator, SyncDepth, SyncPick, SyncRun } from "@/lib/types";
+import type { Creator, SyncDepth, SyncPick, SyncRun, SyncVideos } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 // Столько ждём хоть какого-то ответа. Обычно за это время база сама пишет владельцу в
@@ -121,6 +126,9 @@ export function SyncButton({
   // последняя неделя» — неделя быстрее, а долгий обход должен выбираться руками.
   const [target, setTarget] = useState<Target>("all");
   const [depth, setDepth] = useState<SyncDepth>("week");
+  // Охват списка видео (миграция v17). Умолчание — «только наши»: ради экономии времени
+  // охват и вводился; ежедневный обход всё равно ходит с 'all'. Тоже не запоминается.
+  const [videos, setVideos] = useState<SyncVideos>("ours");
 
   // Площадка (владелец, 2026-09-08). Попап открывается в том же положении, что общий
   // переключатель страниц, но своего выбора не запоминает и общий не двигает: это выбор
@@ -137,6 +145,9 @@ export function SyncButton({
   // «Все видео» ушедшей просьбы: в отличие от площадки, база его помнит, поэтому после
   // перезагрузки страницы флаг восстанавливается из самой просьбы.
   const [askedAllVideos, setAskedAllVideos] = useState(false);
+  // Охват ушедшей просьбы — как и «все видео», база его помнит, поэтому после перезагрузки
+  // страницы он восстанавливается из самой просьбы.
+  const [askedVideos, setAskedVideos] = useState<SyncVideos>("all");
 
   // Список креаторов нужен, чтобы отобрать id по площадке: просьба уходит явным списком.
   // Читается один раз при открытии попапа — RLS уже отдаёт только видимых.
@@ -184,12 +195,13 @@ export function SyncButton({
     askedPlatformRef.current = "all";
     setAskedPlatform("all");
     setAskedAllVideos(false);
+    setAskedVideos("all");
     const last = finished ? newest(finished) : null;
     if (last) {
       setRun(last);
       const res = runsResult(finished ?? []);
-      // «Все видео» берём у самих обходов: там оно записано, а не угадано попапом.
-      const full = tail + allVideosTail(finished ?? []);
+      // Хвосты берём у самих обходов: там записано, чем они шли, а не угадано попапом.
+      const full = tail + allVideosTail(finished ?? []) + videosTail(finished ?? []);
       if (res.ok) toast.success(res.text + full);
       else toast.error(res.text + full);
     }
@@ -219,6 +231,7 @@ export function SyncButton({
       setSeenAny(now.seenAny);
       setNotified(now.notified);
       setAskedAllVideos(reqs.some((r) => r.all_videos));
+      setAskedVideos(reqs.every((r) => r.videos === "ours") ? "ours" : "all");
       // Забрали не всех — обхода ещё нет: либо очередь, либо резидент уже принял просьбу.
       if (now.phase !== "running") {
         setPhase(now.phase);
@@ -298,6 +311,7 @@ export function SyncButton({
         setSeenAny(now.seenAny);
         setNotified(now.notified);
         setAskedAllVideos(waitingReqs.some((r) => r.all_videos));
+        setAskedVideos(waitingReqs.every((r) => r.videos === "ours") ? "ours" : "all");
         setPhase(now.phase);
       }
     })();
@@ -369,6 +383,7 @@ export function SyncButton({
       setAllVideos(false);
       setTarget("all");
       setDepth("week");
+      setVideos("ours");
       if (creators !== null || loadingCreators) return;
       setLoadingCreators(true);
       setCreatorsError(null);
@@ -421,12 +436,13 @@ export function SyncButton({
     setError(null);
     askedPlatformRef.current = platform;
     setAskedPlatform(platform);
-    setAskedAllVideos(comments && allVideos);
+    setAskedAllVideos(comments && videos !== "ours" && allVideos);
+    setAskedVideos(videos);
     const res = await requestSync({
       creatorIds,
       depth,
-      // Без comments «все видео» не значит ничего — гасим на всякий случай и здесь.
-      pick: { comments, replies, allVideos: comments && allVideos },
+      // Без comments «и у не наших» не значит ничего — гасим на всякий случай и здесь.
+      pick: { comments, replies, allVideos: comments && videos !== "ours" && allVideos, videos },
     });
     setSending(false);
     setOpen(false);
@@ -435,6 +451,7 @@ export function SyncButton({
       askedPlatformRef.current = "all";
       setAskedPlatform("all");
       setAskedAllVideos(false);
+      setAskedVideos("all");
       setError(res.error);
       toast.error(res.error);
       return;
@@ -474,7 +491,7 @@ export function SyncButton({
   const targetBlocked = target === "all" ? allBlocked : pageBlocked;
   // Сколько креаторов на странице после площадки — и в подсказке блока, и в сводке.
   const pageCount = (pageTargetIds ?? pageIds ?? []).length;
-  const pick: SyncPick = { comments, replies, allVideos: comments && allVideos };
+  const pick: SyncPick = { comments, replies, allVideos: comments && videos !== "ours" && allVideos, videos };
 
   // Чей обход идёт — подпись серым над строкой хода. Нужна, когда владелец сам ничего не
   // просил: обход мог завестись по расписанию, догоном или повтором.
@@ -507,7 +524,10 @@ export function SyncButton({
               Не удалось прочитать состояние
             </span>
           ) : waitText !== null ? (
-            waitText + platformTail(askedPlatform) + (askedAllVideos ? ALL_VIDEOS_TEXT : "")
+            waitText +
+            platformTail(askedPlatform) +
+            (askedAllVideos ? ALL_VIDEOS_TEXT : "") +
+            (askedVideos === "ours" ? OURS_ONLY_TEXT : "")
           ) : run ? (
             <>
               Обновлено <LocalTime iso={run.finished_at ?? run.started_at} />
@@ -518,6 +538,9 @@ export function SyncButton({
               {run.comments === false && " · без комментариев"}
               {/* Наоборот: обход шёл и по не нашим видео — тексты у них свежие, а это редкость. */}
               {run.all_videos && ALL_VIDEOS_TEXT}
+              {/* Обход шёл сокращённым охватом: не наши и не жёлтые видео он не смотрел,
+                  и их счётчики остались от прошлого раза (миграция v17). */}
+              {run.videos === "ours" && OURS_ONLY_TEXT}
               {run.ok === false && (
                 <span className="text-destructive" title={run.error ?? undefined}>
                   {" "}
@@ -584,7 +607,9 @@ export function SyncButton({
           </SyncGroup>
           )}
           <SyncDepthGroup depth={depth} onDepth={setDepth} />
-          <SyncPickGroup allVideos={allVideos} onAllVideos={setAllVideos} />
+          {/* Охват списка видео: тот же блок, что в попапе строки списка (миграция v17). */}
+          <SyncVideosGroup videos={videos} onVideos={setVideos} />
+          <SyncPickGroup allVideos={allVideos} onAllVideos={setAllVideos} oursOnly={videos === "ours"} />
           {/* Единственная строка объяснений под блоками: список креаторов не прочитался или
               у выбранной площадки некого обходить. */}
           {creatorsError ? (
@@ -603,8 +628,9 @@ export function SyncButton({
               target === "all" ? "Все креаторы" : `Эта страница (${pageCount})`,
               platform === "all" ? null : PLATFORM_FILTER_LABELS[platform],
               DEPTH_WORD[depth],
+              VIDEOS_WORD[pick.videos],
               pickWords(pick),
-              pick.allVideos && "все видео",
+              pick.allVideos && ALL_VIDEOS_WORD,
             ]}
           />
           <SyncLaunchButton

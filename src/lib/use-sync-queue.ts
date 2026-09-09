@@ -11,6 +11,7 @@ import {
   runsResult,
   stage,
   triggerText,
+  videosTail,
   type Phase,
 } from "@/lib/sync-phase";
 import type { SyncDepth, SyncPick, SyncRequest, SyncRun } from "@/lib/types";
@@ -134,8 +135,9 @@ export function useSyncQueue(creatorIds: string[], onDone: () => void): SyncQueu
     });
     if (done.length > 0) {
       const res = runsResult(done);
-      // Тот же хвост, что у кнопки «Обновить»: обход брал тексты и у не наших видео.
-      const tail = allVideosTail(done);
+      // Те же хвосты, что у кнопки «Обновить»: обход брал тексты и у не наших видео и шёл
+      // сокращённым охватом списка.
+      const tail = allVideosTail(done) + videosTail(done);
       if (res.ok) toast.success(res.text + tail);
       else toast.error(res.text + tail);
     }
@@ -201,6 +203,7 @@ export function useSyncQueue(creatorIds: string[], onDone: () => void): SyncQueu
         comments: pick.comments,
         replies: pick.replies,
         all_videos: pick.allVideos,
+        videos: pick.videos,
         notified_at: null,
       }));
       setReqs((prev) => [...prev, ...fresh]);

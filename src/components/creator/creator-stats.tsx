@@ -10,8 +10,15 @@ import { TopPosts, type PostItem } from "@/components/stats/top-posts";
 import { VideosTable, type VideoTableRow } from "@/components/stats/videos-table";
 import { PageError } from "@/components/page";
 import { VideoPanel, PANEL_METRICS, type MetricKey } from "./video-panel";
-import { creatorDailyViews, creatorFollowers, videoStatsBetween, type Totals } from "@/lib/queries";
-import { setVideoOurs } from "@/lib/api/videos";
+import {
+  creatorDailyViews,
+  creatorFollowers,
+  listVideoWatch,
+  videoStatsBetween,
+  type Totals,
+} from "@/lib/queries";
+import { setVideoState } from "@/lib/api/videos";
+import { videoState, type VideoState } from "@/lib/video-state";
 import { median, sum } from "@/lib/stats";
 import { changeVs, fmtCompact, fmtNum } from "@/lib/format";
 import { publishedIn } from "@/lib/video-rows";
@@ -26,6 +33,9 @@ type Loaded = {
   prevRange: PeriodRange;
   rows: VideoStats[];
   prevRows: VideoStats[];
+  // id жёлтых видео (`videos.watch`, миграция v17): video_stats_between эту колонку не
+  // отдаёт, поэтому она читается отдельным запросом и живёт рядом со строками.
+  watch: Set<string>;
   daily: DailyViews[];
   followersNow: number | null;
   followersBefore: number | null;
@@ -37,9 +47,10 @@ async function loadStats(
   range: PeriodRange,
   previous: PeriodRange,
 ): Promise<Loaded> {
-  const [rows, prevRows, daily, followers] = await Promise.all([
+  const [rows, prevRows, watch, daily, followers] = await Promise.all([
     videoStatsBetween(creatorId, range),
     videoStatsBetween(creatorId, previous),
+    listVideoWatch(creatorId),
     creatorDailyViews(creatorId, range),
     creatorFollowers(creatorId, range),
   ]);
@@ -49,6 +60,7 @@ async function loadStats(
     prevRange: previous,
     rows,
     prevRows,
+    watch,
     daily,
     followersNow: followers.now,
     followersBefore: followers.before,
@@ -112,29 +124,43 @@ export function CreatorStats({
   const error = failed !== null && failed.key === key ? failed.error : null;
   const stale = loaded !== null && loaded.key !== key;
 
-  // Переключатель «наше»: строка меняется сразу, база — следом; не вышло — откат.
-  const toggleOurs = useCallback(async (videoId: string, on: boolean) => {
-    const flip = (v: boolean) =>
-      setLoaded((prev) =>
-        prev
-          ? { ...prev, rows: prev.rows.map((r) => (r.video_id === videoId ? { ...r, ours: v } : r)) }
-          : prev,
-      );
-    flip(on);
-    const res = await setVideoOurs(videoId, on);
-    if (!res.ok) {
-      toast.error(res.error);
-      flip(!on);
-    }
+  // Состояние видео («не наше / смотрим / наше»): строка меняется сразу, база — следом;
+  // не вышло — тост и откат к прежнему состоянию. Две колонки двигаются вместе, как в базе.
+  const applyState = useCallback((videoId: string, next: VideoState) => {
+    setLoaded((prev) => {
+      if (!prev) return prev;
+      const watch = new Set(prev.watch);
+      if (next === "watch") watch.add(videoId);
+      else watch.delete(videoId);
+      return {
+        ...prev,
+        watch,
+        rows: prev.rows.map((r) => (r.video_id === videoId ? { ...r, ours: next === "ours" } : r)),
+      };
+    });
   }, []);
+
+  const changeState = useCallback(
+    async (videoId: string, next: VideoState, before: VideoState) => {
+      applyState(videoId, next);
+      const res = await setVideoState(videoId, next);
+      if (!res.ok) {
+        toast.error(res.error);
+        applyState(videoId, before);
+      }
+    },
+    [applyState],
+  );
 
   const summary = useMemo(() => {
     if (!loaded) return null;
     const now = totalsOf(loaded.rows, loaded.range);
     const prev = totalsOf(loaded.prevRows, loaded.prevRange);
     // Плитка «С подробностями» — сколько видео помечено `ours`: у них снимаются тексты
-    // комментариев. На суммы и медианы пометка не влияет.
+    // комментариев. На суммы и медианы пометка не влияет. Рядом — сколько жёлтых: они не
+    // наши, но их историю мы всё равно собираем (миграция v17).
     const detailedCount = loaded.rows.filter((r) => r.ours).length;
+    const watchCount = loaded.rows.filter((r) => !r.ours && loaded.watch.has(r.video_id)).length;
     // Медиана считается по видео, которые за срок вышли или что-то набрали.
     const active = loaded.rows.filter((r) => r.views_delta > 0 || publishedIn(r.published_at, loaded.range));
     const medians = Object.fromEntries(
@@ -144,7 +170,7 @@ export function CreatorStats({
       loaded.followersNow !== null && loaded.followersBefore !== null
         ? loaded.followersNow - loaded.followersBefore
         : null;
-    return { now, prev, medians, detailedCount, activeCount: active.length, followersDelta };
+    return { now, prev, medians, detailedCount, watchCount, activeCount: active.length, followersDelta };
   }, [loaded]);
 
   const tableRows: VideoTableRow[] = useMemo(() => {
@@ -166,7 +192,7 @@ export function CreatorStats({
       comments: r.comments_now ?? 0,
       shares: r.shares_now ?? 0,
       saves: r.saves_now ?? 0,
-      ours: r.ours,
+      state: videoState({ ours: r.ours, watch: loaded.watch.has(r.video_id) }),
     }));
   }, [loaded, creator]);
 
@@ -188,6 +214,13 @@ export function CreatorStats({
   }, [tableRows, loaded]);
 
   const selected = loaded?.rows.find((r) => r.video_id === selectedId) ?? null;
+  // Состояние строки до нажатия: нужно и переключателю в таблице, и в карточке — по нему
+  // делается откат, если база отказала.
+  const stateOf = (videoId: string): VideoState =>
+    videoState({
+      ours: loaded?.rows.find((r) => r.video_id === videoId)?.ours ?? false,
+      watch: loaded?.watch.has(videoId) ?? false,
+    });
 
   if (range === null) {
     return <p className="text-sm text-muted-foreground">Укажите обе даты: начало не позже конца.</p>;
@@ -227,7 +260,7 @@ export function CreatorStats({
             icon={VideoIcon}
             label="С подробностями"
             value={fmtNum(summary.detailedCount)}
-            hint={`всего собрано: ${loaded.rows.length}`}
+            hint={`всего собрано: ${loaded.rows.length} · смотрим: ${summary.watchCount}`}
           />
         </div>
       </div>
@@ -237,6 +270,8 @@ export function CreatorStats({
       {selected && (
         <VideoPanel
           row={selected}
+          state={stateOf(selected.video_id)}
+          onState={(next) => void changeState(selected.video_id, next, stateOf(selected.video_id))}
           medians={summary.medians}
           platform={creator.platform}
           refreshKey={refreshKey}
@@ -248,7 +283,7 @@ export function CreatorStats({
         rows={tableRows}
         title="Видео"
         showCreator={false}
-        onToggleOurs={(id, on) => void toggleOurs(id, on)}
+        onSetState={(id, next) => void changeState(id, next, stateOf(id))}
         onRowClick={(id) => setSelectedId((prev) => (prev === id ? null : id))}
         selectedId={selectedId}
       />

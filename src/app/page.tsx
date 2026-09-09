@@ -6,6 +6,7 @@ import { Page, PageError, PageSkeleton } from "@/components/page";
 import { PeriodChip } from "@/components/period-chip";
 import { PlatformSwitch } from "@/components/platform-switch";
 import { SyncButton } from "@/components/sync-button";
+import { SyncLogPanel } from "@/components/sync-log-panel";
 import { KpiRow, totalsToKpis } from "@/components/stats/kpi-row";
 import { PerformanceChart } from "@/components/stats/performance-chart";
 import { TopPosts } from "@/components/stats/top-posts";
@@ -138,6 +139,11 @@ function Dashboard() {
         </>
       }
     >
+      {/* Ход обновления — только администратору; менеджеру панель не рендерится вовсе.
+          Стоит до содержимого страницы: она читается своими запросами и не должна ждать
+          ни сводки, ни списка видео. */}
+      <SyncLogPanel scope={null} />
+
       {base.error ? (
         <PageError error={base.error} />
       ) : base.loading && !base.data ? (

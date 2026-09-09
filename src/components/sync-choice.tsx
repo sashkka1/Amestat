@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { RefreshCwIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useSyncOptions } from "@/components/sync-options";
-import type { SyncDepth, SyncPick } from "@/lib/types";
+import type { SyncDepth, SyncPick, SyncVideos } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 // Общий вид попапа «Обновить» (владелец, 2026-09-09): вместо матрицы и галочек с абзацами
@@ -113,16 +113,55 @@ export function SyncDepthGroup({
   );
 }
 
+// Охват списка видео (владелец, 2026-09-09; миграция v17): «всё» — весь список, как в
+// ежедневном обходе; «только наши» — наши и жёлтые, остальные не смотрим и экономим время.
+// Ради этого охват и вводился, поэтому попап открывается на «только наши»; ежедневные обходы
+// всегда идут с 'all' и хвоста в строках состояния не получают.
+//
+// 🔴 Слова группы и хвостов живут здесь и в `lib/sync-phase.ts` по одному разу: попап кнопки
+// над страницей, попап строки списка и очередь строк обязаны называть охват одинаково.
+export const VIDEOS_WORD: Record<SyncVideos, string> = { all: "все видео", ours: "только наши" };
+
+export function SyncVideosGroup({
+  videos,
+  onVideos,
+}: {
+  videos: SyncVideos;
+  onVideos: (next: SyncVideos) => void;
+}) {
+  return (
+    <SyncGroup title="Видео">
+      <SyncChoiceBlock
+        label="Всё"
+        hint="весь список, как в ежедневном обходе"
+        selected={videos === "all"}
+        onClick={() => onVideos("all")}
+      />
+      <SyncChoiceBlock
+        label="Только наши"
+        hint="наши и жёлтые видео, остальное не смотрим — быстрее"
+        selected={videos === "ours"}
+        onClick={() => onVideos("ours")}
+      />
+    </SyncGroup>
+  );
+}
+
 // Что снимать. Первые два блока запоминаются (`useSyncOptions`), третий приходит параметрами
 // и гаснет при каждом открытии попапа — правило не изменилось, изменился только вид.
 const NO_COMMENTS_TITLE = "Без комментариев снимать нечего";
+const OURS_ONLY_TITLE = "При охвате «Только наши» не наши видео не открываются";
 
 export function SyncPickGroup({
   allVideos,
   onAllVideos,
+  oursOnly = false,
 }: {
   allVideos: boolean;
   onAllVideos: (on: boolean) => void;
+  // Охват «Только наши»: лишние видео не смотрим вовсе, значит и тексты у не наших взять не
+  // из чего — блок гаснет, а не молчаливо противоречит сводке.
+  oursOnly?: boolean;
 }) {
   const { comments, replies, setComments, setReplies } = useSyncOptions();
 
@@ -154,9 +193,9 @@ export function SyncPickGroup({
         className="col-span-2"
         label="И у не наших видео"
         hint="тексты и у не помеченных, долго"
-        selected={comments && allVideos}
-        disabled={!comments}
-        title={comments ? undefined : NO_COMMENTS_TITLE}
+        selected={comments && !oursOnly && allVideos}
+        disabled={!comments || oursOnly}
+        title={!comments ? NO_COMMENTS_TITLE : oursOnly ? OURS_ONLY_TITLE : undefined}
         onClick={() => onAllVideos(!allVideos)}
       />
     </SyncGroup>
@@ -171,6 +210,11 @@ export function pickWords(pick: SyncPick): string {
   if (!pick.comments) return "без комментариев";
   return pick.replies ? "комментарии и ветки" : "комментарии";
 }
+
+// Слово блока «И у не наших видео» в сводке. Раньше было «все видео», но так теперь зовётся
+// охват списка (VIDEOS_WORD.all) — одно и то же слово о двух разных вещах в одной строке
+// сводки читалось бы как противоречие: «только наши · все видео».
+export const ALL_VIDEOS_WORD = "тексты у не наших";
 
 // Сводка выбора одной строкой: «Все креаторы · TikTok · неделя · комментарии и ветки».
 // Пустые куски выпадают — площадки «Все» в строке нет, как нет её и в хвосте состояния.

@@ -7,12 +7,13 @@ import { Avatar } from "@/components/avatar";
 import { Cover } from "@/components/cover";
 import { PlatformIcon } from "@/components/platform";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { VideoStateToggle } from "@/components/video-state-toggle";
 import { Panel, PanelHead, Empty } from "./panel";
 import { SortHead, nextSort, type SortDir } from "./sort-head";
 import { engagementPct, fmtDayAxis, fmtNum } from "@/lib/format";
+import { STATE_ROW_CLASS, type VideoState } from "@/lib/video-state";
 import type { Platform } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -32,10 +33,22 @@ export type VideoTableRow = {
   comments: number;
   shares: number;
   saves: number;
-  ours: boolean;
+  // Три состояния вместо прежнего «наше / не наше» (миграция v17) — `lib/video-state.ts`.
+  state: VideoState;
 };
 
 type Key = "views" | "likes" | "comments" | "shares" | "saves" | "engagement" | "published";
+
+// Чипы фильтра по состоянию. Слова во множественном числе — это про набор строк, а не про
+// одно видео, поэтому свои, а не stateLabel: «Наши», а не «Наше».
+type StateFilter = VideoState | "all";
+const FILTER_KEYS: StateFilter[] = ["all", "ours", "watch", "none"];
+const FILTER_LABELS: Record<StateFilter, string> = {
+  all: "Все",
+  ours: "Наши",
+  watch: "Смотрим",
+  none: "Не наши",
+};
 
 const PAGE = 20;
 
@@ -56,7 +69,7 @@ export function VideosTable({
   title = "Видео",
   showCreator = true,
   defaultSort = "published",
-  onToggleOurs,
+  onSetState,
   onRowClick,
   selectedId,
 }: {
@@ -64,26 +77,30 @@ export function VideosTable({
   title?: string;
   showCreator?: boolean;
   defaultSort?: Key;
-  // Задан — появляется колонка «Наше» с переключателем.
-  onToggleOurs?: (videoId: string, on: boolean) => void;
+  // Задан — появляется колонка «Состояние» с переключателем «не наше / смотрим / наше».
+  onSetState?: (videoId: string, state: VideoState) => void;
   onRowClick?: (videoId: string) => void;
   selectedId?: string | null;
 }) {
   const [search, setSearch] = useState("");
+  // Фильтр по состоянию живёт только в таблице и нигде не сохраняется: это взгляд на список
+  // сейчас, а не настройка страницы.
+  const [stateFilter, setStateFilter] = useState<StateFilter>("all");
   const [sortKey, setSortKey] = useState<Key>(defaultSort);
   const [dir, setDir] = useState<SortDir>("desc");
   const [page, setPage] = useState(0);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter(
+    const byState = stateFilter === "all" ? rows : rows.filter((r) => r.state === stateFilter);
+    if (!q) return byState;
+    return byState.filter(
       (r) =>
         r.caption.toLowerCase().includes(q) ||
         r.creatorName.toLowerCase().includes(q) ||
         r.handle.toLowerCase().includes(q),
     );
-  }, [rows, search]);
+  }, [rows, search, stateFilter]);
 
   const sorted = useMemo(() => {
     const sign = dir === "asc" ? 1 : -1;
@@ -104,6 +121,24 @@ export function VideosTable({
   return (
     <Panel>
       <PanelHead title={title} subtitle={`${fmtNum(filtered.length)} видео`}>
+        {/* Чипы состояния — рядом с поиском: тот же ряд управления таблицей. */}
+        <div className="flex flex-wrap items-center gap-1">
+          {FILTER_KEYS.map((key) => (
+            <Button
+              key={key}
+              type="button"
+              size="xs"
+              variant={stateFilter === key ? "secondary" : "outline"}
+              aria-pressed={stateFilter === key}
+              onClick={() => {
+                setStateFilter(key);
+                setPage(0);
+              }}
+            >
+              {FILTER_LABELS[key]}
+            </Button>
+          ))}
+        </div>
         <div className="relative w-52">
           <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -135,7 +170,7 @@ export function VideosTable({
                 <SortHead k="saves" label="Сохранения" sortKey={sortKey} dir={dir} onSort={onSort} />
                 <SortHead k="engagement" label="Вовл. %" sortKey={sortKey} dir={dir} onSort={onSort} />
                 <SortHead k="published" label="Дата" sortKey={sortKey} dir={dir} onSort={onSort} />
-                {onToggleOurs && <TableHead className="text-center text-muted-foreground">Наше</TableHead>}
+                {onSetState && <TableHead className="text-center text-muted-foreground">Состояние</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -144,10 +179,7 @@ export function VideosTable({
                   key={r.id}
                   onClick={onRowClick ? () => onRowClick(r.id) : undefined}
                   data-state={r.id === selectedId ? "selected" : undefined}
-                  className={cn(
-                    onRowClick && "cursor-pointer",
-                    !r.ours && "text-muted-foreground opacity-60",
-                  )}
+                  className={cn(onRowClick && "cursor-pointer", STATE_ROW_CLASS[r.state])}
                 >
                   {showCreator && (
                     <TableCell>
@@ -188,13 +220,9 @@ export function VideosTable({
                   <TableCell className="text-right tabular-nums">
                     {r.publishedAt ? fmtDayAxis(r.publishedAt) : "—"}
                   </TableCell>
-                  {onToggleOurs && (
+                  {onSetState && (
                     <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
-                      <Checkbox
-                        checked={r.ours}
-                        onCheckedChange={(v) => onToggleOurs(r.id, v === true)}
-                        aria-label="Наше видео"
-                      />
+                      <VideoStateToggle state={r.state} onChange={(next) => onSetState(r.id, next)} />
                     </TableCell>
                   )}
                 </TableRow>

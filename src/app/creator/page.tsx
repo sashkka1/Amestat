@@ -6,6 +6,7 @@ import { AuthGate } from "@/components/auth-gate";
 import { Page, PageError, PageSkeleton } from "@/components/page";
 import { PeriodChip } from "@/components/period-chip";
 import { SyncButton } from "@/components/sync-button";
+import { SyncLogPanel } from "@/components/sync-log-panel";
 import { CreatorHeader } from "@/components/creator/creator-header";
 import { CreatorStats } from "@/components/creator/creator-stats";
 import { creatorById, listCreatorManagers, listCreatorTags, listTags } from "@/lib/queries";
@@ -100,6 +101,10 @@ function CreatorView({ id }: { id: string }) {
         </>
       }
     >
+      {/* Ход обновления — только администратору. Обход берётся с учётом scope: тот, что
+          касался этого креатора (его собственный или обход всех), как и время «Обновлено». */}
+      <SyncLogPanel scope={id} />
+
       {error ? (
         <PageError error={error} />
       ) : loading && !data ? (
