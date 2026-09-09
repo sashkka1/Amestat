@@ -10,10 +10,9 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useSyncOptions } from "@/components/sync-options";
 import {
   SyncChoiceBlock,
-  SyncDepthGroup,
+  SyncDepthAndMax,
   SyncGroup,
   SyncLaunchButton,
-  SyncMaxVideosGroup,
   SyncPickGroup,
   SyncSummary,
   SyncVideosGroup,
@@ -615,7 +614,7 @@ export function SyncButton({
             {t("sync.button")}
           </Button>
         </PopoverTrigger>
-        <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)]">
+        <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)] gap-3">
           {/* Кого обходить. Блока «Только эта страница» нет, когда страница и так показывает
               всех: выбирать не из чего. */}
           {hasPageRow && (
@@ -668,9 +667,7 @@ export function SyncButton({
             ))}
           </SyncGroup>
           )}
-          <SyncDepthGroup depth={depth} onDepth={setDepth} range={range} />
-          {/* Сколько видео на креатора — потолок поверх глубины (миграция v19). */}
-          <SyncMaxVideosGroup maxVideos={maxVideos} onMaxVideos={setMaxVideos} />
+          <SyncDepthAndMax depth={depth} onDepth={setDepth} range={range} maxVideos={maxVideos} onMaxVideos={setMaxVideos} />
           {/* Охват списка видео: тот же блок, что в попапе строки списка (миграция v17). */}
           <SyncVideosGroup videos={videos} onVideos={setVideos} />
           <SyncPickGroup allVideos={allVideos} onAllVideos={setAllVideos} oursOnly={videos === "ours"} />

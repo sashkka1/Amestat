@@ -42,7 +42,7 @@ export function SyncGroup({
     <div
       role="group"
       aria-label={title}
-      className={cn("grid gap-1.5", cols === 4 ? "grid-cols-4" : cols === 3 ? "grid-cols-3" : "grid-cols-2")}
+      className={cn("grid gap-1", cols === 4 ? "grid-cols-4" : cols === 3 ? "grid-cols-3" : "grid-cols-2")}
     >
       {children}
     </div>
@@ -81,7 +81,7 @@ export function SyncChoiceBlock({
         onClick={onClick}
         title={title === undefined ? hint : undefined}
         className={cn(
-          "flex w-full items-center justify-center gap-1 rounded-md border px-2 py-1.5 text-sm leading-tight font-medium transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50",
+          "flex min-h-9 w-full items-center justify-center gap-1 rounded-md border px-2.5 py-2 text-sm leading-tight font-medium transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50",
           selected
             ? "border-transparent bg-foreground text-background"
             : "border-border bg-background hover:bg-muted dark:bg-input/30 dark:hover:bg-input/50",
@@ -189,13 +189,7 @@ export function SyncDepthGroup({
   const t = useT();
   const max = todayValue();
   return (
-    <SyncGroup title={t("syncChoice.depthGroup")} cols={4}>
-      <SyncChoiceBlock
-        label={t("syncChoice.depthAll")}
-        hint={t("syncChoice.depthAllHint")}
-        selected={depth === "all"}
-        onClick={() => onDepth("all")}
-      />
+    <SyncGroup title={t("syncChoice.depthGroup")}>
       <SyncChoiceBlock
         label={t("syncChoice.depthWeek")}
         hint={t("syncChoice.depthWeekHint")}
@@ -209,13 +203,19 @@ export function SyncDepthGroup({
         onClick={() => onDepth("month")}
       />
       <SyncChoiceBlock
+        label={t("syncChoice.depthAll")}
+        hint={t("syncChoice.depthAllHint")}
+        selected={depth === "all"}
+        onClick={() => onDepth("all")}
+      />
+      <SyncChoiceBlock
         label={t("syncChoice.depthRange")}
         hint={t("syncChoice.depthRangeHint")}
         selected={depth === "range"}
         onClick={() => onDepth("range")}
       />
       {depth === "range" && (
-        <div className="col-span-4 flex flex-col gap-1.5">
+        <div className="col-span-2 flex flex-col gap-1">
           <div className="grid grid-cols-2 gap-1.5">
             {/* max — сегодня: «по» не позже сегодняшнего дня, и календарь браузера дальше
                 не пускает. Набранную руками будущую дату подрезает resolveSyncRange. */}
@@ -262,7 +262,7 @@ export function SyncMaxVideosGroup({
 }) {
   const t = useT();
   return (
-    <SyncGroup title={t("syncChoice.maxVideosGroup")} cols={4}>
+    <SyncGroup title={t("syncChoice.maxVideosGroup")}>
       {MAX_VIDEOS_CHOICES.map((n) => (
         <SyncChoiceBlock
           key={n ?? "all"}
@@ -409,5 +409,28 @@ export function SyncLaunchButton({
       <RefreshCwIcon data-icon="inline-start" className={cn(sending && "animate-spin")} />
       {sending ? t("syncChoice.sending") : t("syncChoice.launch")}
     </Button>
+  );
+}
+
+// Глубина и потолок — два квадрата 2×2 рядом (владелец, 2026-09-09: «неделя, месяц, снизу
+// всё, период; правее такой же блок с количеством»). Внутри плотно, между квадратами просторно.
+export function SyncDepthAndMax({
+  depth,
+  onDepth,
+  range,
+  maxVideos,
+  onMaxVideos,
+}: {
+  depth: SyncDepth;
+  onDepth: (next: SyncDepth) => void;
+  range: SyncRangeState;
+  maxVideos: number | null;
+  onMaxVideos: (next: number | null) => void;
+}) {
+  return (
+    <div className="grid grid-cols-2 items-start gap-3">
+      <SyncDepthGroup depth={depth} onDepth={onDepth} range={range} />
+      <SyncMaxVideosGroup maxVideos={maxVideos} onMaxVideos={onMaxVideos} />
+    </div>
   );
 }

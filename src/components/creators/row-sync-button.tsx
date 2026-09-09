@@ -6,9 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useSyncOptions } from "@/components/sync-options";
 import {
-  SyncDepthGroup,
+  SyncDepthAndMax,
   SyncLaunchButton,
-  SyncMaxVideosGroup,
   SyncPickGroup,
   SyncSummary,
   SyncVideosGroup,
@@ -114,10 +113,8 @@ export function RowSyncButton({
           <RefreshCwIcon />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)]">
-        <SyncDepthGroup depth={depth} onDepth={setDepth} range={range} />
-        {/* Сколько видео на креатора — потолок поверх глубины (миграция v19). */}
-        <SyncMaxVideosGroup maxVideos={maxVideos} onMaxVideos={setMaxVideos} />
+      <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)] gap-3">
+        <SyncDepthAndMax depth={depth} onDepth={setDepth} range={range} maxVideos={maxVideos} onMaxVideos={setMaxVideos} />
         <SyncVideosGroup videos={videos} onVideos={setVideos} />
         <SyncPickGroup allVideos={allVideos} onAllVideos={setAllVideos} oursOnly={videos === "ours"} />
         <SyncSummary

@@ -492,7 +492,7 @@ export const ptBR: Dict = {
     groupWho: "Quem",
     allCreators: "Todos os criadores",
     allCreatorsHint: "todos que você enxerga",
-    thisCreator: "Somente este criador",
+    thisCreator: "Só este",
     thisCreatorHint: "sem os demais",
     thisPage: "Somente esta página",
     thisPageHint: "{n} {creators} nesta página",

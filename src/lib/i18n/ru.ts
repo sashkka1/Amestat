@@ -506,7 +506,7 @@ export const ru = {
     groupWho: "Кого",
     allCreators: "Все креаторы",
     allCreatorsHint: "все, кого видно",
-    thisCreator: "Только этот креатор",
+    thisCreator: "Только этот",
     thisCreatorHint: "без остальных",
     thisPage: "Только эта страница",
     thisPageHint: "{n} {creators} на странице",

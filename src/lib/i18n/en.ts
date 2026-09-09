@@ -492,7 +492,7 @@ export const en: Dict = {
     groupWho: "Who",
     allCreators: "All creators",
     allCreatorsHint: "everyone you can see",
-    thisCreator: "This creator only",
+    thisCreator: "Only this",
     thisCreatorHint: "without the others",
     thisPage: "This page only",
     thisPageHint: "{n} {creators} on the page",
