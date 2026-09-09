@@ -11,9 +11,11 @@ import { VideoStateToggle } from "@/components/video-state-toggle";
 import { VideoHistoryChart } from "./daily-chart";
 import { VideoComments } from "./video-comments";
 import { videoHistory } from "@/lib/queries";
-import { describeVsMedian } from "@/lib/stats";
+import { describeVsMedian, median } from "@/lib/stats";
 import { fmtDateTime, fmtNum } from "@/lib/format";
 import { useT, type TKey } from "@/lib/i18n";
+import { publishedIn } from "@/lib/video-rows";
+import type { PeriodRange } from "@/lib/period";
 import type { VideoState } from "@/lib/video-state";
 import type { Platform, VideoStats } from "@/lib/types";
 
@@ -26,7 +28,25 @@ export const PANEL_METRICS = [
 ] as const satisfies readonly { key: string; label: TKey }[];
 export type MetricKey = (typeof PANEL_METRICS)[number]["key"];
 
+// Видео, которые за срок вышли или что-то набрали: только по ним считается медиана креатора.
+// 🔴 Отбор и сама медиана живут здесь одни на весь сайт: их считает и карточка креатора, и
+// шторка дашборда, а разъехавшись, они показали бы у одного видео две разные «нормы».
+export function activeRows(rows: VideoStats[], range: PeriodRange): VideoStats[] {
+  return rows.filter((r) => r.views_delta > 0 || publishedIn(r.published_at, range));
+}
+
+export function panelMedians(active: VideoStats[]): Record<MetricKey, number | null> {
+  return Object.fromEntries(
+    PANEL_METRICS.map((m) => [m.key, median(active.map((r) => r[`${m.key}_delta`]))]),
+  ) as Record<MetricKey, number | null>;
+}
+
 // Выбранное видео: сравнение с медианой креатора за срок и своя история по снимкам.
+//
+// Панель одна на два места (владелец, 2026-09-09): на карточке креатора она встроена
+// в страницу карточкой, на дашборде — тем же содержимым внутри выдвижной шторки. Отсюда
+// два необязательных свойства: `plain` убирает собственную рамку (её даёт шторка), а без
+// `onClose` не рисуется крестик — в шторке он свой, в её шапке.
 export function VideoPanel({
   row,
   state,
@@ -35,6 +55,8 @@ export function VideoPanel({
   platform,
   refreshKey,
   onClose,
+  plain = false,
+  note,
 }: {
   row: VideoStats;
   // Состояние видео и его переключатель — те же, что в строке таблицы: `videos.ours` из
@@ -46,7 +68,13 @@ export function VideoPanel({
   platform: Platform;
   // Меняется после обхода — комментарии и история по снимкам перечитываются.
   refreshKey: number;
-  onClose: () => void;
+  // Не задан — крестика нет: закрытием ведает хозяин (шапка шторки).
+  onClose?: () => void;
+  // Рамку и отступ даёт хозяин, а не сама панель.
+  plain?: boolean;
+  // Строка под ссылкой на площадку: шторка дашборда говорит ею, что за срок снимков не было
+  // и счётчики показаны текущие.
+  note?: string | null;
 }) {
   const t = useT();
   // История помнит, чьё она видео: сменилась строка — до ответа показываем скелет.
@@ -75,22 +103,24 @@ export function VideoPanel({
 
   const current = loaded?.videoId === row.video_id ? loaded : null;
 
-  return (
-    <Panel className="flex flex-col gap-4 p-4">
+  const body = (
+    <>
       <div className="flex gap-4">
         <Cover src={row.cover_url} width={56} />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex items-start justify-between gap-2">
             <p className="text-sm font-medium">{row.caption || t("common.noCaption")}</p>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={onClose}
-              title={t("common.close")}
-              aria-label={t("common.close")}
-            >
-              <XIcon />
-            </Button>
+            {onClose && (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={onClose}
+                title={t("common.close")}
+                aria-label={t("common.close")}
+              >
+                <XIcon />
+              </Button>
+            )}
           </div>
           <a
             href={row.url}
@@ -104,6 +134,7 @@ export function VideoPanel({
           <p className="text-xs text-muted-foreground">
             {t("videoPanel.published", { date: fmtDateTime(row.published_at) })}
           </p>
+          {note && <p className="text-xs text-muted-foreground">{note}</p>}
           <VideoStateToggle state={state} onChange={onState} withLabels className="self-start" />
         </div>
       </div>
@@ -162,6 +193,9 @@ export function VideoPanel({
         ours={row.ours}
         refreshKey={refreshKey}
       />
-    </Panel>
+    </>
   );
+
+  if (plain) return <div className="flex flex-col gap-4">{body}</div>;
+  return <Panel className="flex flex-col gap-4 p-4">{body}</Panel>;
 }

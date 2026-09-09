@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { Suspense, useCallback, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { toast } from "sonner";
 import { AuthGate } from "@/components/auth-gate";
 import { Page, PageError, PageSkeleton } from "@/components/page";
 import { PlatformSwitch } from "@/components/platform-switch";
@@ -12,6 +14,7 @@ import { PerformanceChart, type ChartCreator } from "@/components/stats/performa
 import { TopPosts } from "@/components/stats/top-posts";
 import { TopCreators, buildCreatorRows } from "@/components/stats/top-creators";
 import { VideosTable } from "@/components/stats/videos-table";
+import { VideoSheet } from "@/components/video-sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   creatorsOverview,
@@ -20,6 +23,7 @@ import {
   listVideosWithLatest,
   sumOverview,
 } from "@/lib/queries";
+import { setVideoState } from "@/lib/api/videos";
 import { earliestAdded, publishedIn, toPosts, toTableRows } from "@/lib/video-rows";
 import { matchesScope, useCompare, useScope } from "@/lib/dashboard-prefs";
 import { useT } from "@/lib/i18n";
@@ -31,18 +35,69 @@ import {
 import { useIsAdmin } from "@/lib/profile-context";
 import { useLoader } from "@/lib/use-loader";
 import { usePeriod } from "@/lib/use-period";
+import type { VideoState } from "@/lib/video-state";
 import type { DailyViews } from "@/lib/types";
 
+// `?video=<id>` — какой ролик открыт шторкой (владелец, 2026-09-09): ссылку с ним можно
+// дать, и страница откроется с той же подробной статистикой. useSearchParams в статике
+// требует Suspense — тем же приёмом, что карточка креатора.
 export default function HomePage() {
+  const t = useT();
   return (
     <AuthGate>
-      <Dashboard />
+      <Suspense
+        fallback={
+          <Page docTitle={t("nav.dashboard")}>
+            <PageSkeleton />
+          </Page>
+        }
+      >
+        <Dashboard />
+      </Suspense>
     </AuthGate>
   );
 }
 
+// Адрес правится мимо роутера: перерисовывать страницу ради параметра нечего, а ссылка
+// обязана оставаться живой. basePath сюда не вмешивается — путь берётся из самого адреса.
+function syncVideoParam(videoId: string | null): void {
+  const url = new URL(window.location.href);
+  if (videoId) url.searchParams.set("video", videoId);
+  else url.searchParams.delete("video");
+  window.history.replaceState(null, "", url);
+}
+
 function Dashboard() {
   const t = useT();
+  const params = useSearchParams();
+  // Параметр адреса читается один раз, при первом рендере: дальше открытым видео ведает
+  // состояние, а адрес подправляется за ним (`syncVideoParam`).
+  const [openId, setOpenId] = useState<string | null>(() => params.get("video"));
+  const openVideo = useCallback((videoId: string) => {
+    setOpenId(videoId);
+    syncVideoParam(videoId);
+  }, []);
+  const closeVideo = useCallback(() => {
+    setOpenId(null);
+    syncVideoParam(null);
+  }, []);
+
+  // Состояние видео, изменённое из шторки: строки приезжают загрузчиком и правке не
+  // поддаются, поэтому правка живёт рядом и ложится на них поверх — так строка в таблице
+  // зеленеет сразу, не дожидаясь перечитывания срока.
+  const [videoStates, setVideoStates] = useState<Record<string, VideoState>>({});
+  const changeState = useCallback(
+    async (videoId: string, next: VideoState, before: VideoState) => {
+      setVideoStates((prev) => ({ ...prev, [videoId]: next }));
+      const res = await setVideoState(videoId, next);
+      if (!res.ok) {
+        toast.error(res.error);
+        setVideoStates((prev) => ({ ...prev, [videoId]: before }));
+      }
+    },
+    [],
+  );
+
   // Список креаторов — единственное, что странице нужно до выбора срока: по нему считается
   // начало «Всего времени» и фильтр площадки. Видео уехали в загрузку срока (ниже), поэтому
   // страница показывается сразу, не дожидаясь тысячи строк.
@@ -136,10 +191,14 @@ function Dashboard() {
   // «Лучшие видео», «Новые видео» и столбцы публикаций в карточках. Суммы из базы теперь
   // сужены тем же условием (миграция v22), поэтому клиентский фильтр и серверный отбор
   // говорят про один и тот же набор видео — таблица сходится с плиткой над ней.
-  const tableRows = useMemo(
-    () => (stats.data ? toTableRows(stats.data.videos, creators) : []),
-    [stats.data, creators],
-  );
+  const tableRows = useMemo(() => {
+    const rows = stats.data ? toTableRows(stats.data.videos, creators) : [];
+    // Правки из шторки поверх прочитанного: пока срок не перечитан, база и экран сходятся.
+    return rows.map((r) => {
+      const own = videoStates[r.id];
+      return own && own !== r.state ? { ...r, state: own } : r;
+    });
+  }, [stats.data, creators, videoStates]);
   const scopedRows = useMemo(
     () => tableRows.filter((r) => matchesScope(scope, r.state)),
     [tableRows, scope],
@@ -179,12 +238,27 @@ function Dashboard() {
     [scopedRows, range],
   );
 
-  // Обход кончился — перечитываем и списки, и сводку за срок.
+  // Открытое шторкой видео и его креатор: id хранится в состоянии и в адресе, а строка со
+  // счётчиками и креатор ищутся среди уже прочитанного. Креатор берётся из полного списка:
+  // ссылку могли дать на ролик с другой площадкой, чем выбрана переключателем.
+  const openRow = useMemo(
+    () => (openId ? (tableRows.find((r) => r.id === openId) ?? null) : null),
+    [tableRows, openId],
+  );
+  const openCreator = useMemo(
+    () => (openRow ? (allCreators.find((c) => c.id === openRow.creatorId) ?? null) : null),
+    [allCreators, openRow],
+  );
+
+  // Обход кончился — перечитываем и списки, и сводку за срок; шторка по этому же счётчику
+  // перечитывает историю и комментарии открытого видео.
+  const [syncKey, setSyncKey] = useState(0);
   const baseReload = base.reload;
   const statsReload = stats.reload;
   const onSynced = useCallback(() => {
     baseReload();
     statsReload();
+    setSyncKey((k) => k + 1);
   }, [baseReload, statsReload]);
 
   return (
@@ -242,7 +316,7 @@ function Dashboard() {
           )}
 
           {stats.data ? (
-            <TopPosts posts={topPosts} collapseKey="top-posts" />
+            <TopPosts posts={topPosts} collapseKey="top-posts" onSelect={openVideo} />
           ) : (
             <Skeleton className="h-56 w-full" />
           )}
@@ -267,10 +341,24 @@ function Dashboard() {
               title={t("dashboard.newVideos")}
               defaultSort="published"
               collapseKey="new-videos"
+              onRowClick={openVideo}
+              selectedId={openId}
             />
           ) : (
             <Skeleton className="h-56 w-full" />
           )}
+
+          {/* Та же панель, что встроена в карточку креатора, — здесь шторкой справа: со
+              страницы не уводит, а ссылка с `?video=` открывает её сразу. */}
+          <VideoSheet
+            video={openRow}
+            creator={openCreator}
+            range={range}
+            scope={scope}
+            refreshKey={syncKey}
+            onState={(id, next, before) => void changeState(id, next, before)}
+            onClose={closeVideo}
+          />
         </>
       )}
     </Page>

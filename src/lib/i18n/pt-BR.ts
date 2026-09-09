@@ -288,6 +288,12 @@ export const ptBR: Dict = {
     fewSnapshots: "Ainda há poucos registros para o gráfico.",
   },
 
+  videoSheet: {
+    openCreator: "Abrir a página do criador",
+    loadError: "Não foi possível ler as estatísticas do vídeo: {error}",
+    notInRange: "Sem registros neste período — os números atuais estão sendo exibidos.",
+  },
+
   stats: {
     medianZero: "a mediana é 0",
     timesHigher: "{n}× acima da mediana",

@@ -295,6 +295,12 @@ export const en = {
     fewSnapshots: "Too few snapshots for a chart yet.",
   },
 
+  videoSheet: {
+    openCreator: "Open the creator card",
+    loadError: "Could not read the video stats: {error}",
+    notInRange: "No snapshots in this range — current counters are shown.",
+  },
+
   stats: {
     medianZero: "median is 0",
     timesHigher: "{n}× above the median",

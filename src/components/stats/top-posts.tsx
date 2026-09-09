@@ -61,12 +61,17 @@ export function TopPosts({
   limit = 10,
   showCreator = true,
   collapseKey,
+  onSelect,
 }: {
   posts: PostItem[];
   title?: string;
   limit?: number;
   showCreator?: boolean;
   collapseKey?: string;
+  // Задан — щелчок остаётся на странице и отдаёт видео хозяину (шторка дашборда). Не задан —
+  // прежний переход на карточку креатора с открытым видео (карточка креатора, владелец
+  // 2026-09-09: там поведение не меняется).
+  onSelect?: (videoId: string) => void;
 }) {
   const t = useT();
   const [search, setSearch] = useState("");
@@ -125,27 +130,27 @@ export function TopPosts({
           <ul ref={listRef} className="flex gap-3 overflow-x-auto px-4 pb-4">
             {shown.map((p, i) => (
               <li key={p.id} className="w-[150px] shrink-0">
-                {/* Щелчок ведёт на карточку креатора с открытым этим видео — там вся его
-                    история и ссылка на площадку; сама площадка открывается чипом ниже. */}
-                <Link
-                  href={`/creator/?id=${p.creatorId}&video=${p.id}`}
-                  className="block transition-opacity hover:opacity-85"
-                  title={p.caption || t("common.noCaption")}
-                >
-                  <div className="relative">
-                    <Cover src={p.coverUrl} width={150} className="w-full" />
-                    <span className="absolute left-2 top-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[11px] font-semibold text-white">
-                      #{i + 1}
-                    </span>
-                    <span
-                      className="absolute bottom-2 left-2 inline-flex items-center gap-1 rounded-full bg-black/70 px-2 py-0.5 text-[11px] font-medium text-white tabular-nums"
-                      title={fmtNum(p.views)}
-                    >
-                      <EyeIcon className="size-3" />
-                      {fmtCompact(p.views)}
-                    </span>
-                  </div>
-                </Link>
+                {/* Щелчок открывает подробную статистику этого видео: на дашборде — шторкой
+                    справа, не уходя со страницы; на карточке креатора — переходом с `?video=`.
+                    Сама площадка открывается чипом ниже. */}
+                {onSelect ? (
+                  <button
+                    type="button"
+                    onClick={() => onSelect(p.id)}
+                    className="block w-full text-left transition-opacity hover:opacity-85"
+                    title={p.caption || t("common.noCaption")}
+                  >
+                    <CoverBox post={p} rank={i + 1} />
+                  </button>
+                ) : (
+                  <Link
+                    href={`/creator/?id=${p.creatorId}&video=${p.id}`}
+                    className="block transition-opacity hover:opacity-85"
+                    title={p.caption || t("common.noCaption")}
+                  >
+                    <CoverBox post={p} rank={i + 1} />
+                  </Link>
+                )}
                 <a
                   href={p.url}
                   target="_blank"
@@ -172,6 +177,25 @@ export function TopPosts({
         </>
       )}
     </Panel>
+  );
+}
+
+// Обложка с номером места и просмотрами — одна на оба вида щелчка (ссылка и кнопка).
+function CoverBox({ post, rank }: { post: PostItem; rank: number }) {
+  return (
+    <div className="relative">
+      <Cover src={post.coverUrl} width={150} className="w-full" />
+      <span className="absolute left-2 top-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[11px] font-semibold text-white">
+        #{rank}
+      </span>
+      <span
+        className="absolute bottom-2 left-2 inline-flex items-center gap-1 rounded-full bg-black/70 px-2 py-0.5 text-[11px] font-medium text-white tabular-nums"
+        title={fmtNum(post.views)}
+      >
+        <EyeIcon className="size-3" />
+        {fmtCompact(post.views)}
+      </span>
+    </div>
   );
 }
 

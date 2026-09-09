@@ -11,7 +11,7 @@ import { PerformanceChart } from "@/components/stats/performance-chart";
 import { TopPosts, type PostItem } from "@/components/stats/top-posts";
 import { VideosTable, type VideoTableRow } from "@/components/stats/videos-table";
 import { PageError } from "@/components/page";
-import { VideoPanel, PANEL_METRICS, type MetricKey } from "./video-panel";
+import { VideoPanel, activeRows, panelMedians } from "./video-panel";
 import {
   creatorDailyViews,
   creatorFollowers,
@@ -22,7 +22,7 @@ import {
 import { setVideoState } from "@/lib/api/videos";
 import { matchesScope, useCompare, useScope, type Scope } from "@/lib/dashboard-prefs";
 import { videoState, type VideoState } from "@/lib/video-state";
-import { engagementOf, median, sum } from "@/lib/stats";
+import { engagementOf, sum } from "@/lib/stats";
 import { changeVs, fmtCompact, fmtNum } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import { publishedIn } from "@/lib/video-rows";
@@ -196,11 +196,10 @@ export function CreatorStats({
     // наши, но их историю мы всё равно собираем (миграция v17).
     const detailedCount = loaded.rows.filter((r) => r.ours).length;
     const watchCount = loaded.rows.filter((r) => !r.ours && loaded.watch.has(r.video_id)).length;
-    // Медиана считается по видео, которые за срок вышли или что-то набрали.
-    const active = loaded.rows.filter((r) => r.views_delta > 0 || publishedIn(r.published_at, loaded.range));
-    const medians = Object.fromEntries(
-      PANEL_METRICS.map((m) => [m.key, median(active.map((r) => r[`${m.key}_delta`]))]),
-    ) as Record<MetricKey, number | null>;
+    // Медиана считается по видео, которые за срок вышли или что-то набрали. Отбор и расчёт —
+    // общие с шторкой дашборда (`video-panel.tsx`), чтобы «норма» у одного видео была одна.
+    const active = activeRows(loaded.rows, loaded.range);
+    const medians = panelMedians(active);
     const followersDelta =
       loaded.followersNow !== null && loaded.followersBefore !== null
         ? loaded.followersNow - loaded.followersBefore
