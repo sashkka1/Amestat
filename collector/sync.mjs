@@ -517,6 +517,31 @@ async function doSync({ trigger, creatorId, failedOnly, depth, comments, replies
     }
 
     /**
+     * Ход обхода для сайта (миграция v14; владелец, 2026-09-09: «что за обход, сколько
+     * выполнено, на сколько ещё»). После каждого креатора в `sync_runs` уезжают счётчики и
+     * те, кого собираем сейчас — по одному на полосу. Не уехало — обход не страдает: это
+     * подсказка на кнопке, а не результат.
+     */
+    const current = new Map();
+    let progressFailed = 0;
+    async function progress() {
+      if (!runId) return;
+      try {
+        await patch(`sync_runs?id=eq.${runId}`, {
+          creators_total: creators.length,
+          creators_done: done,
+          creators_failed: failed,
+          current_handles: [...current.values()].map((h) => `@${h}`),
+          progress_at: new Date().toISOString(),
+        });
+      } catch (e) {
+        // Одна строка в лог на первый сбой, дальше молчим: база и так уже под вопросом.
+        if (progressFailed++ === 0) log(`ход обхода не записался: ${short(e)}`);
+      }
+    }
+    await progress();
+
+    /**
      * Одна полоса: её креаторы по очереди, свой браузер, свои паузы, свой префикс в логе.
      * Полосы идут одновременно, поэтому счётчики и `lines` общие — но JS однопоточен, и
      * между `await` их никто не перебивает.
@@ -533,6 +558,8 @@ async function doSync({ trigger, creatorId, failedOnly, depth, comments, replies
         for (let i = 0; i < list.length; i++) {
           const creator = list[i];
           say(`@${creator.handle} (${creator.platform})`);
+          current.set(kind, creator.handle);
+          await progress();
           const started = Date.now();
           let error = null;
           try {
@@ -554,6 +581,8 @@ async function doSync({ trigger, creatorId, failedOnly, depth, comments, replies
               notice("db", `@${creator.handle}: не записалась и ошибка креатора — ${short(e2)}`);
             }
           }
+          current.delete(kind);
+          await progress();
           const spent = Date.now() - started;
           if (spent > SLOW_CREATOR_MS) notice("slow", `@${creator.handle}: собирался ${Math.round(spent / 60_000)} мин`);
           // Пауза только между чистыми профилями TikTok — см. `pauseAfter`.
