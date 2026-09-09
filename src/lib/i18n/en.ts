@@ -127,7 +127,7 @@ export const en: Dict = {
     scopeGroup: "Video scope",
     scopeAll: "All videos",
     scopeOurs: "Ours only",
-    allVideosNote: "For all videos, data has only been collected for {days} days (since {date}).",
+    allVideosNote: "Counter snapshots have been collected for only {days} days (since {date}); older videos show their current state.",
     allVideosNoteEmpty: "There is no data for all videos yet: no run has happened.",
   },
 

@@ -23,27 +23,6 @@ import { cn } from "@/lib/utils";
 // сборщика, а срок «Всё время» уходит к дате добавления креатора. Не сказать об этом —
 // значит показать пустой хвост графика как провал.
 
-// Тост про глубину истории — один раз за сессию: переключаться туда-сюда можно много раз,
-// и повторять одно и то же на каждое нажатие незачем.
-const TOAST_KEY = "amestat.allVideosNoteShown";
-
-function shownThisSession(): boolean {
-  try {
-    return window.sessionStorage.getItem(TOAST_KEY) === "1";
-  } catch {
-    // Хранилища нет — считаем, что не показывали: лишний тост безобиднее пропавшего.
-    return false;
-  }
-}
-
-function markShown(): void {
-  try {
-    window.sessionStorage.setItem(TOAST_KEY, "1");
-  } catch {
-    // Не сохранилось — тост повторится в следующий раз. Ломать из-за этого нечего.
-  }
-}
-
 // Дней от самого раннего снимка до сегодня, включительно: снимок сегодня — это «1 дн.»,
 // вчерашний — «2 дн.».
 function daysSince(iso: string, now: number): number {
@@ -96,7 +75,7 @@ export function PeriodBar({
     };
   }, []);
 
-  // Текст оговорки один и для строки под полосой, и для тоста.
+  // Текст оговорки для тоста при переключении на «Все видео».
   const note =
     history === "unread"
       ? null
@@ -104,13 +83,20 @@ export function PeriodBar({
         ? t("periodBar.allVideosNoteEmpty")
         : t("periodBar.allVideosNote", { days: history.days, date: fmtDayLong(history.iso) });
 
+  // Оговорки живут только всплывашками (владелец, 2026-09-09: «пусть уведомляшка показывается,
+  // но больше ничего не нужно — текстовый дубляж не нужен»): каждое переключение на «Все видео»
+  // и каждое включение сравнения показывают тост, который сам закрывается.
   function pickScope(next: Scope) {
     onScope(next);
-    // Тот же текст, что и строкой ниже: оговорка должна догнать глазами, а не только висеть
-    // под полосой. Дата ещё не прочитана — тоста нет, и «один раз за сессию» не потрачен.
-    if (next === "all" && note !== null && !shownThisSession()) {
-      markShown();
-      toast.info(note);
+    if (next === "all" && note !== null) toast.info(note);
+  }
+
+  function pickCompare(on: boolean) {
+    onCompare(on);
+    if (on && previous) {
+      toast.info(
+        t("periodBar.comparedWith", { from: fmtDayYear(previous.from), to: fmtDayYear(previous.to) }),
+      );
     }
   }
 
@@ -124,7 +110,7 @@ export function PeriodBar({
           size="sm"
           variant={compare ? "secondary" : "outline"}
           aria-pressed={compare}
-          onClick={() => onCompare(!compare)}
+          onClick={() => pickCompare(!compare)}
         >
           <ArrowLeftRightIcon data-icon="inline-start" />
           {t("periodBar.compare")}
@@ -133,15 +119,6 @@ export function PeriodBar({
         <ScopeSwitch scope={scope} onScope={pickScope} />
       </div>
 
-      {compare && previous && (
-        <p className="text-xs text-muted-foreground tabular-nums">
-          {t("periodBar.comparedWith", {
-            from: fmtDayYear(previous.from),
-            to: fmtDayYear(previous.to),
-          })}
-        </p>
-      )}
-      {scope === "all" && note && <p className="text-xs text-muted-foreground">{note}</p>}
     </div>
   );
 }

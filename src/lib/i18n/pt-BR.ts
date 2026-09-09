@@ -127,7 +127,7 @@ export const ptBR: Dict = {
     scopeGroup: "Escopo dos vídeos",
     scopeAll: "Todos os vídeos",
     scopeOurs: "Somente nossos",
-    allVideosNote: "Para todos os vídeos, há dados apenas dos últimos {days} dias (desde {date}).",
+    allVideosNote: "Os contadores são coletados há apenas {days} dias (desde {date}); vídeos mais antigos mostram o estado atual.",
     allVideosNoteEmpty: "Ainda não há dados de todos os vídeos: nenhuma coleta foi feita.",
   },
 
