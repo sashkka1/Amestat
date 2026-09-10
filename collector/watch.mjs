@@ -329,7 +329,11 @@ async function runScheduled(trigger, slot) {
   const label = slotHhmm(slot ?? new Date());
   const covered = await coveredToday();
   if (covered) {
-    const text = `слот ${label} пропущен: сегодня уже был обход по всем в ${slotHhmm(covered)}`;
+    // ⚠️ Первый обход дня — не слот: у него нет часа расписания, и печатать его время в зоне
+    // слотов значило бы поставить рядом два разных времени про один момент (лог идёт по
+    // местным часам). Поэтому «сегодня уже был обход» всегда по местному, а слот — своё.
+    const what = trigger === "catchup" ? "первое обновление дня" : `слот ${label}`;
+    const text = `${what} пропущено: сегодня уже был обход по всем в ${hhmm(covered)}`;
     log(text);
     void logSystem(text, { level: "info" });
     return { ok: true, skipped: true, done: 0, failed: 0, runId: null };
