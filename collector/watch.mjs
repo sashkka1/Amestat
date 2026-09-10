@@ -106,6 +106,13 @@ function today(date = new Date()) {
   const p = (n) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}`;
 }
+/** Первая строка текста ошибки: в лог резидента стек не нужен. */
+function short(e) {
+  const text = String(e?.message ?? e);
+  const cut = text.indexOf("\n");
+  return cut === -1 ? text : text.slice(0, cut);
+}
+
 function hhmm(date) {
   const p = (n) => String(n).padStart(2, "0");
   return `${p(date.getHours())}:${p(date.getMinutes())}`;
@@ -467,6 +474,8 @@ log(`следующий слот: ${slotHhmm(nextAt, true)}${env.slotTz ? ` (${e
 let lastTickAt = Date.now();
 const tick = setInterval(() => {
   const now = new Date();
+  // Сирота мог появиться и после старта: разовый `run.mjs` убили окном терминала.
+  void closeOrphanRuns();
   // Часы «прыгнули» — компьютер спал, а не тикал. Сеть после пробуждения встаёт не сразу,
   // поэтому её ближайшие отказы идут только в лог (прогрев).
   const slept = sleepGap(lastTickAt, now.getTime());
@@ -585,6 +594,44 @@ await poll();
 const polling = setInterval(() => { poll().catch(() => {}); }, POLL_MS);
 
 
+/**
+ * Закрыть обходы, оставшиеся открытыми от МЁРТВОГО процесса.
+ *
+ * ⚠️ Зачем (владелец, 2026-09-10): резидент перезапустили посреди обхода — процесс умер, а
+ * строка `sync_runs` осталась без `finished_at`, и сайт четырнадцать минут показывал
+ * «Обновляем», хотя не собиралось ничего. Признак сироты — молчание: живой обход двигает
+ * `progress_at` после каждого креатора и каждого видео комментариев, мёртвый не двигает
+ * вовсе. Порог намеренно большой: длинная прокрутка списка у крупного аккаунта тоже молчит
+ * минутами, и живой обход задеть нельзя.
+ * Свой текущий обход не трогается: `busy()` — про этот же процесс.
+ */
+const ORPHAN_MS = 15 * 60_000;
+
+async function closeOrphanRuns(reason = "процесс, который его вёл, больше не работает") {
+  if (busy()) return 0;
+  try {
+    const runs = await get("sync_runs?select=id,started_at,progress_at&finished_at=is.null&order=id.desc&limit=20");
+    const edge = Date.now() - ORPHAN_MS;
+    let closed = 0;
+    for (const row of runs) {
+      const moved = new Date(row.progress_at ?? row.started_at).getTime();
+      if (!Number.isFinite(moved) || moved > edge) continue;
+      await patch(`sync_runs?id=eq.${row.id}`, {
+        finished_at: new Date().toISOString(),
+        ok: false,
+        error: `обход прерван: ${reason}`,
+      });
+      log(`обход #${row.id} висел открытым — закрыт: ${reason}`);
+      closed++;
+    }
+    return closed;
+  } catch (e) {
+    // Не вышло — сайт покажет «Обновляем» до следующего раза, но резидент из-за этого не встаёт.
+    log(`открытые обходы не проверились: ${short(e)}`);
+    return 0;
+  }
+}
+
 // ------------------------------------------------------------------ аккуратное завершение
 let bye = false;
 async function stop(signal) {
@@ -595,6 +642,23 @@ async function stop(signal) {
   bye = true;
   stopping = true;
   log(`${signal}: останавливаюсь${busy() ? ", жду конца текущего обхода" : ""}`);
+  // Обход этого процесса переживёт остановку только строкой в базе — и будет выглядеть идущим.
+  // Закрываем его честно, чтобы кнопка на сайте не врала (владелец, 2026-09-10).
+  if (busy()) {
+    try {
+      const runs = await get("sync_runs?select=id&finished_at=is.null&order=id.desc&limit=5");
+      for (const row of runs) {
+        await patch(`sync_runs?id=eq.${row.id}`, {
+          finished_at: new Date().toISOString(),
+          ok: false,
+          error: `обход прерван: резидент остановлен (${signal})`,
+        });
+        log(`обход #${row.id} помечен прерванным: резидент остановлен`);
+      }
+    } catch (e) {
+      log(`прерванный обход не пометился: ${short(e)}`);
+    }
+  }
   clearInterval(tick);
   clearInterval(polling);
   if (retryTimer) {
@@ -634,6 +698,10 @@ try {
   // когда повтор назначался впервые. Просрочен и пойдёт сразу — тем более: придёт письмо обхода.
   if (due && !stopping) planRetry(due, slotHhmm(new Date(scheduled.started_at)), { fresh: false });
   else log("несделанных повторов нет");
+
+// 4а. Обходы, оставшиеся открытыми от прошлого процесса: их некому закрыть, а сайт по ним
+//     показывает «Обновляем». Проверяем при старте и потом раз в минуту вместе с часами.
+void closeOrphanRuns("резидент был перезапущен");
 } catch (e) {
   const text = String(e?.message ?? e).split("\n")[0];
   log(`повтор не восстановлен: ${text}`);
