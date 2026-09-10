@@ -240,7 +240,7 @@ async function scrollRound(page) {
  * (null — без потолка) обрывает прокрутку ленты, как только набрано столько публикаций.
  * Отдаёт ту же форму, что и TikTok: `{ profile, videos }`; при беде — Error с русским текстом.
  */
-export async function collectInstagramWeb(creator, { depth = "all", bounds = null, browserChoice = "", ctx: shared = null, scope = null, proxy = null, log } = {}) {
+export async function collectInstagramWeb(creator, { depth = "all", bounds = null, browserChoice = "", ctx: shared = null, scope = null, proxy = null, onPage = null, log } = {}) {
   const handle = String(creator?.handle ?? "").replace(/^@/, "");
   if (!handle) throw new Error("у креатора пустой handle");
   const { since, until } = bounds ?? depthBounds(depth);
@@ -396,6 +396,14 @@ export async function collectInstagramWeb(creator, { depth = "all", bounds = nul
       const before = posts.size;
       await scrollRound(page);
       stale = posts.size === before ? stale + 1 : 0;
+      // Прокрутка сделана — двигаем полосу прогресса обхода (`sync.mjs`, миграция v24): у
+      // крупного аккаунта одна лента идёт минутами, и полоса не должна стоять всё это время.
+      // Своих исключений хук не бросает — лента из-за него не встаёт.
+      try {
+        onPage?.(feedPages + 1, posts.size);
+      } catch {
+        // Считать прогресс — дело вызывающего; его беда сбору ленты не мешает.
+      }
     }
     // Тот же порядок, что и до прокрутки: пометка в ответе — приговор только на пустых руках.
     if ((noSession || lostSession) && !gotSomething()) {
@@ -472,7 +480,15 @@ export async function collectInstagramWeb(creator, { depth = "all", bounds = nul
       try {
         await page.goto(`https://www.instagram.com/${handle}/reels/`, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
         await page.waitForTimeout(SETTLE_MS);
-        for (; rounds < REELS_ROUNDS && need().length > 0; rounds++) await scrollRound(page);
+        for (; rounds < REELS_ROUNDS && need().length > 0; rounds++) {
+          await scrollRound(page);
+          // Круги вкладки Reels считаются прокрутками наравне с лентой — в `pages` они и уходят.
+          try {
+            onPage?.(feedPages + rounds + 1, posts.size);
+          } catch {
+            // Беда счётчика прогресса вкладку Reels не роняет.
+          }
+        }
       } catch (e) {
         // Вкладка не открылась — публикации и счётчики уже собраны, теряем только просмотры.
         const text = String(e?.message ?? e).split("\n")[0];

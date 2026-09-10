@@ -72,9 +72,22 @@ export function progressText(runs: SyncRun[]): string {
 
 // Насколько обход близок к концу (миграция v24). Владелец, 2026-09-09: «„6 из 10 креаторов“
 // ничего не говорит: может, прошли шесть самых быстрых» — поэтому доля считается не по головам,
-// а по секундам работы, которые сборщик оценил ДО первого браузера.
-// `etaMin` — сколько минут осталось; null — прогноза нет.
-export type Work = { percent: number; etaMin: number | null };
+// а по секундам работы, которые сборщик оценил до первого браузера и пересчитывает по ходу.
+//
+// 🔴 `rough` — оценка ПРЕДВАРИТЕЛЬНАЯ (владелец, 2026-09-10: «пишет „меньше минуты“, а он идёт
+// уже минут пять»): у кого-то из креаторов в базе нет ни одного видео, и его объём предположен
+// по медиане площадки. При ней `percent` равен null — полосы и процентов не показываем вовсе,
+// потому что доля от выдуманного объёма врёт хуже, чем её отсутствие, — а вместо них идёт
+// «N из M креаторов» и, если известно, «видео 12 из 340».
+// `etaMin` — сколько минут осталось; null — прогноза нет (в том числе всегда при `rough`).
+export type Work = {
+  percent: number | null;
+  etaMin: number | null;
+  rough: boolean;
+  creators: { done: number; total: number };
+  // Видео шага комментариев у тех креаторов, что идут прямо сейчас. null — шага ещё нет.
+  videos: { done: number; total: number } | null;
+};
 
 // Оценки нет вовсе (обход шёл до миграции или объём не оценился) — null, и тогда полосы не
 // рисуем совсем: пустая шкала хуже её отсутствия. Пачка складывается, как и в progressText.
@@ -83,6 +96,12 @@ export function workProgress(runs: SyncRun[]): Work | null {
   let total = 0;
   let done = 0;
   let eta: number | null = null;
+  let rough = false;
+  let creatorsDone = 0;
+  let creatorsTotal = 0;
+  let videosDone = 0;
+  let videosTotal = 0;
+  let anyVideos = false;
   for (const r of runs) {
     if (r.work_total === null || r.work_total <= 0) continue;
     total += r.work_total;
@@ -91,23 +110,54 @@ export function workProgress(runs: SyncRun[]): Work | null {
       const at = new Date(r.eta_at).getTime();
       if (!Number.isNaN(at) && (eta === null || at > eta)) eta = at;
     }
+    creatorsDone += r.creators_done + r.creators_failed;
+    creatorsTotal += r.creators_total ?? 0;
+    for (const e of r.estimate ?? []) {
+      // Пройденный креатор на предварительность не влияет: его работы впереди больше нет.
+      if (e.rough === true && e.done !== true) rough = true;
+      // Шаг комментариев идущего креатора: сколько его видео уже снято из скольких.
+      if (e.done !== true && (e.commentVideos ?? 0) > 0 && (e.commentVideosDone ?? 0) > 0) {
+        videosDone += e.commentVideosDone ?? 0;
+        videosTotal += e.commentVideos ?? 0;
+        anyVideos = true;
+      }
+    }
   }
   if (total <= 0) return null;
-  const percent = Math.max(0, Math.min(100, Math.round((done / total) * 100)));
   const left = eta === null ? null : Math.max(0, Math.round((eta - Date.now()) / 60_000));
-  return { percent, etaMin: left };
+  return {
+    // Объём ещё предположен — доли нет вовсе: она считалась бы от выдуманного числа.
+    percent: rough ? null : Math.max(0, Math.min(100, Math.round((done / total) * 100))),
+    etaMin: rough ? null : left,
+    rough,
+    creators: { done: Math.min(creatorsDone, creatorsTotal), total: creatorsTotal },
+    videos: anyVideos ? { done: videosDone, total: videosTotal } : null,
+  };
 }
 
-// Подпись под полосой: «42 % · ещё ≈ 12 мин». Прогноза нет или он меньше минуты — остаётся
-// доля и слова «меньше минуты».
+// Подпись под полосой: «42 % · ещё ≈ 12 мин · видео 12 из 340». Прогноза нет или он меньше
+// минуты — остаётся доля и слова «меньше минуты».
+// 🔴 Пока объём предварителен, времени в подписи нет вовсе: вместо него «объём уточняется» и
+// «N из M креаторов» — то единственное, что мы про обход и правда знаем.
 export function workText(work: Work): string {
+  const videos =
+    work.videos === null
+      ? ""
+      : ` · ${tr("sync.videosOf", { done: work.videos.done, total: work.videos.total })}`;
+  if (work.percent === null) {
+    const creators =
+      work.creators.total > 0
+        ? ` · ${tr("sync.roughCreators", { done: work.creators.done, total: work.creators.total })}`
+        : "";
+    return tr("sync.roughVolume") + creators + videos;
+  }
   const tail =
     work.etaMin === null
       ? ""
       : work.etaMin < 1
         ? ` · ${tr("sync.etaSoon")}`
         : ` · ${tr("sync.eta", { min: work.etaMin })}`;
-  return tr("sync.percent", { percent: work.percent }) + tail;
+  return tr("sync.percent", { percent: work.percent }) + tail + videos;
 }
 
 // Во что обход оценили — строка для администратора: «оценка: список 6 мин, комментарии 20 мин».

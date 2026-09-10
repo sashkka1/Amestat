@@ -774,22 +774,27 @@ export function SyncButton({
         {statusNode}
         {/* Полоса 0–100 %: тонкая, без рамки и подписей по краям — она рядом со строкой
             состояния, и вторая строка чисел была бы шумом. Ширина в процентах, цвет — тот же
-            `--chart-1`, которым на страницах рисуются графики. */}
+            `--chart-1`, которым на страницах рисуются графики.
+            🔴 Пока объём предварителен (`work.percent === null`), полосы нет вовсе (владелец,
+            2026-09-10): доля от предположенного объёма обманывает, и вместо неё остаётся одна
+            строка словами — «объём уточняется · 2 из 7 креаторов». */}
         {work !== null && (
           <div className="flex flex-col gap-1">
-            <div
-              className="h-1 w-full overflow-hidden rounded-full bg-muted"
-              role="progressbar"
-              aria-valuenow={work.percent}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-label={t("sync.workAria", { percent: work.percent })}
-            >
+            {work.percent !== null && (
               <div
-                className="h-full rounded-full transition-[width] duration-500"
-                style={{ width: `${work.percent}%`, backgroundColor: "var(--chart-1)" }}
-              />
-            </div>
+                className="h-1 w-full overflow-hidden rounded-full bg-muted"
+                role="progressbar"
+                aria-valuenow={work.percent}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label={t("sync.workAria", { percent: work.percent })}
+              >
+                <div
+                  className="h-full rounded-full transition-[width] duration-500"
+                  style={{ width: `${work.percent}%`, backgroundColor: "var(--chart-1)" }}
+                />
+              </div>
+            )}
             <span className="text-xs leading-tight text-muted-foreground">{workText(work)}</span>
             {/* Разбивка оценки — администратору: по ней видно, на что уйдёт время. */}
             {estimate !== null && (

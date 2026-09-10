@@ -4,8 +4,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  ASSUMED_VIDEOS,
   DEFAULT_TIMING,
   PER_SCROLL,
+  assumedVideos,
   calibrateComments,
   calibrateList,
   commentCandidate,
@@ -15,8 +17,13 @@ import {
   etaSeconds,
   foldEma,
   listScrolls,
+  livePrices,
+  medianOf,
   normalizeTiming,
+  paceFrom,
   percentDone,
+  remainingSeconds,
+  reviseAfterList,
 } from "./estimate.mjs";
 
 // --- калибровка: приведение и среднее ------------------------------------------------------
@@ -266,10 +273,51 @@ test("охват «только наши» листает до самого ст
   assert.equal(est.byCreator[0].list, 60 + 3 * 6);
 });
 
-test("креатора нет в базе ни одним видео — всё равно одна прокрутка, а не ноль работы", () => {
+// --- предварительная оценка: креатор, о котором база не знает ничего -------------------------
+
+test("медиана площадки: незнакомый креатор считается по известным, а не в ноль", () => {
+  assert.equal(assumedVideos("tiktok", [10, 40, 400]), 40);
+  assert.equal(assumedVideos("tiktok", []), ASSUMED_VIDEOS.tiktok, "известных нет — константа");
+  assert.equal(assumedVideos("instagram", []), ASSUMED_VIDEOS.instagram);
+  assert.equal(assumedVideos("тьма", []), ASSUMED_VIDEOS.tiktok, "чужая площадка — TikTok");
+});
+
+test("креатора нет в базе ни одним видео — оценка предварительная и по медиане, а не 0", () => {
   const est = estimateRun([creators[0]], [], new Map(), { depth: "all", now: NOW }, T);
-  assert.equal(est.byCreator[0].list, 66);
-  assert.equal(est.total, 66);
+  const one = est.byCreator[0];
+  assert.equal(est.rough, true, "весь обход помечен предварительным");
+  assert.equal(one.rough, true);
+  // Известных креаторов нет — 100 видео константой: 5 прокруток, 100 видео комментариев.
+  assert.equal(one.list, 60 + 5 * 6);
+  assert.equal(one.commentVideos, 100);
+  assert.equal(one.comments, 100 * 25);
+  assert.equal(one.replies, 100 * 40);
+});
+
+test("новый креатор берёт медиану ЗНАКОМЫХ той же площадки, а не константу", () => {
+  const known = [
+    { id: "c1", handle: "tt", platform: "tiktok" },
+    { id: "c9", handle: "new", platform: "tiktok" },
+  ];
+  const rows = Array.from({ length: 40 }, (_, i) => ({
+    creator_id: "c1", id: `v${i}`, published_at: new Date(NOW - i * DAY).toISOString(), ours: true, watch: false,
+  }));
+  const est = estimateRun(known, rows, new Map(), { depth: "all", comments: false, now: NOW }, T);
+  // У знакомого 40 видео → медиана площадки 40 → две прокрутки у новичка.
+  assert.equal(est.byCreator[1].list, 60 + 2 * 6);
+  assert.equal(est.byCreator[1].rough, true);
+  assert.equal(est.byCreator[0].rough, false, "знакомый считается по базе, как и раньше");
+});
+
+test("охват «только наши»: у новичка отслеживаемых нет — одна страница, а не медиана", () => {
+  const est = estimateRun([creators[0]], [], new Map(), { depth: "all", videos: "ours", now: NOW }, T);
+  assert.equal(est.byCreator[0].list, 66, "листать не за чем — берём первую страницу");
+  assert.equal(est.byCreator[0].commentVideos, 20, "но её двадцать видео пойдут на комментарии");
+});
+
+test("вся оценка предварительна, пока предварителен хоть один креатор", () => {
+  const est = estimateRun(creators, videos, counts, { depth: "all", now: NOW }, T);
+  assert.equal(est.rough, false, "оба креатора известны базе");
 });
 
 // --- прогноз и доля ---------------------------------------------------------------------------
@@ -290,6 +338,101 @@ test("пока полоса прошла меньше десятой части,
 test("сделанного больше оценки — прогноз ноль, а не отрицательное число", () => {
   assert.equal(etaSeconds([{ total: 100, done: 150, elapsedMs: 10_000 }]), 0);
   assert.equal(etaSeconds([]), 0);
+});
+
+// --- фактический темп обхода ------------------------------------------------------------------
+
+test("медиана берётся из середины, а мусор и ноль в счёт не идут", () => {
+  assert.equal(medianOf([3, 1, 2]), 2);
+  assert.equal(medianOf([1, 2, 3, 4]), 2.5, "чётное число замеров — среднее двух средних");
+  assert.equal(medianOf([5, 0, -2, "нет", 7, 6]), 6);
+  assert.equal(medianOf([]), null);
+  assert.equal(medianOf(null), null);
+});
+
+test("выброс двигает среднее, но не медиану — ради этого она и взята", () => {
+  assert.equal(medianOf([20, 22, 21, 600]), 21.5);
+});
+
+test("пока замеров меньше трёх, темп берётся из калибровки", () => {
+  assert.equal(paceFrom([40, 44], 25), 25, "двух мало");
+  assert.equal(paceFrom([40, 44, 42], 25), 42, "третий замер — верим обходу, а не файлу");
+  assert.equal(paceFrom([], 25), 25);
+  assert.equal(paceFrom([40, 44, 42], 25, 5), 25, "порог можно поднять");
+});
+
+test("живые цены заменяют калибровку по вёдрам, а нетронутое ведро остаётся прежним", () => {
+  const t = { "comments.video": 25, "replies.video": 40, "page.tiktok": 6, "comments.direct": 2, "replies.direct": 3 };
+  const live = livePrices(t, { scroll: [10, 12, 14], browser: [130, 130, 130] }, { platform: "tiktok" });
+  assert.equal(live["page.tiktok"], 12, "медиана прокруток");
+  // 130 с на видео при предсказанных 65 — множитель 2, пропорция «видео : ветки» сохранена.
+  assert.equal(Math.round(live["comments.video"]), 50);
+  assert.equal(Math.round(live["replies.video"]), 80);
+  assert.equal(live["comments.direct"], DEFAULT_TIMING["comments.direct"], "прямой путь не замерялся");
+});
+
+test("ветки не раскрывались — замер видео это чистая цена видео", () => {
+  const live = livePrices({ "comments.direct": 2, "replies.direct": 3 }, { direct: [9, 10, 11] }, { replies: false });
+  assert.equal(live["comments.direct"], 10);
+  assert.equal(live["replies.direct"], DEFAULT_TIMING["replies.direct"], "цена веток неизвестна");
+});
+
+test("прямой путь и браузерный калибруются порознь и не тянут друг друга", () => {
+  const live = livePrices(DEFAULT_TIMING, { direct: [1, 1, 1], browser: [200, 200, 200] });
+  assert.ok(live["comments.direct"] < 2, "прямой стал дешевле");
+  assert.ok(live["comments.video"] > 25, "браузерный — дороже");
+});
+
+// --- пересчёт по факту -------------------------------------------------------------------------
+
+test("пересчёт после списка: предположение заменяется фактом и метка «предварительно» снимается", () => {
+  const before = { handle: "a", list: 90, comments: 2500, replies: 4000, total: 6590, done: false, rough: true };
+  const after = reviseAfterList(before, {
+    platform: "tiktok", listSeconds: 300, commentVideos: 12, comments: true, replies: true,
+  }, T);
+  assert.equal(after.list, 300, "список стоил ровно столько, сколько шёл");
+  assert.equal(after.comments, 12 * 25);
+  assert.equal(after.replies, 12 * 40);
+  assert.equal(after.total, 300 + 300 + 480);
+  assert.equal(after.commentVideos, 12);
+  assert.equal(after.rough, false);
+  assert.equal(after.handle, "a", "остальные поля строки на месте");
+});
+
+test("второй пересчёт (в начале комментариев) списка не трогает", () => {
+  const first = reviseAfterList({ list: 90, rough: true }, { platform: "tiktok", listSeconds: 240, commentVideos: 12 }, T);
+  const second = reviseAfterList(first, { platform: "tiktok", commentVideos: 3 }, T);
+  assert.equal(second.list, 240, "длительность списка не пересчитывается второй раз");
+  assert.equal(second.comments, 3 * 25);
+  assert.equal(second.total, 240 + 75 + 120);
+});
+
+test("пересчёт считает по ЖИВЫМ ценам, если их передали", () => {
+  const live = livePrices(T, { browser: [130, 130, 130] }, { platform: "tiktok" });
+  const after = reviseAfterList({ list: 0 }, { platform: "tiktok", listSeconds: 100, commentVideos: 10 }, live);
+  assert.equal(Math.round(after.comments + after.replies), 1300, "10 видео по фактическим 130 с");
+});
+
+test("комментарии выключены — пересчёт оставляет один список", () => {
+  const after = reviseAfterList({}, { platform: "tiktok", listSeconds: 50, commentVideos: 9, comments: false }, T);
+  assert.equal(after.total, 50);
+  assert.equal(after.commentVideos, 0);
+});
+
+// --- остаток -----------------------------------------------------------------------------------
+
+test("есть замеры — остаток берётся как есть, скорость полосы больше не гадается", () => {
+  // Полоса прошла всего 5 из 100, но цены уже живые: остаток 95 с, а не 95×20.
+  assert.equal(remainingSeconds([{ total: 100, done: 5, elapsedMs: 100_000, measured: true }]), 95);
+  assert.equal(remainingSeconds([{ total: 100, done: 5, elapsedMs: 100_000 }]), 95, "порог десятой части");
+});
+
+test("остаток по полосам: замерянная и незамерянная считаются каждая по-своему", () => {
+  const left = remainingSeconds([
+    { total: 100, done: 50, elapsedMs: 100_000 },                  // без замеров: 50×2 = 100
+    { total: 400, done: 100, elapsedMs: 10_000, measured: true },  // с замерами: 300 как есть
+  ]);
+  assert.equal(left, 300, "итог — самая долгая полоса");
 });
 
 test("доля: 0–100, а без оценки — null", () => {

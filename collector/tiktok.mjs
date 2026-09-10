@@ -46,7 +46,7 @@ const publishedAt = (v) => (v.createTime ? new Date(Number(v.createTime) * 1000)
  * `depth` нужен только на слово в строке лога («за неделю» / «за месяц» / «за период»).
  * `scope` — охват: `{ videos: 'all'|'ours', trackedIds, maxPages }`.
  */
-async function attempt(handle, { browserChoice, log, since = null, until = null, depth = "all", scope = null, proxy = null, directProfile = null }) {
+async function attempt(handle, { browserChoice, log, since = null, until = null, depth = "all", scope = null, proxy = null, directProfile = null, onPage = null }) {
   const mode = scope?.videos === "ours" ? "ours" : "all";
   const trackedIds = mode === "ours" ? scope?.trackedIds ?? [] : [];
   const rounds = listRounds(mode, scope?.maxPages, SCROLL_ROUNDS);
@@ -146,6 +146,14 @@ async function attempt(handle, { browserChoice, log, since = null, until = null,
       }
       await page.waitForTimeout(1000);
       stale = seen.size === before ? stale + 1 : 0;
+      // Прокрутка сделана — двигаем полосу прогресса обхода (`sync.mjs`, миграция v24): у
+      // крупного аккаунта один этот цикл идёт минутами, и полоса не должна стоять всё это время.
+      // Своих исключений хук не бросает — список из-за него не встаёт.
+      try {
+        onPage?.(pages + 1, seen.size);
+      } catch {
+        // Считать прогресс — дело вызывающего; его беда сбору списка не мешает.
+      }
     }
 
     const stopAfter = await page.evaluate((re) => new RegExp(re, "i").test(document.body.innerText), STOP_SCREEN.source);
@@ -216,7 +224,7 @@ async function attempt(handle, { browserChoice, log, since = null, until = null,
  * не больше двух адресов на креатора, чтобы один недоступный креатор не сжёг весь пул.
  * Отдаёт `{ profile, videos }`; при беде бросает Error с русским текстом.
  */
-export async function collectTikTok(creator, { browserChoice = "", depth = "all", bounds = null, scope = null, pool = null, direct = false, log } = {}) {
+export async function collectTikTok(creator, { browserChoice = "", depth = "all", bounds = null, scope = null, pool = null, direct = false, onPage = null, log } = {}) {
   const handle = String(creator.handle || "").replace(/^@/, "");
   if (!handle) throw new Error("у креатора пустой handle");
   const { since, until } = bounds ?? depthBounds(depth);
@@ -253,7 +261,7 @@ export async function collectTikTok(creator, { browserChoice = "", depth = "all"
 
     let res = null;
     try {
-      res = await attempt(handle, { browserChoice, log, since, until, depth, scope, proxy: address, directProfile });
+      res = await attempt(handle, { browserChoice, log, since, until, depth, scope, proxy: address, directProfile, onPage });
     } catch (e) {
       const text = String(e?.message ?? e).split("\n")[0];
       // Адрес не отозвался (прокси лежит, не пустил, оборвал) — это беда адреса, а не площадки:

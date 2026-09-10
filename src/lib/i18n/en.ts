@@ -543,6 +543,11 @@ export const en = {
     workAria: "{percent}% done",
     minutes: "{n} min",
     estimateLine: "estimate: list {list}, comments {comments}",
+    // Оценка ещё предварительная: у кого-то из креаторов в базе нет ни одного видео, и объём
+    // взят по медиане площадки. Времени в минутах при ней не пишем вовсе — оно бы врало.
+    roughVolume: "measuring the volume…",
+    roughCreators: "{done} of {total} creators",
+    videosOf: "videos {done} of {total}",
     retryTail: "(retry)",
     noCommentsTail: "no comments",
     errorTail: "error",
