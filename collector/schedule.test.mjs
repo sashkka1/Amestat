@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   slotsOf, nextSlot, missedSlot, retryDue, SLOT_HOURS, DEFAULT_SLOTS, parseSlots,
-  slotAlreadyCovered, addressProtectionHandles, manualRetryAt, retryStillNeeded, zoneOf,
+  slotAlreadyCovered, coveredRecently, addressProtectionHandles, manualRetryAt, retryStillNeeded, zoneOf,
   firstRunAt,
 } from "./schedule.mjs";
 
@@ -293,4 +293,30 @@ test("неудача старше суток не восстанавливает
   assert.equal(retryDue(at(2026, 9, 8, 9, 0), bad, null, HOUR), null);
   // Ровно на границе суток ещё восстанавливаем: компьютер мог проспать почти день.
   assert.equal(hm(retryDue(at(2026, 9, 2, 13, 0), bad, null, HOUR)), "1 14:12");
+});
+
+// --- Свежесть обхода для слота (владелец, 2026-09-10) ---
+
+test("слот: обход четыре часа назад — не свежий, слот пойдёт", () => {
+  const now = new Date("2026-09-10T17:00:00+03:00");
+  const runs = [{ scope: "all", finished_at: "2026-09-10T13:00:00+03:00" }];
+  assert.equal(coveredRecently(now, runs, 3 * 3_600_000), null);
+});
+
+test("слот: обход два часа назад — свежий, слот пропускается", () => {
+  const now = new Date("2026-09-10T17:00:00+03:00");
+  const runs = [{ scope: "all", finished_at: "2026-09-10T15:00:00+03:00" }];
+  const c = coveredRecently(now, runs, 3 * 3_600_000);
+  assert.ok(c instanceof Date);
+});
+
+test("слот: обход одного креатора свежесть не даёт", () => {
+  const now = new Date("2026-09-10T17:00:00+03:00");
+  const runs = [{ scope: "c1", finished_at: "2026-09-10T16:30:00+03:00" }];
+  assert.equal(coveredRecently(now, runs, 3 * 3_600_000), null);
+});
+
+test("слот: незавершённый обход свежести не даёт", () => {
+  const now = new Date("2026-09-10T17:00:00+03:00");
+  assert.equal(coveredRecently(now, [{ scope: "all", finished_at: null }], 3 * 3_600_000), null);
 });

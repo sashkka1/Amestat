@@ -212,6 +212,31 @@ export function slotAlreadyCovered(now, runs, tz = null) {
   return latest;
 }
 
+/**
+ * Свежий ли обход по всем креаторам — то есть был ли он не раньше, чем `freshMs` назад.
+ * Отдаёт момент его конца или null.
+ *
+ * ⚠️ Зачем отдельно от `slotAlreadyCovered` (владелец, 2026-09-10: «правило должно быть умным:
+ * обновил утром или в час дня — вечерний слот пусть отработает; обновил в три-четыре — уже не
+ * нужно»). «Сегодня уже обходили» слишком грубо для слота: утренний заход закрывал собой
+ * вечерний, и данные за день оставались утренними. Первому обходу дня прежнее правило подходит
+ * (он раз в сутки), а слот смотрит именно на свежесть.
+ *
+ * `runs` — строки `sync_runs` `{ scope, finished_at }` (порядок любой). Чистая функция.
+ */
+export function coveredRecently(now, runs, freshMs = 3 * 60 * 60_000) {
+  const edge = now.getTime() - freshMs;
+  let latest = null;
+  for (const row of runs ?? []) {
+    if (row?.scope !== "all" || !row?.finished_at) continue;
+    const finished = new Date(row.finished_at);
+    if (Number.isNaN(finished.getTime())) continue;
+    if (finished.getTime() < edge || finished > now) continue;
+    if (!latest || finished > latest) latest = finished;
+  }
+  return latest;
+}
+
 /** Дата из строки базы или Date; мусор и пустота → null. */
 function asDate(value) {
   if (!value) return null;

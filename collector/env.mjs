@@ -85,6 +85,13 @@ export function loadEnv() {
   // 🔴 'range' слоту НЕ разрешается: расписание идёт каждый день, а период — это срез за
   // конкретные числа, и завтра он был бы тем же самым. Написали — опускаем до 'all' и говорим
   // об этом строкой в лог резидента (`slotDepthNote`), а не молча.
+  // Насколько «свежим» считается прошлый обход по всем: слот пропускается, только если такой
+  // обход был не раньше этого срока (владелец, 2026-09-10: «утром обновил — вечерний слот
+  // пусть отработает; в три-четыре — уже не нужно»). Пусто/мусор — 3 часа.
+  const freshText = (raw.AMESTAT_SLOT_FRESH_HOURS || "").trim();
+  const freshRaw = freshText === "" ? NaN : Number(freshText);
+  const slotFreshMs = Number.isFinite(freshRaw) && freshRaw >= 0 ? freshRaw * 3_600_000 : 3 * 3_600_000;
+
   const slotDepthRaw = (raw.AMESTAT_SLOT_DEPTH || "").trim().toLowerCase();
   const slotDepthOk = ["all", "week", "month"].includes(slotDepthRaw);
   const slotDepth = slotDepthOk ? slotDepthRaw : "all";
@@ -208,6 +215,7 @@ export function loadEnv() {
     // Зона слотов: имя IANA или null («зона машины»).
     slotTz,
     slotTzNote,
+    slotFreshMs,
     slotDepth,
     slotDepthNote,
     ttLaunchLimit,

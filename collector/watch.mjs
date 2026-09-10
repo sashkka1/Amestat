@@ -9,10 +9,11 @@
 //   2. Слот расписания — 16:00 по варшавскому времени (`schedule`; часы задаются `AMESTAT_SLOTS`,
 //      глубина — `AMESTAT_SLOT_DEPTH`, по умолчанию «всё»: владелец, 2026-09-09 — «в ежедневном
 //      обновлении пусть всё обновляется»).
-//      ⚠️ Слот идёт ВСЕГДА: обновлений в сутки ровно два — утреннее от старта и вечернее по
-//      часам (владелец, 2026-09-10). Правило «сегодня уже обходили всех» осталось только у
-//      первого обхода дня: иначе утренний заход закрывал бы собой вечерний слот и данные за
-//      день оставались бы утренними.
+//      ⚠️ Слот пропускается, только если обход по всем был НЕДАВНО — за последние
+//      `AMESTAT_SLOT_FRESH_HOURS` часов (пусто — 3). Владелец, 2026-09-10: «обновил утром или
+//      в час дня — вечерний слот пусть отработает; обновил в три-четыре — уже не нужно».
+//      У первого обхода дня правило другое и грубее: «сегодня уже обходили всех» — он и должен
+//      быть один на сутки, сколько бы раз компьютер ни включали.
 //   3. Кнопка «Обновить» на сайте — строка в `sync_requests` (`manual`). Слышим её через
 //      Realtime, а раз в минуту ещё и спрашиваем базу сами: подписка умеет тихо отвалиться,
 //      и тогда просьба владельца висела бы до перезапуска.
@@ -75,7 +76,7 @@ import { get, patch } from "./db.mjs";
 import { runSync, busy } from "./sync.mjs";
 import {
   nextSlot, retryDue, firstRunAt,
-  slotAlreadyCovered, addressProtectionHandles, manualRetryAt, retryStillNeeded,
+  slotAlreadyCovered, coveredRecently, addressProtectionHandles, manualRetryAt, retryStillNeeded,
 } from "./schedule.mjs";
 import { logSystem } from "./synclog.mjs";
 import { groupRequests } from "./requests.mjs";
@@ -307,10 +308,12 @@ async function runRetry(slotLabel, { handles = [], videos = "all", maxVideos = n
  * или null. База не ответила — считаем, что не было: пропустить слот из-за молчания базы
  * значит потерять сегодняшний срез, а лишний обход всего лишь стоит времени.
  */
-async function coveredToday(now = new Date()) {
+async function coveredToday(now = new Date(), { fresh = false } = {}) {
   try {
     const runs = await get("sync_runs?select=scope,finished_at&scope=eq.all&finished_at=not.is.null&order=finished_at.desc&limit=10");
-    return slotAlreadyCovered(now, runs, env.slotTz);
+    // Слоту важна свежесть (обход за последние `AMESTAT_SLOT_FRESH_HOURS` часов), первому
+    // обходу дня — сам факт «сегодня уже обходили».
+    return fresh ? coveredRecently(now, runs, env.slotFreshMs) : slotAlreadyCovered(now, runs, env.slotTz);
   } catch (e) {
     const text = String(e?.message ?? e).split("\n")[0];
     log(`не спросилось, был ли сегодня обход по всем: ${text}`);
@@ -334,14 +337,17 @@ async function runScheduled(trigger, slot) {
   // обход закрывал собой вечерний слот, и данные за день оставались утренними.
   // ⚠️ Время прошлого обхода печатается по местным часам, а слот — в своей зоне: иначе в
   // одном предложении стояли бы два разных времени про один момент.
-  if (trigger === "catchup") {
-    const covered = await coveredToday();
-    if (covered) {
-      const text = `первое обновление дня пропущено: сегодня уже был обход по всем в ${hhmm(covered)}`;
-      log(text);
-      void logSystem(text, { level: "info" });
-      return { ok: true, skipped: true, done: 0, failed: 0, runId: null };
-    }
+  const fresh = trigger !== "catchup";
+  const covered = await coveredToday(new Date(), { fresh });
+  if (covered) {
+    const what = fresh ? `слот ${label}` : "первое обновление дня";
+    const why = fresh
+      ? `обход по всем был недавно, в ${hhmm(covered)}`
+      : `сегодня уже был обход по всем в ${hhmm(covered)}`;
+    const text = `${what} пропущен: ${why}`;
+    log(text);
+    void logSystem(text, { level: "info" });
+    return { ok: true, skipped: true, done: 0, failed: 0, runId: null };
   }
   const res = await launch({ trigger, depth: env.slotDepth, comments: true, replies: true });
   if (!res.ok && !stopping) planRetry(new Date(Date.now() + env.retryMs), label, { fresh: true });
