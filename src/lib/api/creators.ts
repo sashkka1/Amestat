@@ -2,7 +2,7 @@ import { createClient } from "@/lib/supabase/client";
 import { parseHandle } from "@/lib/handle";
 import { tr } from "@/lib/i18n";
 import type { Platform } from "@/lib/types";
-import { fail, UNIQUE_VIOLATION, type ActionResult } from "./result";
+import { fail, isRaised, UNIQUE_VIOLATION, type ActionResult } from "./result";
 
 export async function createCreator(input: {
   raw: string;
@@ -90,6 +90,22 @@ export async function deleteCreator(id: string): Promise<ActionResult> {
 
   const { error } = await supabase.from("creators").delete().eq("id", id);
   if (error) return fail(tr("api.creatorDeleteFailed", { message: error.message }));
+  return { ok: true, data: undefined };
+}
+
+// Вернуть креатора из архива (миграция v25). Всё делает база одной функцией: проверяет
+// права админа, следит, что двойника с той же парой (площадка, ник) нет, поднимает карточку
+// и привязки менеджеров, гасит строку архива.
+//
+// ⚠️ Возвращается только карточка: видео, снимки и комментарии ушли каскадом при удалении,
+// их соберёт ближайший обход. Картинки в бакете тоже удалены (см. deleteCreator) — аватар
+// вернётся из архивной ссылки или обновится обходом.
+export async function restoreCreator(id: string): Promise<ActionResult> {
+  const { error } = await createClient().rpc("restore_creator", { p_id: id });
+  if (error) {
+    // Свой текст базы («уже заведён», «только администратор») показываем как есть.
+    return fail(isRaised(error) ? error.message : tr("api.creatorRestoreFailed", { message: error.message }));
+  }
   return { ok: true, data: undefined };
 }
 

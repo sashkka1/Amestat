@@ -486,6 +486,11 @@ export const ptBR: Dict = {
     deletedBy: "Excluído por",
     noManagers: "com ninguém",
     unknown: "desconhecido",
+    restore: "Restaurar",
+    restoreConfirm:
+      "Restaurar @{handle}? O cadastro e os gerentes voltam; vídeos, capturas e comentários não — a próxima coleta os junta de novo.",
+    restoring: "Restaurando…",
+    restored: "@{handle} restaurado, os dados chegam na próxima coleta",
   },
 
   connected: {
@@ -628,6 +633,7 @@ export const ptBR: Dict = {
     creatorAvatarFailed: "Não foi possível salvar a imagem: {message}",
     creatorSaveFailed: "Não foi possível salvar: {message}",
     creatorDeleteFailed: "Não foi possível excluir: {message}",
+    creatorRestoreFailed: "Não foi possível restaurar: {message}",
     creatorTagFailed: "A tag não foi salva: {message}",
     tagEmptyName: "O nome da tag está vazio",
     tagBadColor: "A cor deve ser no formato #RRGGBB",

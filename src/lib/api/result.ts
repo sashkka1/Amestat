@@ -8,3 +8,11 @@ export function fail(error: string): ActionResult<never> {
 }
 
 export const UNIQUE_VIOLATION = "23505";
+
+// Коды, которыми база бросает СВОИ сообщения (`raise exception` в миграциях): текст там
+// уже написан для человека, и заворачивать его во второе «Не удалось…» незачем.
+const RAISED = new Set(["P0001", "42501"]);
+
+export function isRaised(error: { code?: string } | null): boolean {
+  return error?.code !== undefined && RAISED.has(error.code);
+}

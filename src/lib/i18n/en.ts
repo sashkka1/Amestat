@@ -493,6 +493,11 @@ export const en = {
     deletedBy: "Deleted by",
     noManagers: "nobody",
     unknown: "unknown",
+    restore: "Restore",
+    restoreConfirm:
+      "Restore @{handle}? The card and its managers come back; videos, snapshots and comments do not — the next run collects them again.",
+    restoring: "Restoring…",
+    restored: "@{handle} restored, the data arrives with the next run",
   },
 
   connected: {
@@ -635,6 +640,7 @@ export const en = {
     creatorAvatarFailed: "Could not save the picture: {message}",
     creatorSaveFailed: "Could not save: {message}",
     creatorDeleteFailed: "Could not delete: {message}",
+    creatorRestoreFailed: "Could not restore: {message}",
     creatorTagFailed: "The tag was not saved: {message}",
     tagEmptyName: "The tag name is empty",
     tagBadColor: "The colour must look like #RRGGBB",

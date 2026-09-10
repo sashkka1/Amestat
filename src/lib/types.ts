@@ -489,6 +489,12 @@ export type Database = {
         };
         Returns: VideoWithLatest[];
       };
+      // Вернуть креатора из архива (миграция v25): карточка и привязки менеджеров.
+      // Видео и снимки не восстанавливаются — их соберёт ближайший обход.
+      restore_creator: {
+        Args: { p_id: string };
+        Returns: string;
+      };
       // Пароль менеджеру ставит админ, старого не видя (миграция v3).
       admin_set_password: {
         Args: { p_user: string; p_password: string };
