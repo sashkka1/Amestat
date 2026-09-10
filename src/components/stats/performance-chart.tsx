@@ -12,7 +12,7 @@ import {
   YAxis,
 } from "recharts";
 import { Panel, PanelHead, Empty } from "./panel";
-import { fmtCompact, fmtDayAxis, fmtNum } from "@/lib/format";
+import { fmtBucketFull, fmtCompact, fmtDayAxis, fmtNum } from "@/lib/format";
 import { useT, type TKey } from "@/lib/i18n";
 import { toDateInputValue, type PeriodRange } from "@/lib/period";
 import { creatorDailyViews } from "@/lib/queries";
@@ -326,7 +326,7 @@ export function PerformanceChart({
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
               <XAxis
                 dataKey="day"
-                tickFormatter={fmtDayAxis}
+                tickFormatter={(v: string) => (serverBucket === "month" ? fmtBucketFull(v, "month") : fmtDayAxis(v))}
                 tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
                 tickLine={false}
                 axisLine={false}
@@ -341,7 +341,7 @@ export function PerformanceChart({
               />
               <Tooltip
                 cursor={{ stroke: "var(--border)" }}
-                content={(props) => <DayTip {...props} colors={colorByKey} />}
+                content={(props) => <DayTip {...props} colors={colorByKey} bucket={bucket === "week" ? "week" : serverBucket} />}
               />
               {/* Счётчики складываются в стопку — вместе они и есть «вся динамика»; линии
                   креаторов сравниваются друг с другом, и складывать их нельзя. */}
@@ -401,6 +401,7 @@ function DayTip({
   payload,
   label,
   colors,
+  bucket = "day",
 }: {
   active?: boolean;
   // Recharts отдаёт список только для чтения — тип обязан это повторить, иначе элемент
@@ -408,11 +409,12 @@ function DayTip({
   payload?: readonly TipPayload[];
   label?: unknown;
   colors: Record<string, string>;
+  bucket?: "day" | "week" | "month";
 }) {
   if (!active || !payload || payload.length === 0) return null;
   return (
     <div className="rounded-[10px] border bg-popover px-2.5 py-2 text-xs text-popover-foreground shadow-md">
-      <p className="mb-1 font-medium">{fmtDayAxis(String(label ?? ""))}</p>
+      <p className="mb-1 font-medium">{fmtBucketFull(String(label ?? ""), bucket)}</p>
       <ul className="space-y-0.5">
         {payload.map((e, i) => (
           <li key={String(e.dataKey ?? i)} className="flex items-center gap-2">

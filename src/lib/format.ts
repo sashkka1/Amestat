@@ -69,6 +69,34 @@ function months(): string[] {
 // «12 Aug» — подпись оси и даты в карточках. Дата вида `2026-09-08` (день из базы) читается
 // как МЕСТНАЯ полночь, а не как UTC: иначе день на оси уезжал бы на сутки назад западнее
 // Гринвича.
+// Полная расшифровка точки графика: день, неделя или месяц — так, чтобы при наведении было
+// видно, за что именно число (владелец, 2026-09-10: «за всё время не понимаю, за какую дату»).
+// Неделя печатается отрезком, месяц — названием с годом; год у дня добавляется, если он не
+// нынешний.
+export function fmtBucketFull(iso: string, bucket: "day" | "week" | "month" = "day"): string {
+  const d = new Date(iso.length === 10 ? `${iso}T00:00:00` : iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const loc = locale();
+  if (bucket === "month") {
+    return d.toLocaleDateString(loc, { month: "long", year: "numeric" });
+  }
+  if (bucket === "week") {
+    const end = new Date(d.getTime() + 6 * 86_400_000);
+    const sameMonth = d.getMonth() === end.getMonth() && d.getFullYear() === end.getFullYear();
+    const left = sameMonth
+      ? String(d.getDate())
+      : d.toLocaleDateString(loc, { day: "numeric", month: "short" });
+    const right = end.toLocaleDateString(loc, { day: "numeric", month: "short", year: "numeric" });
+    return `${left} – ${right}`;
+  }
+  const thisYear = new Date().getFullYear();
+  return d.toLocaleDateString(loc, {
+    day: "numeric",
+    month: "long",
+    ...(d.getFullYear() === thisYear ? {} : { year: "numeric" }),
+  });
+}
+
 export function fmtDayAxis(iso: string): string {
   const d = new Date(iso.length === 10 ? `${iso}T00:00:00` : iso);
   if (Number.isNaN(d.getTime())) return iso;
