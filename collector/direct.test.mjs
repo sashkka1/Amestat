@@ -4,8 +4,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseComments, parseReplies, parseProfileHtml } from "./direct.mjs";
-import { commentKeys, calibrateComments, estimateCreator, DEFAULT_TIMING, normalizeTiming } from "./estimate.mjs";
+import { DIRECT_PAGE, parseComments, parseReplies, parseProfileHtml } from "./direct.mjs";
+import { COMMENTS_PAGE, commentKeys, calibrateComments, estimateCreator, DEFAULT_TIMING, normalizeTiming } from "./estimate.mjs";
 
 // --- `/api/comment/list/` ------------------------------------------------------------------
 
@@ -187,54 +187,62 @@ test("parseProfileHtml: испорченный JSON внутри скрипта 
 
 // --- Единицы калибровки прямого пути (`estimate.mjs`) --------------------------------------
 
-test("commentKeys: прямой путь считается своей парой единиц", () => {
-  assert.deepEqual(commentKeys(true), { video: "comments.direct", replies: "replies.direct" });
-  assert.deepEqual(commentKeys(false), { video: "comments.video", replies: "replies.video" });
+test("commentKeys: у каждого пути своя пара единиц — страница и ветка", () => {
+  assert.deepEqual(commentKeys(true), { page: "comments.page.direct", branch: "replies.branch.direct" });
+  assert.deepEqual(commentKeys(false), { page: "comments.page.browser", branch: "replies.branch.browser" });
 });
 
-test("умолчания прямого пути — 2 и 3 секунды", () => {
-  assert.equal(DEFAULT_TIMING["comments.direct"], 2);
-  assert.equal(DEFAULT_TIMING["replies.direct"], 3);
-  // Старый файл калибровки без этих ключей читается без правки: недостающее берётся из умолчаний.
-  const old = normalizeTiming({ "comments.video": 30, "replies.video": 50 });
-  assert.equal(old["comments.direct"], 2);
-  assert.equal(old["replies.direct"], 3);
+test("страница оценки — те же 20 комментариев, что прямой путь просит у TikTok", () => {
+  assert.equal(COMMENTS_PAGE, DIRECT_PAGE);
+});
+
+test("умолчания прямого пути — по журналу обхода #107: 0,8 с страница, 0,9 с ветка, доля 0,3", () => {
+  assert.equal(DEFAULT_TIMING["comments.page.direct"], 0.8);
+  assert.equal(DEFAULT_TIMING["replies.branch.direct"], 0.9);
+  assert.equal(DEFAULT_TIMING["replies.share"], 0.3);
+  // Старый файл калибровки с ценами «за видео» читается без правки: прежние ключи отбрасываются,
+  // новые берутся из умолчаний.
+  const old = normalizeTiming({ "comments.video": 14.5, "replies.video": 23.2, "comments.direct": 0.9, "replies.direct": 1.3 });
+  assert.equal(old["comments.page.direct"], 0.8);
+  assert.equal("comments.direct" in old, false);
+  assert.equal("comments.video" in old, false);
 });
 
 test("оценка выбирает дешёвые единицы, когда прямой путь включён", () => {
-  const base = { handle: "a", platform: "tiktok", scrolls: 1, commentVideos: 10 };
+  const base = { handle: "a", platform: "tiktok", scrolls: 1, commentVideos: 10, commentPages: 50, commentRoots: 1000 };
   const withDirect = estimateCreator({ ...base, direct: true });
   const withBrowser = estimateCreator({ ...base, direct: false });
-  assert.equal(withDirect.comments, 10 * 2);
-  assert.equal(withDirect.replies, 10 * 3);
-  assert.equal(withBrowser.comments, 10 * 25);
-  assert.equal(withBrowser.replies, 10 * 40);
+  assert.equal(withDirect.comments, 50 * 0.8);
+  assert.equal(withDirect.replies, 1000 * 0.3 * 0.9);
+  assert.equal(withBrowser.comments, 50 * DEFAULT_TIMING["comments.page.browser"]);
   assert.ok(withDirect.total < withBrowser.total);
 });
 
 test("у Instagram прямого пути нет: оценка считает браузерными единицами даже при direct", () => {
-  const one = estimateCreator({ handle: "a", platform: "instagram", scrolls: 1, commentVideos: 4, direct: true });
-  assert.equal(one.comments, 4 * 25);
+  const one = estimateCreator({ handle: "a", platform: "instagram", scrolls: 1, commentVideos: 4, commentPages: 4, commentRoots: 8, direct: true });
+  assert.equal(one.comments, 4 * DEFAULT_TIMING["comments.page.browser"]);
 });
 
 test("калибровка путей порознь: замер прямого не двигает цену браузерного", () => {
   const before = normalizeTiming({});
-  // Десять видео за 20 с — ровно умолчание прямого пути с ветками (2 + 3 = 5 с на видео → 50 с).
-  const after = calibrateComments(before, 20, 10, true, undefined, true);
-  assert.ok(after["comments.direct"] < before["comments.direct"]);
-  assert.equal(after["comments.video"], before["comments.video"]);
-  assert.equal(after["replies.video"], before["replies.video"]);
+  // Пять страниц за 7,5 с (1,5 с на страницу оценки) и 30 веток за 27 с.
+  const after = calibrateComments(before, { pages: 5, roots: 100, pageSeconds: 7.5, branchSeconds: 27, branches: 30 }, { direct: true });
+  assert.ok(after["comments.page.direct"] > before["comments.page.direct"]);
+  assert.equal(after["comments.page.browser"], before["comments.page.browser"]);
+  assert.equal(after["replies.branch.browser"], before["replies.branch.browser"]);
 
-  // Браузерный путь: 130 с на видео против ожидаемых 65 — обе его цены идут вверх.
-  const browser = calibrateComments(before, 1300, 10, true, undefined, false);
-  assert.ok(browser["comments.video"] > before["comments.video"]);
-  assert.equal(browser["comments.direct"], before["comments.direct"]);
+  // Браузерный путь: вдвое дольше предсказанного — обе его цены идут вверх.
+  const predicted = 10 * before["comments.page.browser"] + 50 * before["replies.share"] * before["replies.branch.browser"];
+  const browser = calibrateComments(before, { seconds: predicted * 2, pages: 10, roots: 50 }, { direct: false });
+  assert.ok(browser["comments.page.browser"] > before["comments.page.browser"]);
+  assert.ok(browser["replies.branch.browser"] > before["replies.branch.browser"]);
+  assert.equal(browser["comments.page.direct"], before["comments.page.direct"]);
 });
 
-test("калибровка прямого пути без веток трогает только цену видео", () => {
+test("калибровка прямого пути без веток трогает только цену страницы", () => {
   const before = normalizeTiming({});
-  // Пять видео за 5 с — секунда на видео против умолчания в две.
-  const after = calibrateComments(before, 5, 5, false, undefined, true);
-  assert.notEqual(after["comments.direct"], before["comments.direct"]);
-  assert.equal(after["replies.direct"], before["replies.direct"]);
+  const after = calibrateComments(before, { pages: 5, roots: 5, pageSeconds: 2, branchSeconds: 0, branches: 0 }, { direct: true, replies: false });
+  assert.notEqual(after["comments.page.direct"], before["comments.page.direct"]);
+  assert.equal(after["replies.branch.direct"], before["replies.branch.direct"]);
+  assert.equal(after["replies.share"], before["replies.share"], "ветки не раскрывались — доля неизвестна");
 });

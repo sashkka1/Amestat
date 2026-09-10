@@ -12,8 +12,12 @@
 //     плюс `page.*` × ожидаемое число прокруток. Прокрутки считаются по тому, что уже лежит в
 //     базе: сколько у креатора известных видео, сколько из них попадает в глубину, докуда
 //     листать до самого старого отслеживаемого при охвате «только наши», и режет ли потолок;
-//   • шаг комментариев — `comments.video` × число видео-кандидатов (правило `pickComments`) и
-//     столько же `replies.video`, если ветки раскрываются.
+//   • шаг комментариев — СТРАНИЦЫ и ВЕТКИ, а не видео (владелец, 2026-09-10: обход #107
+//     `@mrbeast` обещал «меньше минуты», а видео с 7700 комментариями шло полминуты — цена
+//     «за видео» была средней по креаторам, у которых под роликом 1–3 комментария). Видео стоит
+//     `ceil(min(счётчик, AMESTAT_COMMENTS_MAX) / 20)` страниц × `comments.page.*` плюс
+//     `min(счётчик, потолок) × replies.share` веток × `replies.branch.*`, если ветки раскрываются
+//     (`videoUnits`, `commentSeconds`). Счётчик — из последнего снимка (`video_snaps.comments`).
 //
 // ⚠️ Кандидаты считаются ВСЕ, включая те, что на месте окажутся «без изменений»: сколько их
 // будет, знает только прошлый счётчик комментариев площадки, а он приезжает уже во время шага.
@@ -40,7 +44,14 @@
 //      Пересчёт идёт по КАЖДОМУ креатору, а не только по первому.
 //   3. ПО ФАКТИЧЕСКОМУ ТЕМПУ — `livePrices`: набралось не меньше `PACE_MIN_SAMPLES` замеров
 //      этого обхода, и цены единиц берутся их МЕДИАНОЙ (`paceFrom`), а не калибровкой из файла.
-//      Калибровка остаётся тем, чем и была: первой оценкой, пока замеров ещё нет.
+//      Калибровка остаётся тем, чем и была: первой оценкой, пока замеров ещё нет. Доля веток
+//      (`replies.share`) — исключение: она пересчитывается после ПЕРВОГО же видео, суммой
+//      «веток / корней» по всем видео этого обхода.
+//
+// 🔴 Остаток считается из ОСТАВШИХСЯ ЕДИНИЦ (`remainingOf`: прокрутки, страницы, ветки
+// непройденных видео и креаторов) по живым ценам, а не как «оценка − сделано»: при перерасходе
+// разность схлопывалась в ноль, и обход #107 при 285 сделанных из 245 оценённых показывал «почти
+// готово». `sync.mjs` пишет `work_total = work_done + остаток` — объём растёт вместе с ценами.
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
@@ -60,17 +71,46 @@ export const DEFAULT_TIMING = {
   "page.tiktok": 6,
   "list.instagram": 20,
   "page.instagram": 5,
-  "comments.video": 25,
-  "replies.video": 40,
-  // Прямой запрос (`direct.mjs`, владелец 2026-09-10) — тот же шаг без браузера: страница
-  // комментариев приезжает за полсекунды-полторы, ветки — столько же на ветку. Умолчания с
-  // запасом: 2 с на видео и 3 с на его ветки. ⚠️ Оценка берёт ИХ, когда прямой путь включён;
-  // видео, откатившееся на браузер, окажется дороже оценки — полоса просто пойдёт медленнее.
-  "comments.direct": 2,
-  "replies.direct": 3,
+  // Шаг комментариев — ЗА СТРАНИЦУ и ЗА ВЕТКУ, а не за видео (2026-09-10). Прежние
+  // `comments.video` / `replies.video` / `comments.direct` / `replies.direct` были ценой видео и
+  // из старого файла просто отбрасываются: перевести их в новые единицы не во что.
+  // ⚠️ Страница здесь — страница ОЦЕНКИ (`videoUnits`: 20 комментариев из счётчика), а не запрос
+  // к TikTok: у `@mrbeast` сотня корней пришла за 7–16 запросов, а оценка считает её пятью
+  // страницами. Поэтому и замеряется цена в тех же единицах — секунды корней ÷ страницы оценки,
+  // и живая цена сама вбирает разницу.
+  // Прямой путь: по журналу обхода #107 запрос страницы с паузой `AMESTAT_DIRECT_PAUSE_MS` —
+  // 0,85 с (9 страниц за 7,7 с), запрос ветки — столько же.
+  "comments.page.direct": 0.8,
+  "replies.branch.direct": 0.9,
+  // Браузер — откат прямого пути; числа с глаз по прежней калибровке (≈15 с на маленькое видео).
+  "comments.page.browser": 15,
+  "replies.branch.browser": 10,
+  // ДОЛЯ корней, под которыми раскрывается ветка (0–1), — не секунды. У `@mrbeast` под сотней
+  // корней набиралось ≈30 веток.
+  "replies.share": 0.3,
 };
 
 export const TIMING_KEYS = Object.keys(DEFAULT_TIMING);
+
+/** Ключи-доли: 0–1, ноль законен (веток не было вовсе), в файле — до сотых. */
+const SHARE_KEYS = new Set(["replies.share"]);
+
+/**
+ * Сколько комментариев в одной странице ОЦЕНКИ — столько же, сколько `DIRECT_PAGE` в
+ * `direct.mjs` просит у TikTok (`count=20`). Своя копия, чтобы оценка не тянула за собой сеть;
+ * равенство держит тест в `direct.test.mjs`.
+ */
+export const COMMENTS_PAGE = 20;
+
+/** Потолок корневых на видео, если его не передали, — умолчание `AMESTAT_COMMENTS_MAX`. */
+export const DEFAULT_COMMENTS_MAX = 100;
+
+/**
+ * Сколько комментариев предположить у видео, чей счётчик неизвестен (креатор, о котором база
+ * не знает ничего): одна полная страница. Больше — оценка новичка раздулась бы на порядок,
+ * меньше — вернулось бы «меньше минуты».
+ */
+export const ASSUMED_COMMENTS = 20;
 
 /**
  * Сколько видео приходит за одну прокрутку списка. У TikTok страница ответа — 20 роликов,
@@ -96,8 +136,8 @@ export const PACE_MIN_SAMPLES = 3;
  */
 export function commentKeys(direct = false) {
   return direct === true
-    ? { video: "comments.direct", replies: "replies.direct" }
-    : { video: "comments.video", replies: "replies.video" };
+    ? { page: "comments.page.direct", branch: "replies.branch.direct" }
+    : { page: "comments.page.browser", branch: "replies.branch.browser" };
 }
 
 /** Площадка к одному из двух слов: чужая и пустая считаются TikTok — как `laneOf` в `sync.mjs`. */
@@ -118,8 +158,63 @@ const num = (value) => {
  */
 export function normalizeTiming(raw) {
   const out = {};
-  for (const key of TIMING_KEYS) out[key] = num(raw?.[key]) ?? DEFAULT_TIMING[key];
+  for (const key of TIMING_KEYS) {
+    out[key] = (SHARE_KEYS.has(key) ? share(raw?.[key]) : num(raw?.[key])) ?? DEFAULT_TIMING[key];
+  }
   return out;
+}
+
+/** Доля 0–1; мусор и пусто — null. Ноль законен: у видео могло не быть ни одной ветки. */
+function share(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.min(1, n) : null;
+}
+
+/**
+ * Единицы шага комментариев у ОДНОГО видео: `{ pages, roots }`.
+ *   • `roots` — сколько корневых возьмёт шаг: счётчик площадки, срезанный потолком `max`
+ *     (`AMESTAT_COMMENTS_MAX`). Счётчик считает и ответы, так что это оценка сверху;
+ *   • `pages` — страницы оценки по `COMMENTS_PAGE`, не меньше одной.
+ * Счётчик неизвестен (у видео нет снимка) — `ASSUMED_COMMENTS`. Чистая функция.
+ */
+export function videoUnits(comments, max = DEFAULT_COMMENTS_MAX) {
+  const c = Number(comments);
+  const n = Number.isFinite(c) && c > 0 ? c : ASSUMED_COMMENTS;
+  const cap = num(max) ?? DEFAULT_COMMENTS_MAX;
+  const roots = Math.min(n, cap);
+  return { pages: Math.max(1, Math.ceil(roots / COMMENTS_PAGE)), roots };
+}
+
+/**
+ * Единицы шага комментариев у набора видео: `{ videos, pages, roots }` — сумма `videoUnits`.
+ * `counts` — счётчики комментариев этих видео. Чистая функция.
+ */
+export function commentUnits(counts, max = DEFAULT_COMMENTS_MAX) {
+  let videos = 0, pages = 0, roots = 0;
+  for (const c of counts ?? []) {
+    const one = videoUnits(c, max);
+    videos++;
+    pages += one.pages;
+    roots += one.roots;
+  }
+  return { videos, pages, roots };
+}
+
+/**
+ * Секунды шага комментариев по единицам: `{ comments, replies }`.
+ * `comments` — страницы × цена страницы, `replies` — корни × доля веток × цена ветки (ноль,
+ * если ветки не раскрываются). Чистая функция.
+ */
+export function commentSeconds({ pages = 0, roots = 0 } = {}, timing = DEFAULT_TIMING, { direct = false, replies = true } = {}) {
+  const t = normalizeTiming(timing);
+  const keys = commentKeys(direct);
+  const p = Math.max(0, Number(pages) || 0);
+  const r = Math.max(0, Number(roots) || 0);
+  return {
+    comments: p * t[keys.page],
+    replies: replies === false ? 0 : r * t["replies.share"] * t[keys.branch],
+  };
 }
 
 /**
@@ -165,29 +260,49 @@ export function calibrateList(timing, platform, seconds, pages, alpha = TIMING_A
 }
 
 /**
- * Калибровка после шага комментариев: `seconds` — весь шаг, `videos` — сколько видео он обошёл,
- * `withReplies` — раскрывались ли ветки.
- * Ветки не раскрывались — измеряется чистая цена видео. Раскрывались — измерение накрывает обе
- * цены разом, и они двигаются одним множителем, как база и прокрутка выше. Чистая функция.
+ * Калибровка после шага комментариев. `m` — замер шага в единицах оценки:
+ *   • `pages`, `roots` — сумма `videoUnits` по видео, которые шаг обошёл этим путём;
+ *   • прямой путь знает, где кончились корни и начались ветки, и отдаёт их порознь:
+ *     `pageSeconds` (корни), `branchSeconds` и `branches` (сколько веток запрошено). Тогда каждая
+ *     цена двигается своим замером, а доля веток — отношением `branches / roots`;
+ *   • браузер знает только всё время шага (`seconds`) — оно накрывает обе цены разом, и они
+ *     двигаются одним множителем, как база и прокрутка в `calibrateList`.
+ * `replies: false` — ветки не раскрывались: цена ветки и доля не трогаются, всё время идёт в
+ * страницы.
+ * Пути два и цены у них разные на порядок, поэтому и калибруются они порознь: замер прямого
+ * пути не имеет права утянуть вниз цену браузерного, и наоборот (`commentKeys`). Чистая функция.
  */
-export function calibrateComments(timing, seconds, videos, withReplies = true, alpha = TIMING_ALPHA, direct = false) {
+export function calibrateComments(timing, m = {}, { direct = false, replies = true, alpha = TIMING_ALPHA } = {}) {
   const t = normalizeTiming(timing);
-  const spent = num(seconds);
-  const n = Math.max(0, Math.round(Number(videos) || 0));
-  if (spent === null || n === 0) return t;
-  // Пути два и цены у них разные на порядок, поэтому и калибруются они порознь: замер прямого
-  // пути не имеет права утянуть вниз цену браузерного, и наоборот (`commentKeys`).
-  const { video: videoKey, replies: repliesKey } = commentKeys(direct);
-  const perVideo = spent / n;
-  if (!withReplies) return { ...t, [videoKey]: foldEma(t[videoKey], perVideo, alpha) };
-  const predicted = t[videoKey] + t[repliesKey];
+  const pages = Math.max(0, Number(m?.pages) || 0);
+  if (pages === 0) return t;
+  const roots = Math.max(0, Number(m?.roots) || 0);
+  const a = Number.isFinite(alpha) && alpha > 0 && alpha <= 1 ? alpha : TIMING_ALPHA;
+  const { page, branch } = commentKeys(direct);
+  const out = { ...t };
+
+  const pageSeconds = num(m?.pageSeconds);
+  if (pageSeconds !== null) {
+    out[page] = foldEma(t[page], pageSeconds / pages, a);
+    if (replies !== false) {
+      const branches = Math.max(0, Math.round(Number(m?.branches) || 0));
+      const branchSeconds = num(m?.branchSeconds);
+      if (branches > 0 && branchSeconds !== null) out[branch] = foldEma(t[branch], branchSeconds / branches, a);
+      // Ноль веток — тоже замер: доля честно идёт вниз, `foldEma` ноль бы отбросил.
+      if (roots > 0) out["replies.share"] = t["replies.share"] * (1 - a) + Math.min(1, branches / roots) * a;
+    }
+    return out;
+  }
+
+  const spent = num(m?.seconds);
+  if (spent === null) return t;
+  if (replies === false) return { ...out, [page]: foldEma(t[page], spent / pages, a) };
+  const predicted = pages * t[page] + roots * t["replies.share"] * t[branch];
   if (!(predicted > 0)) return t;
-  const scale = perVideo / predicted;
-  return {
-    ...t,
-    [videoKey]: foldEma(t[videoKey], t[videoKey] * scale, alpha),
-    [repliesKey]: foldEma(t[repliesKey], t[repliesKey] * scale, alpha),
-  };
+  const scale = spent / predicted;
+  out[page] = foldEma(t[page], t[page] * scale, a);
+  out[branch] = foldEma(t[branch], t[branch] * scale, a);
+  return out;
 }
 
 /**
@@ -225,33 +340,58 @@ export function paceFrom(samples, fallback = null, min = PACE_MIN_SAMPLES) {
 
 /**
  * Цены единиц по фактическому темпу обхода — та же форма, что у калибровки, и на её место.
- * `samples` — замеры ЭТОГО обхода в секундах на единицу:
- *   • `scroll`  — секунды на одну прокрутку списка;
- *   • `direct`  — секунды на видео комментариев прямым путём, ЗА ВИДЕО ЦЕЛИКОМ (с ветками,
- *     если они раскрывались);
- *   • `browser` — то же самое браузерным путём. Пути порознь: цены у них разные на порядок.
- * Замеров меньше `min` по ведру — цена этого ведра остаётся калибровочной.
- * ⚠️ Замер видео накрывает пару цен разом («видео» + «ветки»), поэтому делится он по нынешней
- * пропорции — ровно так же, как это делает `calibrateComments`. Чистая функция.
+ * `samples` — замеры ЭТОГО обхода:
+ *   • `scroll` — секунды на одну прокрутку списка;
+ *   • `page`   — прямой путь: секунды корней видео ÷ его страницы оценки (`videoUnits`);
+ *   • `branch` — прямой путь: секунды веток видео ÷ число запрошенных веток;
+ *   • `share`  — прямой путь: `{ branches, roots }` по видео. 🔴 Доля веток берётся СУММОЙ
+ *     «веток / корней» по всем видео обхода и уже после ПЕРВОГО видео, а не медианой после
+ *     трёх: от неё зависит больше половины цены крупного видео, и калибровка по маленьким
+ *     креаторам здесь врёт сильнее всего;
+ *   • `browser` — браузерный путь: `{ seconds, pages, roots }` по видео. Браузер не знает, где
+ *     кончились корни, поэтому из замера берётся МНОЖИТЕЛЬ «факт / предсказание» (медиана), и
+ *     обе браузерные цены двигаются им, как в `calibrateComments`.
+ * Замеров меньше `min` по ведру — цена этого ведра остаётся калибровочной. `replies: false` —
+ * ветки не раскрываются, и их цена с долей не трогаются. Чистая функция.
  */
 export function livePrices(timing, samples = {}, { platform = "tiktok", replies = true, min = PACE_MIN_SAMPLES } = {}) {
   const t = normalizeTiming(timing);
   const out = { ...t };
   const plat = platformOf(platform);
+  const withReplies = replies !== false;
   const scroll = paceFrom(samples?.scroll, null, min);
   if (scroll !== null) out[`page.${plat}`] = scroll;
-  for (const [bucket, direct] of [["direct", true], ["browser", false]]) {
-    const per = paceFrom(samples?.[bucket], null, min);
-    if (per === null) continue;
-    const keys = commentKeys(direct);
-    if (replies === false) {
-      out[keys.video] = per;
-      continue;
+
+  const direct = commentKeys(true);
+  const page = paceFrom(samples?.page, null, min);
+  if (page !== null) out[direct.page] = page;
+  if (withReplies) {
+    const branch = paceFrom(samples?.branch, null, min);
+    if (branch !== null) out[direct.branch] = branch;
+    let branches = 0, roots = 0;
+    for (const s of samples?.share ?? []) {
+      const r = Number(s?.roots), b = Number(s?.branches);
+      if (!(Number.isFinite(r) && r > 0) || !(Number.isFinite(b) && b >= 0)) continue;
+      roots += r;
+      branches += Math.min(b, r);
     }
-    const sum = t[keys.video] + t[keys.replies];
-    if (!(sum > 0)) continue;
-    out[keys.video] = per * (t[keys.video] / sum);
-    out[keys.replies] = per * (t[keys.replies] / sum);
+    if (roots > 0) out["replies.share"] = branches / roots;
+  }
+
+  const browser = commentKeys(false);
+  const scales = [];
+  for (const s of samples?.browser ?? []) {
+    const spent = num(s?.seconds);
+    const pages = Math.max(0, Number(s?.pages) || 0);
+    if (spent === null || pages === 0) continue;
+    const roots = Math.max(0, Number(s?.roots) || 0);
+    const predicted = pages * t[browser.page] + (withReplies ? roots * out["replies.share"] * t[browser.branch] : 0);
+    if (predicted > 0) scales.push(spent / predicted);
+  }
+  const scale = paceFrom(scales, null, min);
+  if (scale !== null) {
+    out[browser.page] = t[browser.page] * scale;
+    if (withReplies) out[browser.branch] = t[browser.branch] * scale;
   }
   return out;
 }
@@ -266,14 +406,16 @@ export function readTiming(file = TIMING_FILE) {
 }
 
 /**
- * Калибровка в файл, округлённая до десятых: читать её будет человек.
+ * Калибровка в файл, округлённая до сотых: читать её будет человек.
  * Не записалась — работу не валим: следующий обход просто посчитает по прежним числам.
  */
 export function writeTiming(timing, file = TIMING_FILE) {
   try {
     const t = normalizeTiming(timing);
     const out = {};
-    for (const key of TIMING_KEYS) out[key] = Math.round(t[key] * 10) / 10;
+    // До сотых, а не десятых: цена страницы прямого пути — доли секунды, а доля веток 0,28
+    // против 0,3 на крупном креаторе — это секунды на каждом видео.
+    for (const key of TIMING_KEYS) out[key] = Math.round(t[key] * 100) / 100;
     mkdirSync(resolve(collectorDir, "logs"), { recursive: true });
     writeFileSync(file, JSON.stringify(out, null, 2), "utf8");
     return null;
@@ -323,8 +465,12 @@ export function listScrolls({
 }
 
 /**
- * Оценка одного креатора в секундах: `{ handle, list, comments, replies, total }`.
- * `scrolls` — из `listScrolls`, `commentVideos` — сколько видео возьмёт шаг комментариев.
+ * Оценка одного креатора в секундах: `{ handle, list, comments, replies, total, scrolls,
+ * commentPages, commentRoots }`.
+ * `scrolls` — из `listScrolls`, `commentVideos` — сколько видео возьмёт шаг комментариев,
+ * `commentPages` / `commentRoots` — их единицы (`commentUnits`). Единиц не дали — каждое видео
+ * считается видео с неизвестным счётчиком (`videoUnits(null)`).
+ * Единицы уходят в строку оценки: по ним `remainingOf` считает остаток живыми ценами.
  * Чистая функция.
  */
 export function estimateCreator({
@@ -332,6 +478,8 @@ export function estimateCreator({
   platform = "tiktok",
   scrolls = 1,
   commentVideos = 0,
+  commentPages = null,
+  commentRoots = null,
   comments = true,
   replies = true,
   direct = false,
@@ -340,18 +488,22 @@ export function estimateCreator({
   const plat = platformOf(platform);
   const pages = Math.max(1, Math.round(Number(scrolls) || 1));
   const videos = comments ? Math.max(0, Math.round(Number(commentVideos) || 0)) : 0;
+  const unknown = videoUnits(null);
+  const cPages = !comments ? 0 : commentPages !== null ? Math.max(0, Number(commentPages) || 0) : videos * unknown.pages;
+  const cRoots = !comments ? 0 : commentRoots !== null ? Math.max(0, Number(commentRoots) || 0) : videos * unknown.roots;
   const list = t[`list.${plat}`] + pages * t[`page.${plat}`];
   // Прямой путь есть только у TikTok: у Instagram комментарии по-прежнему целиком браузерные.
-  const keys = commentKeys(direct === true && plat === "tiktok");
-  const comm = videos * t[keys.video];
-  const rep = replies ? videos * t[keys.replies] : 0;
+  const secs = commentSeconds({ pages: cPages, roots: cRoots }, t, { direct: direct === true && plat === "tiktok", replies });
   const round = (n) => Math.round(n * 10) / 10;
   return {
     handle,
     list: round(list),
-    comments: round(comm),
-    replies: round(rep),
-    total: round(list + comm + rep),
+    comments: round(secs.comments),
+    replies: round(secs.replies),
+    total: round(list + secs.comments + secs.replies),
+    scrolls: pages,
+    commentPages: cPages,
+    commentRoots: cRoots,
   };
 }
 
@@ -409,7 +561,11 @@ export function assumedVideos(platform, counts = []) {
  *     `commentVideos` — сколько видео возьмёт шаг комментариев по правилу `pickComments`;
  *   • в начале шага комментариев — там уже известно, у скольких видео счётчик не изменился,
  *     и `listSeconds` не передаётся вовсе: список давно посчитан по факту.
- * Отдаёт строку той же формы, но с `rough: false`: предположения в ней больше нет.
+ * `counts` — счётчики комментариев этих видео (`video.comments` из списка): из них считаются
+ * страницы и корни (`commentUnits`). Не дали — каждое видео считается видео с неизвестным
+ * счётчиком.
+ * Отдаёт строку той же формы, но с `rough: false`: предположения в ней больше нет. Длительность
+ * списка передана — список помечается пройденным (`listDone`): его остаток больше не считается.
  * ⚠️ `timing` сюда приходит ЖИВЫМ (`livePrices`), а не файловым — иначе остаток считался бы по
  * калибровке даже там, где обход уже показал свой темп. Чистая функция.
  */
@@ -417,6 +573,8 @@ export function reviseAfterList(prev, {
   platform = "tiktok",
   listSeconds = null,
   commentVideos = 0,
+  counts = null,
+  commentsMax = DEFAULT_COMMENTS_MAX,
   comments = true,
   replies = true,
   direct = false,
@@ -425,19 +583,28 @@ export function reviseAfterList(prev, {
   const plat = platformOf(platform);
   const spent = num(listSeconds);
   const list = spent ?? (Number(prev?.list) > 0 ? Number(prev.list) : 0);
-  const videos = comments === false ? 0 : Math.max(0, Math.round(Number(commentVideos) || 0));
+  let units = { videos: 0, pages: 0, roots: 0 };
+  if (comments !== false) {
+    if (Array.isArray(counts)) units = commentUnits(counts, commentsMax);
+    else {
+      const videos = Math.max(0, Math.round(Number(commentVideos) || 0));
+      const one = videoUnits(null, commentsMax);
+      units = { videos, pages: videos * one.pages, roots: videos * one.roots };
+    }
+  }
   // Прямой путь есть только у TikTok — та же развилка, что в `estimateCreator`.
-  const keys = commentKeys(direct === true && plat === "tiktok");
-  const comm = videos * t[keys.video];
-  const rep = replies === false ? 0 : videos * t[keys.replies];
+  const secs = commentSeconds(units, t, { direct: direct === true && plat === "tiktok", replies });
   const round = (n) => Math.round(n * 10) / 10;
   return {
     ...prev,
     list: round(list),
-    comments: round(comm),
-    replies: round(rep),
-    total: round(list + comm + rep),
-    commentVideos: videos,
+    comments: round(secs.comments),
+    replies: round(secs.replies),
+    total: round(list + secs.comments + secs.replies),
+    commentVideos: units.videos,
+    commentPages: units.pages,
+    commentRoots: units.roots,
+    ...(spent !== null ? { listDone: true } : {}),
     rough: false,
   };
 }
@@ -449,19 +616,24 @@ export function reviseAfterList(prev, {
  * `videos`   — строки `videos` этих креаторов: `{ creator_id, id, published_at, ours, watch }`;
  * `counts`   — Map «id видео → число комментариев последнего снимка» (нет строки — нет счёта);
  * `opts`     — `{ depth, bounds, videos: 'all'|'ours', maxVideos, comments, replies, allVideos,
- *                 direct }` (`direct` — включён ли прямой путь: тогда шаг комментариев TikTok
- *                 считается по единицам `comments.direct` / `replies.direct`)
+ *                 direct, commentsMax, profileVideos }` (`direct` — включён ли прямой путь: тогда
+ *                 шаг комментариев TikTok считается по единицам `*.direct`; `commentsMax` —
+ *                 `AMESTAT_COMMENTS_MAX`; `profileVideos` — Map «id креатора → число видео по
+ *                 профилю площадки», для тех, о ком база не знает ничего)
  *                (окно шага комментариев — те же `bounds`, своего у него нет);
  * `timing`   — калибровка.
  *
  * Отдаёт `{ total, rough, byCreator: [{ creatorId, handle, list, comments, replies, total,
- * commentVideos, done, rough }] }`, где `total` — секунды на весь обход.
+ * scrolls, commentVideos, commentPages, commentRoots, done, rough }] }`, где `total` — секунды
+ * на весь обход.
  *
  * 🔴 `rough` — «предварительная»: у креатора нет в базе ни одного видео, и его объём ВЗЯТ ИЗ
- * ГОЛОВЫ (медиана площадки). Так выглядит только что добавленный аккаунт: до этой пометки он
- * давал в оценку почти ноль, и обход крупного креатора обещал «меньше минуты». Пока хоть один
- * креатор предварительный, предварительна вся оценка — сайт при ней не рисует полосу процентов.
- * Чистая функция: её проверяют тесты.
+ * ГОЛОВЫ. Так выглядит только что добавленный аккаунт: до этой пометки он давал в оценку почти
+ * ноль, и обход крупного креатора обещал «меньше минуты». Число его видео берётся из профиля
+ * площадки (`profileVideos`, у TikTok оно известно до прокрутки), а нет его — медианой площадки;
+ * пометка остаётся в обоих случаях: счётчиков комментариев его видео не знает никто. Пока хоть
+ * один креатор предварительный, предварительна вся оценка — сайт при ней не рисует полосу
+ * процентов. Чистая функция: её проверяют тесты.
  */
 export function estimateRun(creators, videos, counts, opts = {}, timing = DEFAULT_TIMING) {
   const t = normalizeTiming(timing);
@@ -474,6 +646,12 @@ export function estimateRun(creators, videos, counts, opts = {}, timing = DEFAUL
   const allVideos = opts.allVideos === true;
   // Прямой путь включён — шаг комментариев TikTok считается по дешёвым единицам (`commentKeys`).
   const direct = opts.direct === true;
+  const commentsMax = num(opts.commentsMax) ?? DEFAULT_COMMENTS_MAX;
+  const countOf = (id) => counts?.get?.(String(id)) ?? counts?.[String(id)];
+  const fromProfile = (id) => {
+    const n = Number(opts.profileVideos?.get?.(String(id)) ?? opts.profileVideos?.[String(id)]);
+    return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+  };
 
   const byCreator = new Map();
   for (const row of videos ?? []) {
@@ -497,10 +675,12 @@ export function estimateRun(creators, videos, counts, opts = {}, timing = DEFAUL
   for (const creator of creators ?? []) {
     const rows = byCreator.get(String(creator.id)) ?? [];
     const plat = platformOf(creator.platform);
-    // 🔴 База не знает у креатора НИ ОДНОГО видео — считать по ней нечего. Берём медиану
-    // площадки: занижение здесь и было причиной «меньше минуты» на аккаунте, идущем полчаса.
+    // 🔴 База не знает у креатора НИ ОДНОГО видео — считать по ней нечего. Берём число видео из
+    // профиля площадки, а нет его — медиану площадки: занижение здесь и было причиной «меньше
+    // минуты» на аккаунте, идущем полчаса.
     if (rows.length === 0) {
-      const assumed = assumedVideos(plat, knownCounts[plat]);
+      const profiled = fromProfile(creator.id);
+      const assumed = profiled ?? assumedVideos(plat, knownCounts[plat]);
       const scrolls = listScrolls({
         platform: plat,
         mode,
@@ -518,16 +698,30 @@ export function estimateRun(creators, videos, counts, opts = {}, timing = DEFAUL
       const cap = num(opts.maxVideos);
       let commentVideos = Math.min(assumed, scrolls * PER_SCROLL[plat]);
       if (cap !== null && mode !== "ours") commentVideos = Math.min(commentVideos, cap);
+      // Счётчиков комментариев у его видео нет — каждое считается видео с неизвестным счётчиком.
+      const unknown = videoUnits(null, commentsMax);
       const one = estimateCreator({
         handle: creator.handle,
         platform: plat,
         scrolls,
         commentVideos,
+        commentPages: commentVideos * unknown.pages,
+        commentRoots: commentVideos * unknown.roots,
         comments: withComments,
         replies: withReplies,
         direct,
       }, t);
-      out.push({ creatorId: String(creator.id), ...one, commentVideos: withComments ? commentVideos : 0, commentVideosDone: 0, done: false, rough: true });
+      out.push({
+        creatorId: String(creator.id),
+        ...one,
+        commentVideos: withComments ? commentVideos : 0,
+        commentVideosDone: 0,
+        done: false,
+        rough: true,
+        // Откуда взято число видео — строке лога «ПРЕДВАРИТЕЛЬНАЯ».
+        assumedVideos: assumed,
+        assumedFrom: profiled !== null ? "profile" : "median",
+      });
       total += one.total;
       roughRun = true;
       continue;
@@ -537,17 +731,19 @@ export function estimateRun(creators, videos, counts, opts = {}, timing = DEFAUL
     const sorted = [...rows].sort((a, b) => (msOf(b?.published_at) ?? -Infinity) - (msOf(a?.published_at) ?? -Infinity));
     let inDepth = 0;
     let toTracked = 0;
-    let commentVideos = 0;
+    // Счётчики комментариев кандидатов: из них — страницы и корни шага (`commentUnits`).
+    const picked = [];
     sorted.forEach((row, i) => {
       const at = msOf(row?.published_at);
       const okSince = bounds.since === null || bounds.since === undefined || (at !== null && at >= bounds.since);
       const okUntil = bounds.until === null || bounds.until === undefined || (at !== null && at <= bounds.until);
       if (okSince && okUntil) inDepth++;
       if (row?.ours === true || row?.watch === true) toTracked = i + 1;
-      if (withComments && commentCandidate(row, counts?.get?.(String(row?.id)) ?? counts?.[String(row?.id)], { ...win, allVideos })) {
-        commentVideos++;
-      }
+      const count = countOf(row?.id);
+      if (withComments && commentCandidate(row, count, { ...win, allVideos })) picked.push(count);
     });
+    const units = commentUnits(picked, commentsMax);
+    const commentVideos = units.videos;
     const scrolls = listScrolls({
       platform: creator.platform,
       mode,
@@ -562,6 +758,8 @@ export function estimateRun(creators, videos, counts, opts = {}, timing = DEFAUL
       platform: creator.platform,
       scrolls,
       commentVideos,
+      commentPages: units.pages,
+      commentRoots: units.roots,
       comments: withComments,
       replies: withReplies,
       direct,
@@ -573,24 +771,59 @@ export function estimateRun(creators, videos, counts, opts = {}, timing = DEFAUL
 }
 
 /**
+ * Остаток одного креатора в секундах — из ОСТАВШИХСЯ ЕДИНИЦ по ценам `timing` (живым):
+ *   • список не пройден — база + прокрутки (`scrolls`); идёт прямо сейчас — то, что ещё не
+ *     засчитано (`listPaid`), но не меньше одной прокрутки: пока шаг не кончился, он не бесплатен;
+ *   • комментарии — непройденные страницы и корни (`commentPages − commentPagesDone`, то же с
+ *     корнями), по ценам страницы и ветки нужного пути.
+ * Пройденный креатор (`done`) — ноль. Сколько секунд уже потрачено, здесь не при чём вовсе:
+ * перерасход на пройденном остатка не съедает. Чистая функция.
+ */
+export function remainingOf(est, timing = DEFAULT_TIMING, { platform = "tiktok", direct = false, replies = true } = {}) {
+  if (!est || est.done === true) return 0;
+  const t = normalizeTiming(timing);
+  const plat = platformOf(platform);
+  let listLeft = 0;
+  if (est.listDone !== true) {
+    const scrolls = Math.max(1, Math.round(Number(est.scrolls) || 1));
+    const planned = t[`list.${plat}`] + scrolls * t[`page.${plat}`];
+    const paid = Math.max(0, Number(est.listPaid) || 0);
+    listLeft = est.listRunning === true ? Math.max(t[`page.${plat}`], planned - paid) : planned;
+  }
+  const left = (all, done) => Math.max(0, (Number(all) || 0) - (Number(done) || 0));
+  const secs = commentSeconds(
+    { pages: left(est.commentPages, est.commentPagesDone), roots: left(est.commentRoots, est.commentRootsDone) },
+    t,
+    { direct: direct === true && plat === "tiktok", replies },
+  );
+  return Math.round((listLeft + secs.comments + secs.replies) * 10) / 10;
+}
+
+/**
  * Сколько секунд осталось до конца обхода. Полосы идут ОДНОВРЕМЕННО, поэтому остаток считается
  * по каждой отдельно, а итог — самая долгая из них: обход кончается, когда закончит последняя.
  *
- * `lanes` — `[{ total, done, elapsedMs, measured }]` по полосе.
+ * `lanes` — `[{ remaining, done, elapsedMs, measured }]` по полосе.
+ *   • 🔴 `remaining` — остаток полосы из ОСТАВШИХСЯ ЕДИНИЦ (`remainingOf`). Разность `total −
+ *     done` при перерасходе схлопывалась в ноль, и обход, у которого впереди полчаса, показывал
+ *     «почти готово». `total` понимается только там, где `remaining` не передали вовсе;
  *   • `measured: true` — у полосы набралось не меньше `PACE_MIN_SAMPLES` замеров, и её работа
  *     уже пересчитана по МЕДИАНЕ фактического темпа (`livePrices`). Тогда остаток берётся как
  *     есть: единица работы здесь и так секунда, а секунда уже настоящая, а не калибровочная;
  *   • замеров ещё нет — прежнее правило: скорость полосы `elapsedMs / done`, но только когда
- *     она прошла больше десятой части своей работы. На первых секундах отношение скачет от нуля
- *     до бесконечности и врало бы сильнее калибровки.
+ *     она прошла больше десятой части своей работы (`done + remaining`). На первых секундах
+ *     отношение скачет от нуля до бесконечности и врало бы сильнее калибровки.
  * Чистая функция: её проверяют тесты.
  */
 export function remainingSeconds(lanes) {
   let worst = 0;
   for (const lane of lanes ?? []) {
-    const total = Math.max(0, Number(lane?.total) || 0);
     const done = Math.max(0, Number(lane?.done) || 0);
-    const remaining = Math.max(0, total - done);
+    const given = lane?.remaining;
+    const remaining = given !== null && given !== undefined && Number.isFinite(Number(given))
+      ? Math.max(0, Number(given))
+      : Math.max(0, (Number(lane?.total) || 0) - done);
+    const total = done + remaining;
     if (remaining === 0) continue;
     if (lane?.measured === true) {
       worst = Math.max(worst, remaining);
