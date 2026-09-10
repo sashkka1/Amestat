@@ -62,9 +62,9 @@ export function loadEnv() {
   const retryMin = retryRaw === "" ? NaN : Number(retryRaw);
   const retryMs = Number.isFinite(retryMin) && retryMin > 0 ? Math.round(retryMin * 60_000) : 60 * 60_000;
 
-  // Часы автоматических обходов. Пусто — один слот, 13:00 (владелец, 2026-09-09: обход «всё»
-  // занимал 14 минут и трижды в день гонял браузер к каждому креатору). Формат — `13` или
-  // `10,13,17`; у владельца стоит `7,16`. Читаются они в зоне `AMESTAT_SLOT_TZ` (ниже).
+  // Часы автоматических обходов. Пусто — один слот, 16:00 (владелец, 2026-09-10: утренний слот
+  // выключен совсем — утренний срез теперь даёт первый обход дня от старта компьютера). Формат
+  // — `16` или `10,13,17`; у владельца стоит `16`. Читаются они в зоне `AMESTAT_SLOT_TZ` (ниже).
   // Разбор — чистая функция `parseSlots` в `schedule.mjs`, чтобы её проверяли тесты.
   const slotHours = parseSlots(raw.AMESTAT_SLOTS);
 
@@ -136,6 +136,13 @@ export function loadEnv() {
   const manualRetryNum = manualRetryRaw === "" ? NaN : Number(manualRetryRaw);
   const manualRetryMin = Number.isFinite(manualRetryNum) && manualRetryNum > 0 ? Math.round(manualRetryNum) : 25;
 
+  // Через сколько минут после запуска резидента идёт ПЕРВЫЙ обход дня (владелец, 2026-09-10:
+  // «компьютер включился, ~5 минут на разогрев — и обход»). Пусто и мусор — 5; `0` — сразу,
+  // без паузы, и это законное значение. Тем же правилом планируется первый обход после сна.
+  const startDelayRaw = (raw.AMESTAT_START_DELAY_MIN || "").trim();
+  const startDelayNum = startDelayRaw === "" ? NaN : Number(startDelayRaw);
+  const startDelayMin = Number.isFinite(startDelayNum) && startDelayNum >= 0 ? Math.round(startDelayNum) : 5;
+
   // Комментарии: за сколько последних дней брать видео. По умолчанию 7.
   // 🔴 На обход эта переменная больше НЕ влияет (владелец, 2026-09-09): окно шага комментариев
   // равно ГЛУБИНЕ обхода — «неделя» 7 дней, «месяц» 30, «период» сам период, «всё» без
@@ -199,6 +206,8 @@ export function loadEnv() {
     proxyCooldownMs,
     proxyCheckHandle,
     manualRetryMin,
+    // Пауза перед первым обходом дня после старта резидента и после сна, минут (0 — сразу).
+    startDelayMin,
     commentsDays,
     commentsMax,
     repliesMax,

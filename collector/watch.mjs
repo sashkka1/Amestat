@@ -1,14 +1,18 @@
 // Резидент: висит в фоне и сам решает, когда обходить.
 //
 // Четыре повода для обхода:
-//   1. Догон при старте — компьютер спал или был выключен, слот прошёл без обхода (`catchup`).
-//   2. Слот расписания — 13:00 по местному времени (`schedule`; часы задаются `AMESTAT_SLOTS`,
+//   1. Первый обход дня от старта компьютера (`catchup`) — резидент поднялся, дал машине
+//      `AMESTAT_START_DELAY_MIN` минут на разогрев (пусто — 5) и пошёл (владелец, 2026-09-10:
+//      «компьютер включился, ~5 минут на разогрев — и обход»). Тем же правилом обход
+//      планируется после сна: машина могла проснуться утром нового дня. Прежний догон
+//      ПРОПУЩЕННОГО слота этим и заменён — он ждал уже прошедшего часа расписания.
+//   2. Слот расписания — 16:00 по варшавскому времени (`schedule`; часы задаются `AMESTAT_SLOTS`,
 //      глубина — `AMESTAT_SLOT_DEPTH`, по умолчанию «всё»: владелец, 2026-09-09 — «в ежедневном
 //      обновлении пусть всё обновляется»).
 //      ⚠️ Слот ПРОПУСКАЕТСЯ, если сегодня до него уже завершился обход по всем креаторам —
-//      неважно, по кнопке с сайта, руками или догоном (владелец, 2026-09-09). Второй заход
-//      браузера в тот же день не приносит новых цифр, а TikTok от очереди запусков отвечает
-//      пустотой. То же правило действует и на догон пропущенного слота.
+//      неважно, по кнопке с сайта, руками или первым обходом дня (владелец, 2026-09-09).
+//      Второй заход браузера в тот же день не приносит новых цифр, а TikTok от очереди
+//      запусков отвечает пустотой. То же правило действует и на первый обход дня.
 //   3. Кнопка «Обновить» на сайте — строка в `sync_requests` (`manual`). Слышим её через
 //      Realtime, а раз в минуту ещё и спрашиваем базу сами: подписка умеет тихо отвалиться,
 //      и тогда просьба владельца висела бы до перезапуска.
@@ -70,7 +74,7 @@ import { loadEnv, collectorDir } from "./env.mjs";
 import { get, patch } from "./db.mjs";
 import { runSync, busy } from "./sync.mjs";
 import {
-  missedSlot, nextSlot, retryDue,
+  nextSlot, retryDue, firstRunAt,
   slotAlreadyCovered, addressProtectionHandles, manualRetryAt, retryStillNeeded,
 } from "./schedule.mjs";
 import { logSystem } from "./synclog.mjs";
@@ -335,6 +339,33 @@ async function runScheduled(trigger, slot) {
   return res;
 }
 
+// ------------------------------------------------------------------ первый обход дня
+// Владелец, 2026-09-10: «первый обход дня должен запускаться от старта компьютера: компьютер
+// включился, ~5 минут на разогрев — и обход». Этим заменён прежний догон пропущенного слота
+// (`missedSlot`): он ждал ПРОШЕДШЕГО слота, и включённый утром компьютер при слоте 16:00 сидел
+// бы без единого среза до вечера. Пауза — `AMESTAT_START_DELAY_MIN` (пусто — 5 мин): сеть после
+// включения встаёт не сразу.
+// ⚠️ Проверки «сегодня уже обходили всех» здесь намеренно НЕТ: она внутри `runScheduled`
+// (`coveredToday`), и если обход сегодня уже был, в лог уйдёт прежняя строка про пропуск.
+// ⚠️ Таймер один на резидента: старт заводит его, пробуждение из сна — только если он не висит.
+let firstRunTimer = null;
+
+function planFirstRun(reason = null) {
+  if (stopping || firstRunTimer) return;
+  const due = firstRunAt(new Date(), env.startDelayMin);
+  const delay = Math.max(0, due.getTime() - Date.now());
+  firstRunTimer = setTimeout(() => {
+    firstRunTimer = null;
+    if (stopping) return;
+    runScheduled("catchup", new Date()).catch((e) => {
+      const text = String(e?.message ?? e).split("\n")[0];
+      log(`первый обход дня сорвался: ${text}`);
+      residentNotice("run", `первый обход дня сорвался: ${text}`);
+    });
+  }, delay);
+  log(`первое обновление дня: в ${hhmm(due)} (через ${Math.round(delay / 60_000)} мин${reason ? `, ${reason}` : ""}), если сегодня ещё не обходили всех`);
+}
+
 /**
  * Ручная просьба свалилась на защите TikTok по адресу — назначаем один повтор через
  * `AMESTAT_MANUAL_RETRY_MIN` минут. Письма при назначении нет; если и повтор не удастся,
@@ -400,7 +431,7 @@ startWarmup("старта");
 if (env.slotDepthNote) log(`AMESTAT_SLOT_DEPTH: ${env.slotDepthNote}`);
 // Зона слотов: опечатку в имени тоже говорим вслух — иначе расписание тихо уехало бы на час.
 if (env.slotTzNote) log(`AMESTAT_SLOT_TZ: ${env.slotTzNote}`);
-log(`резидент запущен. Браузер: ${browser}. Слоты: ${env.slotHours.map((h) => `${String(h).padStart(2, "0")}:00`).join(", ")} по ${env.slotTz ?? "времени машины"} (глубина ${depthLabel(env.slotDepth)}). Пауза между креаторами TikTok ${Math.round(env.pauseMs / 1000)} с. Запусков TikTok не больше ${env.ttLaunchLimit} за ${Math.round(env.ttWindowMs / 60_000)} мин. Повтор после неудачи через ${Math.round(env.retryMs / 60_000)} мин, повтор ручной просьбы через ${env.manualRetryMin} мин. Instagram: ${env.igSource}. Логи: ${logsDir}`);
+log(`резидент запущен. Браузер: ${browser}. Слоты: ${env.slotHours.map((h) => `${String(h).padStart(2, "0")}:00`).join(", ")} по ${env.slotTz ?? "времени машины"} (глубина ${depthLabel(env.slotDepth)}). Пауза между креаторами TikTok ${Math.round(env.pauseMs / 1000)} с. Запусков TikTok не больше ${env.ttLaunchLimit} за ${Math.round(env.ttWindowMs / 60_000)} мин. Первый обход дня через ${env.startDelayMin} мин после старта. Повтор после неудачи через ${Math.round(env.retryMs / 60_000)} мин, повтор ручной просьбы через ${env.manualRetryMin} мин. Instagram: ${env.igSource}. Логи: ${logsDir}`);
 
 // 0. Остатки прошлых обходов: упавший обход оставляет окно Opera на нашем профиле, а оно и
 //    память держит, и не даёт подняться следующему браузеру. Свои окна владельца не трогаем —
@@ -428,6 +459,9 @@ const tick = setInterval(() => {
   if (slept > 0) {
     log(`прогрев после сна: ушло ${slept} мин`);
     startWarmup("сна");
+    // Машина могла проснуться утром НОВОГО дня — первый обход дня планируется тем же правилом,
+    // что и при старте. Уже висящий таймер не трогаем и второго не заводим.
+    planFirstRun("после сна");
   }
   if (now >= nextAt) {
     const slot = nextAt;
@@ -557,6 +591,11 @@ async function stop(signal) {
     clearTimeout(realtimeTimer);
     realtimeTimer = null;
   }
+  if (firstRunTimer) {
+    // Первый обход дня ждал своих минут — при следующем старте он назначится заново.
+    clearTimeout(firstRunTimer);
+    firstRunTimer = null;
+  }
   try {
     await channel.unsubscribe();
     await supabase.removeAllChannels();
@@ -586,17 +625,7 @@ try {
   residentNotice("db", `повтор не восстановлен: ${text}`);
 }
 
-// 5. Догон пропущенного слота — последним делом: он может занять минуты, а часы, Realtime,
-//    опрос и обработчик Ctrl+C к этому времени уже работают. Иначе просьба с сайта ждала бы
-//    конца догона незамеченной, а Ctrl+C не был бы услышан вовсе.
-try {
-  const runs = await get("sync_runs?select=started_at&order=started_at.desc&limit=1");
-  const last = runs[0]?.started_at ? new Date(runs[0].started_at) : null;
-  const missed = missedSlot(new Date(), last, env.slotHours, env.slotTz);
-  log(`последний обход: ${last ? last.toLocaleString() : "не было ни одного"}; пропущенный слот: ${missed ? slotHhmm(missed) : "нет"}`);
-  if (missed && !stopping) await runScheduled("catchup", missed);
-} catch (e) {
-  const text = String(e?.message ?? e).split("\n")[0];
-  log(`догон не вышел: ${text}`);
-  residentNotice("db", `догон пропущенного слота не вышел: ${text}`);
-}
+// 5. Первый обход дня — последним делом: он ждёт своих минут в таймере, а часы, Realtime,
+//    опрос и обработчик Ctrl+C к этому времени уже работают. Сам обход занимает минуты, и
+//    просьба с сайта не должна ждать его конца незамеченной.
+planFirstRun();

@@ -35,7 +35,7 @@ if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
 }
 
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal `
-  -Description 'Amestat: локальный сборщик статистики (node watch.mjs) — расписание 10:00/13:00/17:00 и кнопка «Обновить» на сайте.' | Out-Null
+  -Description 'Amestat: локальный сборщик статистики (node watch.mjs) — первый обход при старте компьютера, слот 16:00 и кнопка «Обновить» на сайте.' | Out-Null
 
 Write-Host "задача «$taskName» зарегистрирована: вход в Windows → $vbs"
 Write-Host "проверить сейчас:  Start-ScheduledTask -TaskName '$taskName'"

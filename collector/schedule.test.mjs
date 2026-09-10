@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import {
   slotsOf, nextSlot, missedSlot, retryDue, SLOT_HOURS, DEFAULT_SLOTS, parseSlots,
   slotAlreadyCovered, addressProtectionHandles, manualRetryAt, retryStillNeeded, zoneOf,
+  firstRunAt,
 } from "./schedule.mjs";
 
 const at = (y, m, d, h = 0, min = 0) => new Date(y, m - 1, d, h, min, 0, 0);
@@ -14,10 +15,12 @@ const hm = (date) => (date === null ? null : `${date.getDate()} ${date.getHours(
 const THREE = [10, 13, 17];
 
 // ------------------------------------------------------------------ часы из настроек
-test("по умолчанию слот один — 13:00", () => {
-  assert.deepEqual(DEFAULT_SLOTS, [13]);
-  assert.deepEqual(SLOT_HOURS, [13]);
-  assert.deepEqual(slotsOf(at(2026, 9, 8, 23, 59)).map(hm), ["8 13:00"]);
+// Умолчание кода — 16:00 (владелец, 2026-09-10: утренний слот выключен, пустая переменная не
+// должна воскрешать прежние 13:00).
+test("по умолчанию слот один — 16:00", () => {
+  assert.deepEqual(DEFAULT_SLOTS, [16]);
+  assert.deepEqual(SLOT_HOURS, [16]);
+  assert.deepEqual(slotsOf(at(2026, 9, 8, 23, 59)).map(hm), ["8 16:00"]);
 });
 
 test("AMESTAT_SLOTS: один час, список, мусор и пустота", () => {
@@ -25,19 +28,19 @@ test("AMESTAT_SLOTS: один час, список, мусор и пустота
   assert.deepEqual(parseSlots("10,13,17"), [10, 13, 17]);
   assert.deepEqual(parseSlots(" 17 , 10 "), [10, 17], "порядок по возрастанию, пробелы не мешают");
   assert.deepEqual(parseSlots("13,13"), [13], "дубли убираются");
-  assert.deepEqual(parseSlots(""), [13]);
-  assert.deepEqual(parseSlots(undefined), [13]);
-  assert.deepEqual(parseSlots("вечером"), [13], "мусор — значит расписание по умолчанию");
-  assert.deepEqual(parseSlots("25,-1,9.5"), [13], "часов вне суток и дробных не бывает");
+  assert.deepEqual(parseSlots(""), [16]);
+  assert.deepEqual(parseSlots(undefined), [16]);
+  assert.deepEqual(parseSlots("вечером"), [16], "мусор — значит расписание по умолчанию");
+  assert.deepEqual(parseSlots("25,-1,9.5"), [16], "часов вне суток и дробных не бывает");
   assert.deepEqual(parseSlots("0"), [0], "полночь — законный час, а не пустота");
 });
 
-test("один слот 13:00: ближайший, догон и полночь", () => {
-  assert.equal(hm(nextSlot(at(2026, 9, 8, 9, 0))), "8 13:00");
-  assert.equal(hm(nextSlot(at(2026, 9, 8, 14, 0))), "9 13:00", "после слота — завтрашний");
+test("один слот 16:00: ближайший, догон и полночь", () => {
+  assert.equal(hm(nextSlot(at(2026, 9, 8, 9, 0))), "8 16:00");
+  assert.equal(hm(nextSlot(at(2026, 9, 8, 17, 0))), "9 16:00", "после слота — завтрашний");
   assert.equal(missedSlot(at(2026, 9, 8, 9, 0), null), null, "до слота догонять нечего");
-  assert.equal(hm(missedSlot(at(2026, 9, 8, 20, 0), null)), "8 13:00");
-  assert.equal(missedSlot(at(2026, 9, 8, 20, 0), at(2026, 9, 8, 13, 2)), null, "слот отработан");
+  assert.equal(hm(missedSlot(at(2026, 9, 8, 20, 0), null)), "8 16:00");
+  assert.equal(missedSlot(at(2026, 9, 8, 20, 0), at(2026, 9, 8, 16, 2)), null, "слот отработан");
 });
 
 // --------------------------------------------------- зона слотов (владелец, 2026-09-09)
@@ -215,6 +218,15 @@ test("момент повтора ручной просьбы — «сейчас
   assert.equal(hm(manualRetryAt(now, 5)), "9 14:05");
   assert.equal(hm(manualRetryAt(now, 0)), "9 14:25", "ноль минут — значит настройки нет");
   assert.equal(hm(manualRetryAt(now, NaN)), "9 14:25");
+});
+
+test("первый обход дня — «сейчас» плюс минуты; ноль значит сразу, мусор даёт 5", () => {
+  const now = at(2026, 9, 10, 9, 0);
+  assert.equal(hm(firstRunAt(now, 5)), "10 9:05");
+  assert.equal(hm(firstRunAt(now, 0)), "10 9:00", "ноль — обход сразу, это законное значение");
+  assert.equal(hm(firstRunAt(now, NaN)), "10 9:05");
+  assert.equal(hm(firstRunAt(now, -3)), "10 9:05", "отрицательное — тот же мусор");
+  assert.equal(hm(firstRunAt(now)), "10 9:05");
 });
 
 test("повтор отменяется, если по тем креаторам ошибки уже нет", () => {
