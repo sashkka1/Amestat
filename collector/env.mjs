@@ -171,6 +171,20 @@ export function loadEnv() {
   const oursPagesNum = oursPagesRaw === "" ? NaN : Number(oursPagesRaw);
   const oursMaxPages = Number.isFinite(oursPagesNum) && oursPagesNum > 0 ? Math.round(oursPagesNum) : 30;
 
+  // Прямые запросы к TikTok вместо браузера там, где они работают (владелец, 2026-09-10:
+  // «где можно — прямой запрос, где он не отработал — наш браузерный код»). Пусто и всё, кроме
+  // `off`, — `on`. `off` возвращает обход целиком на браузер, как было до 2026-09-10: это
+  // единственный выключатель, и он нужен на случай, если TikTok закроет открытые адреса.
+  // ⚠️ Список видео выключатель не касается вовсе: он и при `on` идёт только браузером —
+  // `api/post/item_list` без подписи отдаёт пустое тело (`direct.mjs`).
+  const direct = (raw.AMESTAT_DIRECT || "").trim().toLowerCase() !== "off";
+
+  // Пауза между прямыми запросами, мс. Пусто — 500. Запрос стоит полсекунды, и очередь из них
+  // без паузы выглядит для площадки хуже, чем человек, листающий комментарии.
+  const directPauseRaw = (raw.AMESTAT_DIRECT_PAUSE_MS || "").trim();
+  const directPauseNum = directPauseRaw === "" ? NaN : Number(directPauseRaw);
+  const directPauseMs = Number.isFinite(directPauseNum) && directPauseNum >= 0 ? Math.round(directPauseNum) : 500;
+
   // Какие коды замечаний НЕ слать в Telegram: список через запятую. Пусто — не глушить ничего.
   const notifyMute = (raw.AMESTAT_NOTIFY_MUTE || "")
     .split(",")
@@ -212,6 +226,9 @@ export function loadEnv() {
     commentsMax,
     repliesMax,
     oursMaxPages,
+    // Прямые запросы к TikTok: `true` — сначала прямой путь, браузер откатом (`direct.mjs`).
+    direct,
+    directPauseMs,
     notifyMute,
     igToken,
     igUserId,

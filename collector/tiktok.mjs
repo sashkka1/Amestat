@@ -27,6 +27,7 @@
 
 import { launchFresh } from "./browser.mjs";
 import { notice } from "./notices.mjs";
+import { fetchProfile } from "./direct.mjs";
 import { listStop, listRounds, missingTracked, filterDepth, depthBounds, depthWord, videoCap } from "./scope.mjs";
 import { HOME, looksLikeProxyTrouble } from "./proxies.mjs";
 
@@ -45,7 +46,7 @@ const publishedAt = (v) => (v.createTime ? new Date(Number(v.createTime) * 1000)
  * `depth` нужен только на слово в строке лога («за неделю» / «за месяц» / «за период»).
  * `scope` — охват: `{ videos: 'all'|'ours', trackedIds, maxPages }`.
  */
-async function attempt(handle, { browserChoice, log, since = null, until = null, depth = "all", scope = null, proxy = null }) {
+async function attempt(handle, { browserChoice, log, since = null, until = null, depth = "all", scope = null, proxy = null, directProfile = null }) {
   const mode = scope?.videos === "ours" ? "ours" : "all";
   const trackedIds = mode === "ours" ? scope?.trackedIds ?? [] : [];
   const rounds = listRounds(mode, scope?.maxPages, SCROLL_ROUNDS);
@@ -99,12 +100,19 @@ async function attempt(handle, { browserChoice, log, since = null, until = null,
     }
     const stopScreen = await page.evaluate((re) => new RegExp(re, "i").test(document.body.innerText), STOP_SCREEN.source);
     if (!info) {
+      // 🔴 Снимок профиля прямым запросом (владелец, 2026-09-10) — тот же HTML, только без
+      // браузера, и приезжает он ДО запуска (`collectTikTok`). Страница профиля счётчиков не
+      // дала, а прямой дал — значит профиль существует, и снимать его есть чем: идём дальше со
+      // счётчиками прямого пути. ⚠️ Стоп-экран это не отменяет: он про список видео, а список
+      // прямым не берётся вовсе.
       if (stopScreen) notice("stop", `@${handle}: стоп-экран TikTok на странице профиля`);
-      throw new Error(stopScreen ? `стоп-экран TikTok на профиле @${handle}` : `профиль не найден: @${handle}`);
+      if (stopScreen || !directProfile) throw new Error(stopScreen ? `стоп-экран TikTok на профиле @${handle}` : `профиль не найден: @${handle}`);
+      log?.("  профиль: страница браузера счётчиков не дала — беру их из прямого запроса");
     }
 
-    const s2 = info.statsV2 ?? {}, s1 = info.stats ?? {}, user = info.user ?? {};
-    const profile = {
+    const s2 = info?.statsV2 ?? {}, s1 = info?.stats ?? {}, user = info?.user ?? {};
+    // Прямой запрос первым (он и приехал первым), страница браузера — откат. Форма у обоих одна.
+    const profile = directProfile ?? {
       followers: num(s2.followerCount ?? s1.followerCount),
       following: num(s2.followingCount ?? s1.followingCount),
       likesTotal: num(s2.heartCount ?? s2.heart ?? s1.heartCount),
@@ -208,10 +216,26 @@ async function attempt(handle, { browserChoice, log, since = null, until = null,
  * не больше двух адресов на креатора, чтобы один недоступный креатор не сжёг весь пул.
  * Отдаёт `{ profile, videos }`; при беде бросает Error с русским текстом.
  */
-export async function collectTikTok(creator, { browserChoice = "", depth = "all", bounds = null, scope = null, pool = null, log } = {}) {
+export async function collectTikTok(creator, { browserChoice = "", depth = "all", bounds = null, scope = null, pool = null, direct = false, log } = {}) {
   const handle = String(creator.handle || "").replace(/^@/, "");
   if (!handle) throw new Error("у креатора пустой handle");
   const { since, until } = bounds ?? depthBounds(depth);
+
+  // 🔴 Снимок профиля — сначала прямым запросом (`direct.mjs`), браузер откатом. Он берётся ОДИН
+  // раз на креатора, до запуска браузера, и переживает вторую попытку с другим адресом: счётчики
+  // от адреса не зависят. ⚠️ Список видео это не касается: `api/post/item_list` без подписи
+  // отдаёт пустое тело, и листать по-прежнему приходится браузером.
+  // ⚠️ Прямой запрос идёт с ДОМАШНЕГО адреса: прокси живут в Playwright и на `fetch` не влияют.
+  let directProfile = null;
+  if (direct) {
+    const got = await fetchProfile(handle);
+    if (got.ok) {
+      directProfile = { ...got.profile, nickname: got.profile.nickname || handle };
+      log?.(`  профиль прямым запросом: подписчиков ${directProfile.followers}, видео по профилю ${directProfile.videosCount ?? "?"} (${got.ms} мс)`);
+    } else {
+      log?.(`  профиль прямым запросом не взялся (${got.why}) — беру со страницы браузера`);
+    }
+  }
   // Пула нет — адрес один, домашний, и второго круга не будет: `exclude` его же и исключает.
   const take = pool?.take ?? (async ({ exclude = [] } = {}) => (exclude.includes(HOME.id) ? null : { ...HOME }));
 
@@ -229,7 +253,7 @@ export async function collectTikTok(creator, { browserChoice = "", depth = "all"
 
     let res = null;
     try {
-      res = await attempt(handle, { browserChoice, log, since, until, depth, scope, proxy: address });
+      res = await attempt(handle, { browserChoice, log, since, until, depth, scope, proxy: address, directProfile });
     } catch (e) {
       const text = String(e?.message ?? e).split("\n")[0];
       // Адрес не отозвался (прокси лежит, не пустил, оборвал) — это беда адреса, а не площадки:

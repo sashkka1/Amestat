@@ -48,6 +48,12 @@ export const DEFAULT_TIMING = {
   "page.instagram": 5,
   "comments.video": 25,
   "replies.video": 40,
+  // Прямой запрос (`direct.mjs`, владелец 2026-09-10) — тот же шаг без браузера: страница
+  // комментариев приезжает за полсекунды-полторы, ветки — столько же на ветку. Умолчания с
+  // запасом: 2 с на видео и 3 с на его ветки. ⚠️ Оценка берёт ИХ, когда прямой путь включён;
+  // видео, откатившееся на браузер, окажется дороже оценки — полоса просто пойдёт медленнее.
+  "comments.direct": 2,
+  "replies.direct": 3,
 };
 
 export const TIMING_KEYS = Object.keys(DEFAULT_TIMING);
@@ -58,6 +64,17 @@ export const TIMING_KEYS = Object.keys(DEFAULT_TIMING);
  * счётчику.
  */
 export const PER_SCROLL = { tiktok: 20, instagram: 12 };
+
+/**
+ * Какой парой единиц считается шаг комментариев: прямым запросом или браузером.
+ * Одно место на весь модуль и на `sync.mjs` — иначе оценка считала бы одними ключами, а
+ * калибровка правила бы другие, и полоса прогресса разъехалась бы молча. Чистая функция.
+ */
+export function commentKeys(direct = false) {
+  return direct === true
+    ? { video: "comments.direct", replies: "replies.direct" }
+    : { video: "comments.video", replies: "replies.video" };
+}
 
 /** Площадка к одному из двух слов: чужая и пустая считаются TikTok — как `laneOf` в `sync.mjs`. */
 export function platformOf(value) {
@@ -70,7 +87,9 @@ const num = (value) => {
 };
 
 /**
- * Калибровка в понятном виде: все шесть ключей на месте, мусор и пропажи заменены умолчаниями.
+ * Калибровка в понятном виде: все ключи `TIMING_KEYS` на месте, мусор и пропажи заменены
+ * умолчаниями (лишнее из файла отбрасывается — так добавились `*.direct`, и старый файл
+ * калибровки читается без единой правки).
  * Чистая функция: её проверяют тесты.
  */
 export function normalizeTiming(raw) {
@@ -127,20 +146,23 @@ export function calibrateList(timing, platform, seconds, pages, alpha = TIMING_A
  * Ветки не раскрывались — измеряется чистая цена видео. Раскрывались — измерение накрывает обе
  * цены разом, и они двигаются одним множителем, как база и прокрутка выше. Чистая функция.
  */
-export function calibrateComments(timing, seconds, videos, withReplies = true, alpha = TIMING_ALPHA) {
+export function calibrateComments(timing, seconds, videos, withReplies = true, alpha = TIMING_ALPHA, direct = false) {
   const t = normalizeTiming(timing);
   const spent = num(seconds);
   const n = Math.max(0, Math.round(Number(videos) || 0));
   if (spent === null || n === 0) return t;
+  // Пути два и цены у них разные на порядок, поэтому и калибруются они порознь: замер прямого
+  // пути не имеет права утянуть вниз цену браузерного, и наоборот (`commentKeys`).
+  const { video: videoKey, replies: repliesKey } = commentKeys(direct);
   const perVideo = spent / n;
-  if (!withReplies) return { ...t, "comments.video": foldEma(t["comments.video"], perVideo, alpha) };
-  const predicted = t["comments.video"] + t["replies.video"];
+  if (!withReplies) return { ...t, [videoKey]: foldEma(t[videoKey], perVideo, alpha) };
+  const predicted = t[videoKey] + t[repliesKey];
   if (!(predicted > 0)) return t;
   const scale = perVideo / predicted;
   return {
     ...t,
-    "comments.video": foldEma(t["comments.video"], t["comments.video"] * scale, alpha),
-    "replies.video": foldEma(t["replies.video"], t["replies.video"] * scale, alpha),
+    [videoKey]: foldEma(t[videoKey], t[videoKey] * scale, alpha),
+    [repliesKey]: foldEma(t[repliesKey], t[repliesKey] * scale, alpha),
   };
 }
 
@@ -222,14 +244,17 @@ export function estimateCreator({
   commentVideos = 0,
   comments = true,
   replies = true,
+  direct = false,
 } = {}, timing = DEFAULT_TIMING) {
   const t = normalizeTiming(timing);
   const plat = platformOf(platform);
   const pages = Math.max(1, Math.round(Number(scrolls) || 1));
   const videos = comments ? Math.max(0, Math.round(Number(commentVideos) || 0)) : 0;
   const list = t[`list.${plat}`] + pages * t[`page.${plat}`];
-  const comm = videos * t["comments.video"];
-  const rep = replies ? videos * t["replies.video"] : 0;
+  // Прямой путь есть только у TikTok: у Instagram комментарии по-прежнему целиком браузерные.
+  const keys = commentKeys(direct === true && plat === "tiktok");
+  const comm = videos * t[keys.video];
+  const rep = replies ? videos * t[keys.replies] : 0;
   const round = (n) => Math.round(n * 10) / 10;
   return {
     handle,
@@ -283,7 +308,9 @@ export function commentsWindow({ bounds = null } = {}) {
  * `creators` — `[{ id, handle, platform }]` в порядке обхода;
  * `videos`   — строки `videos` этих креаторов: `{ creator_id, id, published_at, ours, watch }`;
  * `counts`   — Map «id видео → число комментариев последнего снимка» (нет строки — нет счёта);
- * `opts`     — `{ depth, bounds, videos: 'all'|'ours', maxVideos, comments, replies, allVideos }`
+ * `opts`     — `{ depth, bounds, videos: 'all'|'ours', maxVideos, comments, replies, allVideos,
+ *                 direct }` (`direct` — включён ли прямой путь: тогда шаг комментариев TikTok
+ *                 считается по единицам `comments.direct` / `replies.direct`)
  *                (окно шага комментариев — те же `bounds`, своего у него нет);
  * `timing`   — калибровка.
  *
@@ -299,6 +326,8 @@ export function estimateRun(creators, videos, counts, opts = {}, timing = DEFAUL
   const withComments = opts.comments !== false;
   const withReplies = opts.replies !== false;
   const allVideos = opts.allVideos === true;
+  // Прямой путь включён — шаг комментариев TikTok считается по дешёвым единицам (`commentKeys`).
+  const direct = opts.direct === true;
 
   const byCreator = new Map();
   for (const row of videos ?? []) {
@@ -344,6 +373,7 @@ export function estimateRun(creators, videos, counts, opts = {}, timing = DEFAUL
       commentVideos,
       comments: withComments,
       replies: withReplies,
+      direct,
     }, t);
     out.push({ creatorId: String(creator.id), ...one, done: false });
     total += one.total;

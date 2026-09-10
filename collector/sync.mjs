@@ -44,6 +44,16 @@
 //     Два выключателя приходят из просьбы: `comments = false` — шага нет вовсе, `replies = false`
 //     — корневые снимаются, а ветки не раскрываются (даровые ответы всё равно кладутся: они
 //     приезжают внутри корневого и не стоят ни клика, ни запроса).
+//   • Симбиоз прямого запроса и браузера (владелец, 2026-09-10: «где можно — прямой запрос, где
+//     он не отработал — наш браузерный код; максимально делегировать прямым, они банально
+//     быстрее»). На шаге комментариев TikTok КАЖДОЕ видео сначала пробуется прямым запросом
+//     (`direct.mjs`, без браузера и без подписи); не дал — то же видео идёт браузером, как и
+//     раньше, и весь прежний код остаётся рабочим. Отсюда два следствия:
+//       — браузер полосы TikTok поднимается ЛЕНИВО: все видео сняты прямым — окно не открывается
+//         вовсе, и в логе видно «браузер не понадобился»;
+//       — ⚠️ СПИСОК ВИДЕО прямым не берётся никогда: `api/post/item_list` без подписи отдаёт
+//         пустое тело. Снимок профиля — берётся (HTML страницы), браузер там откат.
+//     Выключатель `AMESTAT_DIRECT=off` возвращает всё на браузер целиком.
 //   • Видео, у которого число комментариев не изменилось с прошлого съёма
 //     (`videos.comments_synced_count`), второй раз не обходится вовсе: минуты уходили на то же
 //     самое. Первый раз (там `null`) — снимаем всегда.
@@ -87,12 +97,15 @@ import { depthBounds, depthLabel, normalizeDepth, videoCap } from "./scope.mjs";
 import {
   calibrateComments,
   calibrateList,
+  commentKeys,
   commentsWindow,
   estimateRun,
   etaSeconds,
   readTiming,
   writeTiming,
 } from "./estimate.mjs";
+import { fetchComments, fetchReplies } from "./direct.mjs";
+import { pickReplies } from "./replies.mjs";
 import { basename } from "node:path";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -176,7 +189,7 @@ function laneProxy(env) {
 function pickCollector(creator, env, depth, bounds, ctx, scope, pool) {
   const platform = creator.platform ?? "tiktok";
   if (platform === "tiktok") {
-    return (log) => collectTikTok(creator, { browserChoice: env.browser, depth, bounds, scope, pool, log });
+    return (log) => collectTikTok(creator, { browserChoice: env.browser, depth, bounds, scope, pool, direct: env.direct, log });
   }
   if (platform === "instagram") {
     if (env.igSource === "graph") {
@@ -257,6 +270,9 @@ async function estimateWork(creators, env, depth, bounds, flags, timing) {
     comments: flags.comments,
     replies: flags.replies,
     allVideos: flags.allVideos,
+    // Прямой путь включён — шаг комментариев TikTok считается по дешёвым единицам (v24 +
+    // `comments.direct`): иначе оценка обещала бы часы там, где обход укладывается в минуты.
+    direct: env.direct === true,
   }, timing);
 }
 
@@ -462,15 +478,73 @@ export function pickComments(videos, known, sinceMs = null, { allVideos = false,
 }
 
 /**
- * Тексты комментариев к свежим видео креатора — браузером полосы, под сессией фейкового
- * аккаунта. Число комментариев к этому моменту уже лежит в `video_snaps.comments`; здесь
- * собираются сами тексты.
+ * Комментарии одного видео TikTok ПРЯМЫМ запросом — без браузера (`direct.mjs`).
+ * Отдаёт `{ ok, list, why, ms, branches }`; `ok: false` значит «прямой не дал» — и тогда то же
+ * видео берёт браузерный путь, слово в слово прежний.
+ *
+ * Ветки: ответы, которые TikTok положил в корневой даром, уже приехали вместе с ним и не стоили
+ * ничего; за остальными идёт отдельный запрос — по одному на ветку, и только если `replies > 0`
+ * и даровых меньше потолка. `expandReplies: false` (просьба «без веток») отменяет ровно эти
+ * запросы, как отменяла клики.
+ * ⚠️ Ни одна упавшая ветка видео не роняет: беда считается, но строки корневых уже собраны.
+ * На браузер видео уходит только если не отработала НИ ОДНА ветка — тогда прямому пути на этом
+ * видео веры нет.
+ */
+async function directComments(video, creator, env, flags, log) {
+  const started = Date.now();
+  const handle = creator.handle;
+  const head = await fetchComments(video.id, handle, {
+    max: env.commentsMax,
+    expected: video.comments ?? null,
+    pauseMs: env.directPauseMs,
+    log,
+  });
+  if (!head.ok) return { ok: false, list: [], why: head.why, ms: Date.now() - started, branches: 0 };
+
+  const roots = head.comments;
+  // Даровые ответы — те, что приехали внутри корневых: их считаем в первую очередь.
+  const replies = new Map();
+  for (const r of head.free ?? []) replies.set(r.id, r);
+  const countOf = (parent) => [...replies.values()].filter((c) => c.parentId === parent).length;
+
+  let asked = 0, gotBranches = 0, failedBranches = 0;
+  if (flags.replies && env.repliesMax > 0) {
+    for (const root of roots) {
+      const want = Math.min(Number(root.replies ?? 0), env.repliesMax);
+      if (want <= 0) continue;
+      // Ветка уже целиком приехала даром — запрос за ней был бы платой ни за что.
+      if (countOf(root.id) >= want) continue;
+      asked++;
+      const branch = await fetchReplies(video.id, root.id, handle, { max: env.repliesMax, pauseMs: env.directPauseMs });
+      if (!branch.ok) { failedBranches++; continue; }
+      gotBranches++;
+      for (const r of branch.replies) if (!replies.has(r.id)) replies.set(r.id, r);
+    }
+    if (asked > 0 && gotBranches === 0) {
+      return { ok: false, list: [], why: `ветки не отдались (${failedBranches} из ${asked})`, ms: Date.now() - started, branches: asked };
+    }
+    if (failedBranches > 0) log?.(`    прямой запрос: не отдались ${failedBranches} веток из ${asked} — остальное собрано`);
+  }
+
+  // Потолок ответов на ветку и отбор «только под собранными корневыми» — та же чистая функция,
+  // что и у браузерного пути: правило одно, и второе его написание разошлось бы молча.
+  const list = [...roots, ...pickReplies(replies.values(), roots, env.repliesMax)];
+  return { ok: true, list, why: null, ms: Date.now() - started, branches: asked };
+}
+
+/**
+ * Тексты комментариев к свежим видео креатора — прямым запросом, а где он не дал — браузером
+ * полосы, под сессией фейкового аккаунта. Число комментариев к этому моменту уже лежит в
+ * `video_snaps.comments`; здесь собираются сами тексты.
  *
  * Правила шага:
  *   • кого берём — решает `pickComments` (свежесть, наличие комментариев, «число не менялось»);
- *   • браузер ОДИН НА ПОЛОСУ и поднят снаружи: профиль постоянный, и второй процесс на этой
- *     папке не встанет. TikTok водится с настоящим окном (в скрытом он отдаёт пустые тела и
- *     капчу), Instagram обходится скрытым — это разница между полосами, а не между креаторами;
+ *   • ⚠️ у TikTok каждое видео СНАЧАЛА пробуется прямым запросом (`directComments`), и только
+ *     не давшее уходит браузеру. У Instagram прямого пути нет вовсе — там всё как было;
+ *   • браузер ОДИН НА ПОЛОСУ и поднимается ЛЕНИВО — первым видео, которому он понадобился:
+ *     профиль постоянный, и второй процесс на этой папке не встанет. Все видео сняты прямым —
+ *     окно не открывается вовсе. TikTok водится с настоящим окном (в скрытом он отдаёт пустые
+ *     тела и капчу), Instagram обходится скрытым — это разница между полосами, а не креаторами;
  *   • ошибка одного видео шаг не валит, обход не роняет и `creators.sync_error` не ставит:
  *     комментарии — добавка к снимкам, а не их условие;
  *   • вместе с корневыми снимаются и ответы под ними (`parent_id` = id корневого, не больше
@@ -479,12 +553,13 @@ export function pickComments(videos, known, sinceMs = null, { allVideos = false,
  *
  * `work` — счётчик хода (`{ commentVideo() }`, миграция v24): зовётся после КАЖДОГО видео, а не
  * в конце шага. Шаг стоит десятки минут, и полоса прогресса, стоящая всё это время, врала бы.
- * Отдаёт `{ videos, ms }` — сколько видео шаг обошёл и сколько это заняло: из этой пары
- * калибруется цена `comments.video` (`estimate.mjs`).
+ * Отдаёт `{ videos, ms, directVideos, directMs, browserVideos, browserMs }` — пути считаются
+ * ПОРОЗНЬ: цены у них разные на порядок, и общее среднее калибровало бы обе в никуда
+ * (`calibrateComments` с `direct`).
  */
 async function collectComments(creator, videos, env, lane, flags, depth, bounds, log, work = null) {
   const started = Date.now();
-  const nothing = () => ({ videos: 0, ms: Date.now() - started });
+  const nothing = () => ({ videos: 0, ms: Date.now() - started, directVideos: 0, directMs: 0, browserVideos: 0, browserMs: 0 });
   const platform = creator.platform ?? "tiktok";
   const collect = platform === "tiktok" ? collectTikTokComments
     : platform === "instagram" ? collectInstagramComments
@@ -516,28 +591,61 @@ async function collectComments(creator, videos, env, lane, flags, depth, bounds,
   if (skipped) log?.(`  комментарии: ${skipped} — тексты не снимаем (нужны — просьба «и не наши видео»)`);
   if (flags.allVideos) log?.(`  комментарии: просьба «и не наши видео» — снимаем у всех видео окна`);
 
-  let ctx = null;
-  try {
-    ctx = await lane.ctx(log);
-  } catch (e) {
-    // Нет профиля или не поднялся браузер — снимки уже записаны, обход этим не портим.
-    log?.(`  комментарии: ${short(e)}`);
-    notice("comments", `@${creator.handle}: браузер для комментариев не поднялся — ${short(e)}`);
-    return nothing();
-  }
+  // 🔴 Браузер полосы поднимается ЛЕНИВО — первым видео, которому он понадобился. Все видео
+  // сняты прямым запросом — окно не открывается вовсе (владелец, 2026-09-10). Беда подъёма
+  // запоминается: второй раз за один шаг не пробуем, как и в `laneBrowser`.
+  let ctx = null, ctxBroken = null;
+  const getCtx = async () => {
+    if (ctx) return ctx;
+    if (ctxBroken) throw new Error(ctxBroken);
+    try {
+      ctx = await lane.ctx(log);
+      return ctx;
+    } catch (e) {
+      ctxBroken = short(e);
+      notice("comments", `@${creator.handle}: браузер для комментариев не поднялся — ${ctxBroken}`);
+      throw new Error(ctxBroken);
+    }
+  };
+
+  // Прямой путь есть только у TikTok: у Instagram `direct.mjs` не при чём вовсе.
+  const useDirect = env.direct && platform === "tiktok";
+  if (!useDirect && platform === "tiktok") log?.("  комментарии: прямые запросы выключены (AMESTAT_DIRECT=off) — идём браузером");
 
   // Время меряется от ПЕРВОГО видео: подъём браузера полосы стоит своих секунд, и они уже
   // сосчитаны в шаге списка — второй раз в цену видео они попадать не должны.
   const startedVideos = Date.now();
   let rows = 0, answers = 0, failed = 0;
+  let directVideos = 0, directMs = 0, browserVideos = 0, browserMs = 0, fellBack = 0;
+  let firstWhy = null;
   for (let i = 0; i < picked.length; i++) {
     const video = picked[i];
     try {
-      const list = await collect(
-        ctx,
-        { id: video.id, url: video.url, creatorHandle: creator.handle },
-        { max: env.commentsMax, repliesMax: env.repliesMax, expandReplies: flags.replies, profile: lane.profile, log },
-      );
+      let list = null;
+      // --- прямой запрос ----------------------------------------------------------------
+      if (useDirect) {
+        const one = await directComments(video, creator, env, flags, log);
+        if (one.ok) {
+          list = one.list;
+          directVideos++;
+          directMs += one.ms;
+        } else {
+          fellBack++;
+          firstWhy = firstWhy ?? one.why;
+          log?.(`    видео ${video.id}: прямой не дал (${one.why}) — иду браузером`);
+        }
+      }
+      // --- откат: браузер, слово в слово прежний ------------------------------------------
+      if (list === null) {
+        const startedOne = Date.now();
+        list = await collect(
+          await getCtx(),
+          { id: video.id, url: video.url, creatorHandle: creator.handle },
+          { max: env.commentsMax, repliesMax: env.repliesMax, expandReplies: flags.replies, profile: lane.profile, log },
+        );
+        browserVideos++;
+        browserMs += Date.now() - startedOne;
+      }
       const now = new Date().toISOString();
       if (list.length > 0) {
         // `first_seen_at` не шлём вовсе: его база ставит один раз, при первой встрече.
@@ -570,10 +678,22 @@ async function collectComments(creator, videos, env, lane, flags, depth, bounds,
     // Видео пройдено — двигаем полосу прогресса, чем бы оно ни кончилось: работа потрачена
     // и на упавшем.
     work?.commentVideo?.();
-    if (i < picked.length - 1) await sleep(COMMENTS_PAUSE_MS);
+    // Пауза между видео заводилась под страницу в браузере. Видео, снятое прямым запросом,
+    // страницы не открывало вовсе — ему хватает паузы прямого пути (`AMESTAT_DIRECT_PAUSE_MS`),
+    // иначе три секунды на каждое сожрали бы весь выигрыш.
+    if (i < picked.length - 1) await sleep(useDirect && browserVideos === 0 ? env.directPauseMs : COMMENTS_PAUSE_MS);
+  }
+  const secs = (ms) => Math.round(ms / 1000);
+  if (useDirect) {
+    log?.(`  комментарии: прямым запросом ${directVideos} видео (${secs(directMs)} с), браузером ${browserVideos}${fellBack > 0 ? ` (прямой не дал: ${firstWhy})` : ""}${browserVideos > 0 ? ` (${secs(browserMs)} с)` : ""}${browserVideos === 0 ? " — браузер не понадобился" : ""}`);
+    if (fellBack > 0) notice("direct", `@${creator.handle}: прямой запрос не дал на ${fellBack} видео из ${picked.length} — ${firstWhy}`);
   }
   log?.(`  комментарии: видео ${picked.length}, собрано ${rows} (ответов ${answers}${flags.replies ? "" : ", ветки не раскрывались"}), не вышло ${failed}${same}`);
-  return { videos: picked.length, ms: Date.now() - startedVideos };
+  return {
+    videos: picked.length,
+    ms: Date.now() - startedVideos,
+    directVideos, directMs, browserVideos, browserMs,
+  };
 }
 
 /**
@@ -628,7 +748,7 @@ async function collectOne(creator, env, depth, bounds, lane, flags, log, pool = 
   // Картинки Instagram — в свой бакет; у TikTok адреса площадки идут в базу как есть.
   const images = instagram ? await rehostInstagram(creator, profile, videos, log) : null;
 
-  let commentsRun = { videos: 0, ms: 0 };
+  let commentsRun = { videos: 0, ms: 0, directVideos: 0, directMs: 0, browserVideos: 0, browserMs: 0 };
   if (videos.length > 0) {
     await upsert("videos", videos.map((v) => ({
       id: v.id,
@@ -680,6 +800,12 @@ async function collectOne(creator, env, depth, bounds, lane, flags, log, pool = 
     pages: Number.isFinite(pages) ? pages : null,
     commentsMs: commentsRun.ms,
     commentVideos: commentsRun.videos,
+    // Два пути шага комментариев порознь — калибровке (`comments.direct` против `comments.video`)
+    // и строке времени в логе.
+    directVideos: commentsRun.directVideos,
+    directMs: commentsRun.directMs,
+    browserVideos: commentsRun.browserVideos,
+    browserMs: commentsRun.browserMs,
   };
 }
 
@@ -740,7 +866,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
     return { runId: null, ok: false, done: 0, failed: 0, error: text, failures, depth, log: lines.join("\n") };
   }
   const who = failedOnly ? "только неудавшиеся" : creatorId ? `креатор ${creatorId}` : "все";
-  log(`обход #${runId} (${trigger}, ${who}, глубина ${label}, комментарии ${comments ? "да" : "нет"}, ветки ${replies ? "да" : "нет"}${allVideos ? ", и не наши видео" : ""}${videos === "ours" ? " · только наши" : ""}${maxVideos !== null ? ` · до ${maxVideos} видео` : ""})`);
+  log(`обход #${runId} (${trigger}, ${who}, глубина ${label}, комментарии ${comments ? "да" : "нет"}, ветки ${replies ? "да" : "нет"}${allVideos ? ", и не наши видео" : ""}${videos === "ours" ? " · только наши" : ""}${maxVideos !== null ? ` · до ${maxVideos} видео` : ""}${env.direct ? "" : " · прямые запросы выключены"})`);
 
   // Просьбы забраны этим обходом — сайт перестаёт показывать «в очереди».
   if (requestIds?.length && runId) {
@@ -927,6 +1053,9 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
             creatorDone += seconds;
             laneWork[kind].done += seconds;
           };
+          // Какими единицами считается шаг комментариев у ЭТОГО креатора. Оценка считала теми
+          // же (`estimateCreator`), иначе полоса прогресса разъехалась бы с собственной оценкой.
+          const keys = commentKeys(env.direct && (creator.platform ?? "tiktok") === "tiktok");
           const work = est === null ? null : {
             list() {
               addWork(est.list);
@@ -935,7 +1064,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
             commentVideo() {
               // Цена одного видео берётся из ЖИВОЙ калибровки: она могла подвинуться на
               // прошлых креаторах этого же обхода.
-              addWork(timing["comments.video"] + (flags.replies ? timing["replies.video"] : 0));
+              addWork(timing[keys.video] + (flags.replies ? timing[keys.replies] : 0));
               void progress();
             },
           };
@@ -950,12 +1079,22 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
             if (res.listMs > 0 && res.pages !== null) {
               timing = calibrateList(timing, creator.platform, res.listMs / 1000, res.pages);
             }
-            if (res.commentVideos > 0 && res.commentsMs > 0) {
-              timing = calibrateComments(timing, res.commentsMs / 1000, res.commentVideos, flags.replies);
+            // Пути шага комментариев калибруются ПОРОЗНЬ: прямой стоит секунды, браузерный —
+            // десятки секунд, и одно среднее на двоих испортило бы обе цены. Видео, которое
+            // ходило обоими путями, целиком считается браузерным: браузер в нём и стоит.
+            if (res.directVideos > 0 && res.directMs > 0) {
+              timing = calibrateComments(timing, res.directMs / 1000, res.directVideos, flags.replies, undefined, true);
+            }
+            if (res.browserVideos > 0 && res.browserMs > 0) {
+              timing = calibrateComments(timing, res.browserMs / 1000, res.browserVideos, flags.replies, undefined, false);
             }
             const bad = writeTiming(timing);
             if (bad) say(`  калибровка не записалась: ${bad}`);
-            say(`  время: список ${Math.round(res.listMs / 1000)} с${res.pages === null ? "" : ` (${res.pages} прокруток)`}${res.commentVideos > 0 ? `, комментарии ${Math.round(res.commentsMs / 1000)} с на ${res.commentVideos} видео` : ""}`);
+            const paths = [
+              res.directVideos > 0 ? `прямых ${res.directVideos} за ${Math.round(res.directMs / 1000)} с` : null,
+              res.browserVideos > 0 ? `браузером ${res.browserVideos} за ${Math.round(res.browserMs / 1000)} с` : null,
+            ].filter(Boolean).join(", ");
+            say(`  время: список ${Math.round(res.listMs / 1000)} с${res.pages === null ? "" : ` (${res.pages} прокруток)`}${res.commentVideos > 0 ? `, комментарии ${Math.round(res.commentsMs / 1000)} с на ${res.commentVideos} видео${paths ? ` (${paths})` : ""}` : ""}`);
           } catch (e) {
             failed++;
             error = short(e);
