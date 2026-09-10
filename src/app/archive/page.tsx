@@ -42,7 +42,6 @@ function ArchiveScreen() {
   const { data, error, loading, reload } = useLoader(listArchive, []);
   // Подтверждение — тот же приём, что у удаления креатора и менеджера: полоса над списком
   // с вопросом и двумя кнопками, а не `confirm()` браузера.
-  const [confirmId, setConfirmId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // Переключатель тот же, что на дашборде и в «Креаторах»: положение общее через localStorage.
   const platform = usePlatformFilter();
@@ -63,7 +62,6 @@ function ArchiveScreen() {
       toast.error(res.error);
       return;
     }
-    setConfirmId(null);
     toast.success(t("archive.restored", { handle }));
     reload();
   }
@@ -144,38 +142,18 @@ function ArchiveScreen() {
                       </TableCell>
                       <TableCell>{a.deleted_by_login || t("archive.unknown")}</TableCell>
                       <TableCell className="text-right">
-                        {/* Подтверждение стоит В СТРОКЕ, а не полосой над таблицей: строк в
-                            архиве десятки, и вопрос наверху просто не попадал в поле зрения —
-                            нажатие выглядело как «кнопка не работает» (владелец, 2026-09-10). */}
-                        {confirmId === a.id ? (
-                          <span className="flex items-center justify-end gap-1">
-                            <span className="mr-1 text-xs text-muted-foreground">
-                              {t("archive.restoreConfirm", { handle: a.handle })}
-                            </span>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setConfirmId(null)}
-                              disabled={busy}
-                            >
-                              {t("common.no")}
-                            </Button>
-                            <Button size="sm" onClick={() => restore(a.id, a.handle)} disabled={busy}>
-                              {busy ? t("archive.restoring") : t("archive.restore")}
-                            </Button>
-                          </span>
-                        ) : (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setConfirmId(a.id)}
-                            disabled={busy}
-                            aria-label={t("archive.restore")}
-                          >
-                            <RotateCcwIcon data-icon="inline-start" />
-                            {t("archive.restore")}
-                          </Button>
-                        )}
+                        {/* Без подтверждения: нажал — вернулся (владелец, 2026-09-10).
+                            Возврат обратим — креатора можно удалить снова. */}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => restore(a.id, a.handle)}
+                          disabled={busy}
+                          aria-label={t("archive.restore")}
+                        >
+                          <RotateCcwIcon data-icon="inline-start" />
+                          {busy ? t("archive.restoring") : t("archive.restore")}
+                        </Button>
                       </TableCell>
                     </TableRow>
                   );
