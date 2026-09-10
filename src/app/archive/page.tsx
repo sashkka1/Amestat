@@ -54,9 +54,6 @@ function ArchiveScreen() {
     [data, platformFilter],
   );
 
-  // Ищем среди ВСЕХ строк, а не среди отфильтрованных: иначе вопрос исчезал бы вместе с
-  // ответом, стоит передвинуть переключатель площадки, пока полоса открыта.
-  const pending = (data ?? []).find((a) => a.id === confirmId) ?? null;
 
   async function restore(id: string, handle: string) {
     setBusy(true);
@@ -87,19 +84,6 @@ function ArchiveScreen() {
         <PageSkeleton blocks={1} />
       ) : data ? (
         <>
-        {pending && (
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border bg-muted/40 p-3">
-            <p className="text-sm">{t("archive.restoreConfirm", { handle: pending.handle })}</p>
-            <div className="flex gap-2">
-              <Button variant="ghost" size="sm" onClick={() => setConfirmId(null)} disabled={busy}>
-                {t("common.no")}
-              </Button>
-              <Button size="sm" onClick={() => restore(pending.id, pending.handle)} disabled={busy}>
-                {busy ? t("archive.restoring") : t("archive.restore")}
-              </Button>
-            </div>
-          </div>
-        )}
         <Panel>
           <PanelHead
             title={t("archive.panelTitle")}
@@ -160,16 +144,38 @@ function ArchiveScreen() {
                       </TableCell>
                       <TableCell>{a.deleted_by_login || t("archive.unknown")}</TableCell>
                       <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setConfirmId(a.id)}
-                          disabled={busy}
-                          aria-label={t("archive.restore")}
-                        >
-                          <RotateCcwIcon data-icon="inline-start" />
-                          {t("archive.restore")}
-                        </Button>
+                        {/* Подтверждение стоит В СТРОКЕ, а не полосой над таблицей: строк в
+                            архиве десятки, и вопрос наверху просто не попадал в поле зрения —
+                            нажатие выглядело как «кнопка не работает» (владелец, 2026-09-10). */}
+                        {confirmId === a.id ? (
+                          <span className="flex items-center justify-end gap-1">
+                            <span className="mr-1 text-xs text-muted-foreground">
+                              {t("archive.restoreConfirm", { handle: a.handle })}
+                            </span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setConfirmId(null)}
+                              disabled={busy}
+                            >
+                              {t("common.no")}
+                            </Button>
+                            <Button size="sm" onClick={() => restore(a.id, a.handle)} disabled={busy}>
+                              {busy ? t("archive.restoring") : t("archive.restore")}
+                            </Button>
+                          </span>
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setConfirmId(a.id)}
+                            disabled={busy}
+                            aria-label={t("archive.restore")}
+                          >
+                            <RotateCcwIcon data-icon="inline-start" />
+                            {t("archive.restore")}
+                          </Button>
+                        )}
                       </TableCell>
                     </TableRow>
                   );
