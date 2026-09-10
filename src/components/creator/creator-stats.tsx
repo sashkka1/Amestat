@@ -13,6 +13,7 @@ import { VideosTable, type VideoTableRow } from "@/components/stats/videos-table
 import { PageError } from "@/components/page";
 import { VideoPanel, activeRows, panelMedians } from "./video-panel";
 import {
+  bucketOf,
   creatorDailyViews,
   creatorFollowers,
   listVideoWatch,
@@ -334,7 +335,7 @@ export function CreatorStats({
 
       {/* `creators` не передаём: режим «По креаторам» на карточке одного креатора
           сравнивать не с кем. */}
-      <PerformanceChart data={loaded.daily} collapseKey="creator.chart" />
+      <PerformanceChart data={loaded.daily} serverBucket={bucketOf(loaded.range)} collapseKey="creator.chart" />
 
       {/* Из ряда обзора здесь только публикации по дням: площадка одна, поэтому ни тренда
           по площадкам, ни доли не бывает. */}

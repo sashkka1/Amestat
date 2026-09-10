@@ -37,7 +37,7 @@ import { useScope, type Scope } from "@/lib/dashboard-prefs";
 import { useT } from "@/lib/i18n";
 import { matchesPlatform, platformFilterLabel, usePlatformFilter } from "@/lib/platform-filter";
 import { useLoader } from "@/lib/use-loader";
-import { usePeriod } from "@/lib/use-period";
+import { useEarliestPublished, usePeriod } from "@/lib/use-period";
 import { useSyncQueue } from "@/lib/use-sync-queue";
 import { useProfile } from "@/lib/profile-context";
 import { earliestAdded } from "@/lib/video-rows";
@@ -132,7 +132,8 @@ function CreatorsScreen() {
   const creatorsAll = useMemo(() => base.data?.creators ?? [], [base.data]);
   // Начало «Всего времени» — по всем креаторам, как на дашборде: иначе срок прыгал бы
   // от фильтра площадки.
-  const earliest = useMemo(() => earliestAdded(creatorsAll), [creatorsAll]);
+  const addedEarliest = useMemo(() => earliestAdded(creatorsAll), [creatorsAll]);
+  const earliest = useEarliestPublished(addedEarliest);
   const period = usePeriod(earliest);
 
   // Сводка за срок — своей загрузкой. Охват уходит в базу (миграция v22): и столбец

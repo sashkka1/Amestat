@@ -17,6 +17,7 @@ import { VideosTable } from "@/components/stats/videos-table";
 import { VideoSheet } from "@/components/video-sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  bucketOf,
   creatorsOverview,
   dailyViewsAll,
   listCreators,
@@ -34,7 +35,7 @@ import {
 } from "@/lib/platform-filter";
 import { useIsAdmin } from "@/lib/profile-context";
 import { useLoader } from "@/lib/use-loader";
-import { usePeriod } from "@/lib/use-period";
+import { useEarliestPublished, usePeriod } from "@/lib/use-period";
 import type { VideoState } from "@/lib/video-state";
 import type { DailyViews } from "@/lib/types";
 
@@ -112,7 +113,8 @@ function Dashboard() {
     [allCreators, platformFilter],
   );
   // Начало «Всего времени» считаем по всем креаторам: иначе срок прыгал бы от переключателя.
-  const earliest = useMemo(() => earliestAdded(allCreators), [allCreators]);
+  const addedEarliest = useMemo(() => earliestAdded(allCreators), [allCreators]);
+  const earliest = useEarliestPublished(addedEarliest);
   const period = usePeriod(earliest);
 
   // Полоса периода держит ещё две настройки страницы, и обе помнятся между заходами
@@ -294,6 +296,7 @@ function Dashboard() {
 
           {stats.data ? (
             <PerformanceChart
+              serverBucket={period.range ? bucketOf(period.range) : "day"}
               data={stats.data.daily}
               collapseKey="chart"
               range={range}

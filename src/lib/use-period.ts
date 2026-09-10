@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { setPeriodPrefs, usePeriodPrefs } from "./dashboard-prefs";
+import { earliestPublished } from "./queries";
 import {
   fromDateInputValue,
   previousRange,
@@ -55,4 +56,32 @@ export function usePeriod(earliest: Date): PeriodState {
   const previous = useMemo(() => (range ? previousRange(range) : null), [range]);
 
   return { key, setKey, customFrom, customTo, setCustom, range, previous };
+}
+
+/**
+ * С какого дня начинать «Всё время»: самая ранняя публикация среди видимых видео.
+ * ⚠️ Раньше опорой была дата заведения креатора — но креатора заводят сегодня, а статистика
+ * считается по дате публикации (v21), и весь его архив оказывался старше периода: «Всё время»
+ * показывало пустоту (владелец, 2026-09-10). Пока запрос не вернулся или видео нет вовсе —
+ * прежняя опора, чтобы срок не прыгал.
+ */
+export function useEarliestPublished(fallback: Date, creatorId?: string): Date {
+  const [found, setFound] = useState<Date | null>(null);
+  useEffect(() => {
+    let alive = true;
+    earliestPublished(creatorId).then(
+      (d) => {
+        if (alive && d) setFound(d);
+      },
+      () => {
+        // Не прочиталось — остаёмся на прежней опоре.
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [creatorId]);
+  const foundMs = found?.getTime() ?? null;
+  const fallbackMs = fallback.getTime();
+  return useMemo(() => (foundMs === null ? new Date(fallbackMs) : new Date(foundMs)), [foundMs, fallbackMs]);
 }

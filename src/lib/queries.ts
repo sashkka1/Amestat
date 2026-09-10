@@ -270,6 +270,38 @@ export async function creatorsOverview(
 // ⚠️ Значение дня — не «сколько сборщик увидел в этот день», а «сколько набрали видео,
 // вышедшие в этот день» (миграция v21): текущие счётчики этих роликов. День снимка на числа
 // не влияет вовсе.
+// Шаг ряда: PostgREST режет ответ на 1000 строках, а точка на каждый день за пять лет — это
+// 1826 строк и нечитаемая каша (владелец, 2026-09-10: «за год отображается криво»). Поэтому
+// длинный срок склеивается в базе: до двух месяцев — дни, до года с небольшим — недели, дальше
+// месяцы. Сумма ряда от шага не зависит: складываются те же ролики (миграция v26).
+export type Bucket = "day" | "week" | "month";
+
+export function bucketOf(range: PeriodRange): Bucket {
+  const days = (range.to.getTime() - range.from.getTime()) / 86_400_000;
+  if (days <= 62) return "day";
+  if (days <= 400) return "week";
+  return "month";
+}
+
+// С какого дня вообще есть что показывать: самая ранняя публикация среди видимых видео.
+// ⚠️ Раньше «Всё время» отсчитывалось от `creators.added_at` — а креатора можно завести
+// сегодня, и тогда весь его архив оказывался старше периода, экран пустел (владелец,
+// 2026-09-10). Публикации — правильная опора: статистика и так считается по их дате.
+// Видео нет вовсе — null, и страница остаётся на прежней опоре.
+export async function earliestPublished(creatorId?: string): Promise<Date | null> {
+  let q = createClient()
+    .from("videos")
+    .select("published_at")
+    .not("published_at", "is", null)
+    .order("published_at", { ascending: true })
+    .limit(1);
+  if (creatorId) q = q.eq("creator_id", creatorId);
+  const { data, error } = await q;
+  fail(error);
+  const iso = data?.[0]?.published_at;
+  return iso ? new Date(iso) : null;
+}
+
 export async function dailyViewsAll(
   range: PeriodRange,
   platform: Platform | null = null,
@@ -280,6 +312,7 @@ export async function dailyViewsAll(
     p_to: range.to.toISOString(),
     p_platform: platform,
     p_only_ours: scope === "ours",
+    p_bucket: bucketOf(range),
   });
   fail(error);
   return data ?? [];
@@ -297,6 +330,7 @@ export async function creatorDailyViews(
     p_from: range.from.toISOString(),
     p_to: range.to.toISOString(),
     p_only_ours: scope === "ours",
+    p_bucket: bucketOf(range),
   });
   fail(error);
   return data ?? [];

@@ -13,7 +13,7 @@ import { listManagers } from "@/lib/api/profiles";
 import { useCompare, useScope } from "@/lib/dashboard-prefs";
 import { useT } from "@/lib/i18n";
 import { useLoader } from "@/lib/use-loader";
-import { usePeriod } from "@/lib/use-period";
+import { useEarliestPublished, usePeriod } from "@/lib/use-period";
 import type { Creator, Profile, Tag } from "@/lib/types";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -95,10 +95,11 @@ function CreatorView({ id, videoId }: { id: string; videoId: string | null }) {
   // Пока креатор не прочитан, «Всё время» отсчитывается от года назад. Момент берётся
   // один раз при монтировании: в теле рендера часов спрашивать нельзя.
   const [fallbackEarliest] = useState(() => new Date(Date.now() - 365 * 86_400_000));
-  const earliest = useMemo(
+  const addedEarliest = useMemo(
     () => (creator ? new Date(creator.added_at) : fallbackEarliest),
     [creator, fallbackEarliest],
   );
+  const earliest = useEarliestPublished(addedEarliest, id);
   const period = usePeriod(earliest);
   const name = creator ? creator.display_name || creator.handle : t("creator.title");
   // «Только эта страница» на карточке — это один креатор.

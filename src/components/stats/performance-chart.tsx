@@ -117,6 +117,7 @@ export function PerformanceChart({
   collapseKey,
   range,
   creators,
+  serverBucket = "day",
 }: {
   data: DailyViews[];
   right?: React.ReactNode;
@@ -124,6 +125,8 @@ export function PerformanceChart({
   collapseKey?: string;
   range?: PeriodRange | null;
   creators?: ChartCreator[];
+  // Шаг, которым ряд пришёл из базы: day | week | month.
+  serverBucket?: "day" | "week" | "month";
 }) {
   const t = useT();
   // Тот же стор охвата, что у полосы периода: график дочитывает ряды сам, значит и охват
@@ -138,8 +141,10 @@ export function PerformanceChart({
 
   // Недели предлагаются только на длинном сроке; срок укоротили — ось возвращается к дням,
   // не дожидаясь, пока переключатель нажмут обратно (кнопок-то уже нет).
-  const weekly = data.length > WEEK_AFTER;
-  const bucket: Bucket = weekly ? bucketPick : "day";
+  const weekly = serverBucket === "day" && data.length > WEEK_AFTER;
+  // Длинный срок база уже склеила в недели или месяцы (миграция v26) — клиентскую
+  // группировку тогда не предлагаем вовсе: она склеила бы склеенное.
+  const bucket: Bucket = serverBucket === "day" ? (weekly ? bucketPick : "day") : "day";
 
   const top = useMemo(() => (creators ?? []).slice(0, TOP_CREATORS), [creators]);
   const byCreators = source === "creators" && top.length > 0;
