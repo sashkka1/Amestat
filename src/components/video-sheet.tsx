@@ -8,8 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { VideoPanel, activeRows, panelMedians, type MetricKey } from "@/components/creator/video-panel";
+import type { OursMark } from "@/components/creator/video-comments";
 import type { VideoTableRow } from "@/components/stats/videos-table";
 import { videoStatsBetween } from "@/lib/queries";
+import type { CrossInfo } from "@/lib/cross";
 import { useT } from "@/lib/i18n";
 import type { Scope } from "@/lib/dashboard-prefs";
 import type { PeriodRange } from "@/lib/period";
@@ -69,6 +71,8 @@ export function VideoSheet({
   refreshKey,
   onState,
   onClose,
+  cross,
+  mark,
 }: {
   // Строка таблицы дашборда: null — шторка закрыта.
   video: VideoTableRow | null;
@@ -81,6 +85,10 @@ export function VideoSheet({
   // Состояние меняется тем же переключателем, что в таблице; строку дашборда правит хозяин.
   onState: (videoId: string, next: VideoState, before: VideoState) => void;
   onClose: () => void;
+  // Перекрёстность этого видео и подсветка своих в комментариях — только со страницы
+  // «Amestat Test»; дашборд их не передаёт, и шторка там прежняя.
+  cross?: CrossInfo;
+  mark?: OursMark;
 }) {
   const t = useT();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
@@ -179,6 +187,8 @@ export function VideoSheet({
                 platform={creator.platform}
                 refreshKey={refreshKey}
                 note={shown.missing ? t("videoSheet.notInRange") : null}
+                cross={cross}
+                mark={mark}
               />
             ) : (
               <div className="flex flex-col gap-4" aria-busy="true">

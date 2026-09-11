@@ -58,6 +58,8 @@ export const en = {
 
   nav: {
     dashboard: "Dashboard",
+    // The cross-check page; the name is not translated — it is the page's name.
+    test: "Amestat Test",
     creators: "Creators",
     managers: "Creator managers",
     archive: "Archive",
@@ -178,6 +180,42 @@ export const en = {
     subtitlePlatform: "Summary for {platform}",
     kpiTitle: "Metrics",
     newVideos: "New videos",
+  },
+
+  // Cross-check between our own creators (migration v29). What can be compared is comments,
+  // replies and caption mentions — the platforms hand back likes, views, follows and saves
+  // as bare numbers, with no author, so those are named as missing instead of being hidden.
+  cross: {
+    pageTitle: "Amestat Test",
+    // The yellow "(N)" next to a comment count.
+    badgeTitle: "{n} comments from {handles}",
+    badgeTitleNoNames: "{n} comments from our other creators",
+    mentionTitle: "Mentioned in the caption: {handles}",
+    mentionLine: "Our creator is mentioned in the caption: {handles}",
+    column: "Cross",
+    creatorCell: "{handle}: {received} comments received from our other creators, {given} written to them",
+    commentCross: "our creator",
+    commentCrossTitle: "{handle} is one of our creators",
+    commentSelf: "video author",
+    noteYes: "Compared:",
+    noteYesText:
+      "comments and replies (the author's handle is matched against our creators on the same platform) and @mentions in the caption.",
+    noteNo: "Not compared:",
+    noteNoText:
+      "likes, views, follows and saves — the platforms only return counts, with no names, so there is nothing to match them against.",
+    statCross: "Cross comments",
+    statCrossVideos: "Videos with cross comments",
+    statSelf: "Self comments",
+    statMentions: "Videos with mentions",
+    statTaken: "Comment texts collected",
+    matrixTitle: "Who commented on whom",
+    matrixSubtitle: "{cross} cross comments, {self} self comments",
+    matrixEmpty: "No cross comments yet.",
+    matrixAuthor: "Comment author",
+    matrixGiven: "To others",
+    matrixCell: "{from} left {n} comments under videos by {to}",
+    matrixSelfCell: "{handle} left {n} comments under their own videos",
+    matrixLegend: "Yellow — comments under another creator's video; the diagonal is comments under one's own.",
   },
 
   creators: {

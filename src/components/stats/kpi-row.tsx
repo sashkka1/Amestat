@@ -12,6 +12,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Panel, PanelHead } from "./panel";
+import { CrossBadge } from "./cross-badge";
 import { Sparkline } from "./sparkline";
 import { changeVs, fmtCompact, fmtNum } from "@/lib/format";
 import { tr, useT } from "@/lib/i18n";
@@ -24,6 +25,9 @@ import { cn } from "@/lib/utils";
 // `color` — цвет ряда на «Динамике»: один счётчик — один цвет во всём дашборде.
 // `prev` — то же за прошлый срок; null значит «не сравниваем» (переключатель полосы периода),
 // и тогда строки с дельтой у плитки нет вовсе. Ноль на её месте соврал бы про «−100%».
+// `cross` — жёлтое «(N)» рядом со значением: сколько из него пришло от других наших
+// креаторов (миграция v29, страница «Amestat Test»). Есть только у плитки «Комментарии»:
+// имён к лайкам и просмотрам площадки не дают, и ставить там метку было бы враньём.
 export type Kpi = {
   key: string;
   label: string;
@@ -32,6 +36,8 @@ export type Kpi = {
   prev: number | null;
   series?: number[];
   color?: string;
+  cross?: number;
+  crossHandles?: string[];
 };
 
 // Шесть плиток одной карточкой, разделённые вертикальными линиями.
@@ -74,11 +80,9 @@ function Tile({ kpi }: { kpi: Kpi }) {
         <Icon className="size-3.5" />
         <span>{kpi.label}</span>
       </div>
-      <p
-        className="text-2xl font-semibold tabular-nums tracking-tight"
-        title={fmtNum(kpi.value)}
-      >
-        {fmtCompact(kpi.value)}
+      <p className="flex items-baseline gap-1.5 text-2xl font-semibold tabular-nums tracking-tight">
+        <span title={fmtNum(kpi.value)}>{fmtCompact(kpi.value)}</span>
+        <CrossBadge n={kpi.cross ?? 0} handles={kpi.crossHandles ?? []} className="text-base" />
       </p>
       {change && (
         <p
@@ -108,7 +112,14 @@ function Tile({ kpi }: { kpi: Kpi }) {
 //
 // `prev` — null, когда сравнение выключено полосой периода: тогда прошлый срок вообще
 // не читался, и дельту брать неоткуда.
-export function totalsToKpis(now: Totals, prev: Totals | null, daily?: DailyViews[]): Kpi[] {
+// `cross` — перекрёстность за тот же срок (страница «Amestat Test»): её получает только
+// плитка «Комментарии», у остальных счётчиков имён нет. Не передан — плитки прежние.
+export function totalsToKpis(
+  now: Totals,
+  prev: Totals | null,
+  daily?: DailyViews[],
+  cross?: { comments: number; handles: string[] },
+): Kpi[] {
   // Ряд базы — счётчики видео по дню их публикации (миграция v21): спарклайн рисует его как
   // есть, ничего не вычитая. Сумма ряда за срок равна значению самой плитки — это одни и те
   // же видео, посчитанные по дням и целиком.
@@ -119,7 +130,7 @@ export function totalsToKpis(now: Totals, prev: Totals | null, daily?: DailyView
     { key: "views", label: tr("metric.views"), icon: EyeIcon, value: now.views, prev: was("views"), series: series("views"), color: "var(--chart-1)" },
     { key: "eng", label: tr("metric.engagement"), icon: FlameIcon, value: now.engagement, prev: was("engagement") },
     { key: "likes", label: tr("metric.likes"), icon: HeartIcon, value: now.likes, prev: was("likes"), series: series("likes"), color: "var(--chart-3)" },
-    { key: "comments", label: tr("metric.comments"), icon: MessageCircleIcon, value: now.comments, prev: was("comments"), series: series("comments"), color: "var(--chart-4)" },
+    { key: "comments", label: tr("metric.comments"), icon: MessageCircleIcon, value: now.comments, prev: was("comments"), series: series("comments"), color: "var(--chart-4)", cross: cross?.comments, crossHandles: cross?.handles },
     { key: "shares", label: tr("metric.shares"), icon: Share2Icon, value: now.shares, prev: was("shares"), series: series("shares"), color: "var(--chart-5)" },
     // Плитка называется «Посты» (владелец, 2026-09-09): считаются вышедшие за срок
     // публикации, а «видео» — это уже строки таблицы ниже. Ключ `metric.videos` остался за

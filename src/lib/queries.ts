@@ -7,6 +7,7 @@ import type {
   CreatorManager,
   CreatorOverview,
   CreatorTag,
+  CrossStats,
   DailyViews,
   Platform,
   Tag,
@@ -259,6 +260,27 @@ export async function creatorsOverview(
     p_from: range.from.toISOString(),
     p_to: range.to.toISOString(),
     p_only_ours: scope === "ours",
+  });
+  fail(error);
+  return data ?? [];
+}
+
+// Перекрёстность за срок — страница «Amestat Test» (миграция v29). Срок, площадка и охват
+// те же, что у остальных блоков страницы: иначе «(N) перекрёстных» стояло бы рядом с числом,
+// посчитанным по другому набору видео.
+//
+// ⚠️ Строк приходит меньше, чем видео за срок: база отдаёт только те, где есть что сказать
+// (снятые тексты или упоминание). Отсутствие строки у видео значит ноль, а не «неизвестно».
+export async function crossStats(
+  range: PeriodRange,
+  { platform = null, scope = "all" }: { platform?: Platform | null; scope?: Scope } = {},
+): Promise<CrossStats[]> {
+  const { data, error } = await createClient().rpc("cross_stats", {
+    p_from: range.from.toISOString(),
+    p_to: range.to.toISOString(),
+    p_platform: platform,
+    p_only_ours: scope === "ours",
+    p_tz: browserTz(),
   });
   fail(error);
   return data ?? [];

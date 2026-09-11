@@ -52,6 +52,8 @@ export const ptBR: Dict = {
 
   nav: {
     dashboard: "Painel",
+    // Nome próprio da página: não se traduz.
+    test: "Amestat Test",
     creators: "Criadores",
     managers: "Gerentes de criadores",
     archive: "Arquivo",
@@ -171,6 +173,38 @@ export const ptBR: Dict = {
     subtitlePlatform: "Resumo de {platform}",
     kpiTitle: "Métricas",
     newVideos: "Vídeos novos",
+  },
+
+  cross: {
+    pageTitle: "Amestat Test",
+    badgeTitle: "{n} comentários de {handles}",
+    badgeTitleNoNames: "{n} comentários dos nossos outros criadores",
+    mentionTitle: "Mencionado na legenda: {handles}",
+    mentionLine: "Nosso criador é mencionado na legenda: {handles}",
+    column: "Cruzado",
+    creatorCell: "{handle}: {received} comentários recebidos dos nossos outros criadores, {given} escritos para eles",
+    commentCross: "nosso criador",
+    commentCrossTitle: "{handle} é um dos nossos criadores",
+    commentSelf: "autor do vídeo",
+    noteYes: "Comparado:",
+    noteYesText:
+      "comentários e respostas (o @ do autor é comparado com os nossos criadores da mesma plataforma) e menções @ na legenda.",
+    noteNo: "Não comparado:",
+    noteNoText:
+      "curtidas, visualizações, seguidores e salvamentos — as plataformas devolvem apenas números, sem nomes, então não há com o que comparar.",
+    statCross: "Comentários cruzados",
+    statCrossVideos: "Vídeos com comentários cruzados",
+    statSelf: "Comentários do próprio autor",
+    statMentions: "Vídeos com menções",
+    statTaken: "Textos de comentários coletados",
+    matrixTitle: "Quem comentou em quem",
+    matrixSubtitle: "{cross} comentários cruzados, {self} do próprio autor",
+    matrixEmpty: "Ainda não há comentários cruzados.",
+    matrixAuthor: "Autor do comentário",
+    matrixGiven: "Para outros",
+    matrixCell: "{from} deixou {n} comentários em vídeos de {to}",
+    matrixSelfCell: "{handle} deixou {n} comentários nos próprios vídeos",
+    matrixLegend: "Amarelo — comentários no vídeo de outro criador; a diagonal são os comentários nos próprios vídeos.",
   },
 
   creators: {

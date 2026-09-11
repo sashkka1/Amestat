@@ -11,11 +11,13 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { VideoStateToggle } from "@/components/video-state-toggle";
 import { Panel, PanelHead, Empty } from "./panel";
+import { CrossBadge, MentionMark } from "./cross-badge";
 import { SortHead, nextSort, type SortDir } from "./sort-head";
 import { engagementPct, fmtDayAxis, fmtNum } from "@/lib/format";
 import { engagementRate } from "@/lib/stats";
 import { useT, type TKey } from "@/lib/i18n";
 import { STATE_DOT_CLASS, STATE_ROW_CLASS, stateLabel, type VideoState } from "@/lib/video-state";
+import type { CrossInfo } from "@/lib/cross";
 import type { Platform } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -39,7 +41,9 @@ export type VideoTableRow = {
   state: VideoState;
 };
 
-type Key = "views" | "likes" | "comments" | "shares" | "saves" | "engagement" | "published";
+// `cross` — колонка «Перекрёстно» страницы «Amestat Test»; на дашборде её нет, и ключ туда
+// не попадает: сортировать по столбцу, которого не видно, было бы нечем.
+type Key = "views" | "likes" | "comments" | "shares" | "saves" | "engagement" | "published" | "cross";
 
 // Чипы фильтра по состоянию. Слова во множественном числе — это про набор строк, а не про
 // одно видео, поэтому свои, а не stateLabel: «Наши», а не «Наше».
@@ -54,12 +58,19 @@ const FILTER_LABELS: Record<StateFilter, TKey> = {
 
 const PAGE = 20;
 
-function value(r: VideoTableRow, k: Key): number {
+function value(r: VideoTableRow, k: Key, cross?: Map<string, CrossInfo>): number {
   switch (k) {
     case "published":
       return r.publishedAt ? new Date(r.publishedAt).getTime() : 0;
     case "engagement":
       return engagementRate(r);
+    case "cross": {
+      // Упоминание в подписи — тоже перекрёстность, но комментарием не является: в сортировке
+      // оно идёт долей, чтобы видео с упоминанием стояло выше пустых, но ниже любого
+      // настоящего перекрёстного комментария.
+      const info = cross?.get(r.id);
+      return (info?.cross ?? 0) + (info && info.mentions.length > 0 ? 0.5 : 0);
+    }
     default:
       return r[k];
   }
@@ -75,12 +86,17 @@ export function VideosTable({
   onRowClick,
   selectedId,
   collapseKey,
+  cross,
 }: {
   rows: VideoTableRow[];
   title?: string;
   collapseKey?: string;
   showCreator?: boolean;
   defaultSort?: Key;
+  // Перекрёстность по id видео (миграция v29). Задана — у числа комментариев появляется
+  // жёлтая метка, а справа встаёт колонка «Перекрёстно». Не задана — таблица прежняя:
+  // дашборд про перекрёстность не знает вовсе.
+  cross?: Map<string, CrossInfo>;
   // Задан — появляется колонка «Состояние» с переключателем «не наше / смотрим / наше».
   onSetState?: (videoId: string, state: VideoState) => void;
   onRowClick?: (videoId: string) => void;
@@ -109,8 +125,8 @@ export function VideosTable({
 
   const sorted = useMemo(() => {
     const sign = dir === "asc" ? 1 : -1;
-    return [...filtered].sort((a, b) => (value(a, sortKey) - value(b, sortKey)) * sign);
-  }, [filtered, sortKey, dir]);
+    return [...filtered].sort((a, b) => (value(a, sortKey, cross) - value(b, sortKey, cross)) * sign);
+  }, [filtered, sortKey, dir, cross]);
 
   const pages = Math.max(1, Math.ceil(sorted.length / PAGE));
   const current = Math.min(page, pages - 1);
@@ -192,6 +208,9 @@ export function VideosTable({
                 <SortHead k="shares" label={t("metric.shares")} sortKey={sortKey} dir={dir} onSort={onSort} />
                 <SortHead k="saves" label={t("metric.saves")} sortKey={sortKey} dir={dir} onSort={onSort} />
                 <SortHead k="engagement" label={t("videosTable.engagementShort")} sortKey={sortKey} dir={dir} onSort={onSort} />
+                {cross && (
+                  <SortHead k="cross" label={t("cross.column")} sortKey={sortKey} dir={dir} onSort={onSort} />
+                )}
                 <SortHead k="published" label={t("table.date")} sortKey={sortKey} dir={dir} onSort={onSort} />
                 {onSetState && (
                   <TableHead className="text-center text-muted-foreground">{t("table.status")}</TableHead>
@@ -199,7 +218,9 @@ export function VideosTable({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {shown.map((r) => (
+              {shown.map((r) => {
+                const info = cross?.get(r.id);
+                return (
                 <TableRow
                   key={r.id}
                   onClick={onRowClick ? () => onRowClick(r.id) : undefined}
@@ -241,12 +262,29 @@ export function VideosTable({
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{fmtNum(r.views)}</TableCell>
                   <TableCell className="text-right tabular-nums">{fmtNum(r.likes)}</TableCell>
-                  <TableCell className="text-right tabular-nums">{fmtNum(r.comments)}</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    <span className="inline-flex items-center gap-1">
+                      {fmtNum(r.comments)}
+                      <CrossBadge n={info?.cross ?? 0} handles={info?.handles ?? []} />
+                    </span>
+                  </TableCell>
                   <TableCell className="text-right tabular-nums">{fmtNum(r.shares)}</TableCell>
                   <TableCell className="text-right tabular-nums">{fmtNum(r.saves)}</TableCell>
                   <TableCell className="text-right tabular-nums">
                     {engagementPct(r)}
                   </TableCell>
+                  {cross && (
+                    <TableCell className="text-right tabular-nums">
+                      <span className="inline-flex items-center justify-end gap-1">
+                        {info && info.cross > 0 ? (
+                          <CrossBadge n={info.cross} handles={info.handles} />
+                        ) : (
+                          <span className="text-muted-foreground/50">—</span>
+                        )}
+                        <MentionMark handles={info?.mentions ?? []} />
+                      </span>
+                    </TableCell>
+                  )}
                   <TableCell className="text-right tabular-nums">
                     {r.publishedAt ? fmtDayAxis(r.publishedAt) : "—"}
                   </TableCell>
@@ -256,7 +294,8 @@ export function VideosTable({
                     </TableCell>
                   )}
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table>
 

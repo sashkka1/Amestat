@@ -8,9 +8,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Panel } from "@/components/stats/panel";
 import { VideoStateToggle } from "@/components/video-state-toggle";
+import { CrossBadge, MentionMark } from "@/components/stats/cross-badge";
 import { VideoHistoryChart } from "./daily-chart";
-import { VideoComments } from "./video-comments";
+import { VideoComments, type OursMark } from "./video-comments";
 import { videoHistory } from "@/lib/queries";
+import type { CrossInfo } from "@/lib/cross";
 import { describeVsMedian, median } from "@/lib/stats";
 import { fmtDateTime, fmtNum } from "@/lib/format";
 import { useT, type TKey } from "@/lib/i18n";
@@ -57,6 +59,8 @@ export function VideoPanel({
   onClose,
   plain = false,
   note,
+  cross,
+  mark,
 }: {
   row: VideoStats;
   // Состояние видео и его переключатель — те же, что в строке таблицы: `videos.ours` из
@@ -75,6 +79,12 @@ export function VideoPanel({
   // Строка под ссылкой на площадку: шторка дашборда говорит ею, что за срок снимков не было
   // и счётчики показаны текущие.
   note?: string | null;
+  // Перекрёстность этого видео (страница «Amestat Test»): жёлтое «(N)» у строки
+  // «Комментарии» и значок «@», если наш креатор назван в подписи. Не задана — панель
+  // прежняя, как на дашборде и карточке креатора.
+  cross?: CrossInfo;
+  // Подсветка комментариев наших креаторов в списке ниже.
+  mark?: OursMark;
 }) {
   const t = useT();
   // История помнит, чьё она видео: сменилась строка — до ответа показываем скелет.
@@ -135,6 +145,12 @@ export function VideoPanel({
             {t("videoPanel.published", { date: fmtDateTime(row.published_at) })}
           </p>
           {note && <p className="text-xs text-muted-foreground">{note}</p>}
+          {cross && cross.mentions.length > 0 && (
+            <p className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-500">
+              <MentionMark handles={cross.mentions} />
+              {t("cross.mentionLine", { handles: cross.mentions.map((h) => `@${h}`).join(", ") })}
+            </p>
+          )}
           <VideoStateToggle state={state} onChange={onState} withLabels className="self-start" />
         </div>
       </div>
@@ -160,7 +176,14 @@ export function VideoPanel({
                   {/* Одно число — текущее значение счётчика (владелец, 2026-09-09).
                       Прирост за срок из колонки убран: он остаётся в расчёте справа,
                       где сравнивается с медианой, но глазами тут нужен итог. */}
-                  <TableCell className="text-right tabular-nums">{fmtNum(now)}</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    <span className="inline-flex items-center gap-1">
+                      {fmtNum(now)}
+                      {m.key === "comments" && (
+                        <CrossBadge n={cross?.cross ?? 0} handles={cross?.handles ?? []} />
+                      )}
+                    </span>
+                  </TableCell>
                   <TableCell className="text-right tabular-nums">{fmtNum(medians[m.key])}</TableCell>
                   <TableCell className="text-right">{describeVsMedian(value, medians[m.key])}</TableCell>
                 </TableRow>
@@ -192,6 +215,7 @@ export function VideoPanel({
         total={row.comments_now}
         ours={row.ours}
         refreshKey={refreshKey}
+        mark={mark}
       />
     </>
   );

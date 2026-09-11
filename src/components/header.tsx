@@ -14,8 +14,11 @@ import { cn } from "@/lib/utils";
 // ⚠️ Дашборда во вкладках нет (владелец, 2026-09-09): на главную ведёт сама надпись
 // «Amestat» слева, и она же подсвечивается, когда мы на ней. Ключ `nav.dashboard` остаётся —
 // он заголовок самой страницы.
+// «Amestat Test» — только администратору (владелец, 2026-09-11): проверочная страница
+// рядом со статистикой, а не витрина менеджера.
 const ADMIN_NAV: { href: string; label: TKey }[] = [
   { href: "/creators/", label: "nav.creators" },
+  { href: "/test/", label: "nav.test" },
   { href: "/managers/", label: "nav.managers" },
   { href: "/archive/", label: "nav.archive" },
 ];

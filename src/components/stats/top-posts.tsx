@@ -2,14 +2,16 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { EyeIcon, SearchIcon } from "lucide-react";
+import { EyeIcon, MessageCircleIcon, SearchIcon } from "lucide-react";
 import { Cover } from "@/components/cover";
 import { PlatformIcon } from "@/components/platform";
 import { Input } from "@/components/ui/input";
 import { Panel, PanelHead, Empty } from "./panel";
+import { CrossBadge, MentionMark } from "./cross-badge";
 import { fmtCompact, fmtDayAxis, fmtNum } from "@/lib/format";
 import { engagementRate } from "@/lib/stats";
 import { useT, type TKey } from "@/lib/i18n";
+import type { CrossInfo } from "@/lib/cross";
 import type { Platform } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -62,12 +64,16 @@ export function TopPosts({
   showCreator = true,
   collapseKey,
   onSelect,
+  cross,
 }: {
   posts: PostItem[];
   title?: string;
   limit?: number;
   showCreator?: boolean;
   collapseKey?: string;
+  // Перекрёстность по id видео (миграция v29): задана — под обложкой встаёт строка
+  // «Комментарии · N (M)». Не задана — карточка прежняя, как на дашборде.
+  cross?: Map<string, CrossInfo>;
   // Задан — щелчок остаётся на странице и отдаёт видео хозяину (шторка дашборда). Не задан —
   // прежний переход на карточку креатора с открытым видео (карточка креатора, владелец
   // 2026-09-09: там поведение не меняется).
@@ -166,6 +172,17 @@ export function TopPosts({
                 {showCreator && p.creatorName && (
                   <p className="truncate text-xs" title={p.creatorName}>
                     {p.creatorName}
+                  </p>
+                )}
+                {cross && (
+                  <p className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
+                    <MessageCircleIcon className="size-3 shrink-0" />
+                    <span className="tabular-nums">{fmtNum(p.comments)}</span>
+                    <CrossBadge
+                      n={cross.get(p.id)?.cross ?? 0}
+                      handles={cross.get(p.id)?.handles ?? []}
+                    />
+                    <MentionMark handles={cross.get(p.id)?.mentions ?? []} />
                   </p>
                 )}
               </li>

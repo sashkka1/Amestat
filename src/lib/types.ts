@@ -421,6 +421,24 @@ export type DailyViews = {
   saves: number;
 };
 
+// Результат RPC cross_stats (миграция v29): перекрёстность по одному видео. Строки приходят
+// только у видео, где есть что сказать, — со снятыми текстами комментариев или с упоминанием
+// нашего в подписи; у остальных перекрёстность нулевая по определению.
+//
+// ⚠️ `comments_total` — сколько текстов СНЯТО (корневые вместе с ответами), а не счётчик
+// площадки из снимка: у не наших видео тексты обычно не снимаются вовсе.
+// `cross_authors` — по записи на каждый перекрёстный комментарий, с повторами: отсюда и
+// подсказка со списком имён, и матрица «кто кого комментировал».
+export type CrossStats = {
+  video_id: string;
+  creator_id: string;
+  comments_total: number;
+  comments_cross: number;
+  comments_self: number;
+  cross_authors: string[];
+  mentions_cross: string[];
+};
+
 // Результат RPC creators_overview: по одному ряду на видимого креатора за срок.
 export type CreatorOverview = {
   creator_id: string;
@@ -518,6 +536,19 @@ export type Database = {
           p_limit?: number;
         };
         Returns: VideoWithLatest[];
+      };
+      // Перекрёстность по видео (миграция v29): комментарии от других наших креаторов,
+      // самокомментарии и упоминания наших в подписи. `p_tz` принимается ради общей формы
+      // вызова со статистическими функциями и на отбор не влияет.
+      cross_stats: {
+        Args: {
+          p_from: string;
+          p_to: string;
+          p_platform?: string | null;
+          p_only_ours?: boolean;
+          p_tz?: string;
+        };
+        Returns: CrossStats[];
       };
       // Вернуть креатора из архива (миграция v25): карточка и привязки менеджеров.
       // Видео и снимки не восстанавливаются — их соберёт ближайший обход.

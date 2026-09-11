@@ -13,6 +13,7 @@ import { SortHead, nextSort, type SortDir } from "./sort-head";
 import { fmtNum } from "@/lib/format";
 import { engagementOf } from "@/lib/stats";
 import { useT } from "@/lib/i18n";
+import type { CrossCreator } from "@/lib/cross";
 import type { Creator, CreatorOverview } from "@/lib/types";
 
 export type CreatorRow = {
@@ -25,9 +26,12 @@ export type CreatorRow = {
   avgViews: number;
   // Просмотры за прошлый срок той же длины; 0 — сравнивать не с чем, в колонке будет «—».
   viewsPrev: number;
+  // Перекрёстность за срок (миграция v29): сколько написал другим нашим и сколько получил
+  // от них. Задана только на странице «Amestat Test» — на дашборде колонки нет вовсе.
+  cross?: CrossCreator;
 };
 
-type Key = "views" | "engagement" | "videos" | "avgViews" | "delta";
+type Key = "views" | "engagement" | "videos" | "avgViews" | "delta" | "cross";
 
 // Сколько строк видно до нажатия «Показать все»: таблица на дашборде — витрина лидеров,
 // а не полный список.
@@ -36,6 +40,8 @@ const COLLAPSED = 5;
 // Сортировка по дельте — по доле, а не по разнице в штуках: иначе колонка с процентами
 // упорядочивалась бы не по тому, что в ней написано.
 function value(r: CreatorRow, k: Key): number {
+  // Сортировка по перекрёстности — по полученным: столбец про то, кого комментируют.
+  if (k === "cross") return r.cross?.received ?? 0;
   if (k !== "delta") return r[k];
   return r.viewsPrev === 0 ? 0 : (r.views - r.viewsPrev) / r.viewsPrev;
 }
@@ -46,6 +52,8 @@ export function buildCreatorRows(
   creators: Creator[],
   overview: CreatorOverview[],
   prev: CreatorOverview[] = [],
+  // Перекрёстность по креатору; не передана — колонки «Перекрёстно» в таблице нет.
+  cross?: Map<string, CrossCreator>,
 ): CreatorRow[] {
   const byId = new Map(overview.map((o) => [o.creator_id, o]));
   const prevById = new Map(prev.map((o) => [o.creator_id, o]));
@@ -65,6 +73,9 @@ export function buildCreatorRows(
       videos,
       avgViews: videos > 0 ? Math.round(views / videos) : 0,
       viewsPrev: prevById.get(c.id)?.views_delta ?? 0,
+      // Ноль ставим сами: у креатора без единого пересечения строка обязана показать «0»,
+      // а не «колонки нет» — колонка решается наличием самой карты, а не этой строки.
+      cross: cross ? (cross.get(c.id) ?? { given: 0, received: 0 }) : undefined,
     };
   });
 }
@@ -90,6 +101,9 @@ export function TopCreators({
     return [...rows].sort((a, b) => (value(a, sortKey) - value(b, sortKey)) * sign);
   }, [rows, sortKey, dir]);
   const shown = expanded ? sorted : sorted.slice(0, COLLAPSED);
+  // Колонку решает наличие данных, а не отдельный флаг: строки строит `buildCreatorRows`,
+  // и передавший ей перекрёстность заведомо хочет её видеть.
+  const showCross = rows.some((r) => r.cross !== undefined);
 
   function onSort(k: Key) {
     const next = nextSort(sortKey, dir, k);
@@ -118,6 +132,9 @@ export function TopCreators({
               <SortHead k="videos" label={t("topCreators.published")} sortKey={sortKey} dir={dir} onSort={onSort} />
               <SortHead k="avgViews" label={t("topCreators.avgViews")} sortKey={sortKey} dir={dir} onSort={onSort} />
               <SortHead k="delta" label={t("topCreators.deltaViews")} sortKey={sortKey} dir={dir} onSort={onSort} />
+              {showCross && (
+                <SortHead k="cross" label={t("cross.column")} sortKey={sortKey} dir={dir} onSort={onSort} />
+              )}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -150,6 +167,26 @@ export function TopCreators({
                   <TableCell className="text-right tabular-nums">
                     <Delta now={r.views} prev={r.viewsPrev} />
                   </TableCell>
+                  {showCross && (
+                    <TableCell
+                      className="text-right tabular-nums"
+                      title={t("cross.creatorCell", {
+                        handle: `@${r.creator.handle}`,
+                        received: fmtNum(r.cross?.received ?? 0),
+                        given: fmtNum(r.cross?.given ?? 0),
+                      })}
+                    >
+                      {/* Подсказка у самой клетки — она говорит про обе стороны сразу,
+                          поэтому число здесь без своего `title`. */}
+                      {(r.cross?.received ?? 0) > 0 ? (
+                        <span className="font-medium text-amber-600 dark:text-amber-500">
+                          {fmtNum(r.cross?.received ?? 0)}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground/50">—</span>
+                      )}
+                    </TableCell>
+                  )}
                 </TableRow>
               );
             })}

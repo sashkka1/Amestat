@@ -13,11 +13,17 @@ import {
   videoCommentsSyncedAt,
   type CommentSort,
 } from "@/lib/queries";
+import { commentMark, type CommentMark } from "@/lib/cross";
 import { fmtNum } from "@/lib/format";
 import { profileUrl } from "@/lib/handle";
 import { useT } from "@/lib/i18n";
 import type { Platform, VideoComment } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+// Кто из наших писал этот комментарий — общий набор на весь список: имена наших креаторов
+// той же площадки и имя владельца видео (оба в нижнем регистре). Не передан — подсветки нет
+// вовсе, и список выглядит ровно как на дашборде.
+export type OursMark = { handles: Set<string>; ownerHandle: string };
 
 const PAGE = 30;
 
@@ -61,6 +67,7 @@ export function VideoComments({
   total,
   ours,
   refreshKey,
+  mark,
 }: {
   videoId: string;
   platform: Platform;
@@ -71,6 +78,10 @@ export function VideoComments({
   ours: boolean;
   // Меняется после обхода — список перечитывается.
   refreshKey: number;
+  // Подсветка своих (страница «Amestat Test»): жёлтая метка у комментария другого нашего
+  // креатора и приглушённая — у комментария автора самого видео. Не задана — списка это
+  // не касается.
+  mark?: OursMark;
 }) {
   const t = useT();
   const [sort, setSort] = useState<CommentSort>("likes");
@@ -193,6 +204,7 @@ export function VideoComments({
           search={search}
           more={current.count - current.rows.length}
           busy={busy}
+          mark={mark}
           onMore={() => void loadMore()}
         />
       )}
@@ -210,6 +222,7 @@ function CommentList({
   search,
   more,
   busy,
+  mark,
   onMore,
 }: {
   videoId: string;
@@ -219,6 +232,7 @@ function CommentList({
   // Сколько корневых в базе ещё не прочитано: больше нуля — есть «Показать ещё».
   more: number;
   busy: boolean;
+  mark?: OursMark;
   onMore: () => void;
 }) {
   // Какие ветки развёрнуты и что в них загружено. Свёрнутая ветка помнит ответы —
@@ -278,6 +292,7 @@ function CommentList({
               <CommentRow
                 c={c}
                 platform={platform}
+                mark={mark}
                 tail={
                   hasReplies && (
                     <>
@@ -294,7 +309,14 @@ function CommentList({
                   )
                 }
               >
-                {expanded && <Replies branch={branches[c.id]} platform={platform} total={c.replies ?? 0} />}
+                {expanded && (
+                  <Replies
+                    branch={branches[c.id]}
+                    platform={platform}
+                    total={c.replies ?? 0}
+                    mark={mark}
+                  />
+                )}
               </CommentRow>
             </li>
           );
@@ -319,21 +341,29 @@ function CommentRow({
   c,
   platform,
   small = false,
+  mark,
   tail,
   children,
 }: {
   c: VideoComment;
   platform: Platform;
   small?: boolean;
+  mark?: OursMark;
   tail?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   const t = useT();
+  // 🔴 Комментарий другого нашего креатора и комментарий автора видео под своим же роликом —
+  // разные вещи, и метки у них разные: жёлтая «наш креатор» и приглушённая «автор видео».
+  const kind: CommentMark = mark ? commentMark(c.author_handle, mark.handles, mark.ownerHandle) : null;
   return (
-    <div className="flex gap-2.5">
+    <div className={cn("flex gap-2.5", kind === "cross" && "rounded-lg bg-amber-500/10 p-2")}>
       <div
         className={cn(
-          "flex shrink-0 select-none items-center justify-center rounded-full bg-muted font-medium uppercase text-muted-foreground",
+          "flex shrink-0 select-none items-center justify-center rounded-full font-medium uppercase",
+          kind === "cross"
+            ? "bg-amber-500/25 text-amber-700 dark:text-amber-400"
+            : "bg-muted text-muted-foreground",
           small ? "size-5 text-[10px]" : "size-7 text-xs",
         )}
       >
@@ -357,6 +387,19 @@ function CommentRow({
               </span>
             )}
             {c.author_handle && c.author_name && <span className="ml-1.5">{c.author_name}</span>}
+            {kind === "cross" && (
+              <span
+                className="ml-1.5 rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400"
+                title={t("cross.commentCrossTitle", { handle: `@${c.author_handle}` })}
+              >
+                {t("cross.commentCross")}
+              </span>
+            )}
+            {kind === "self" && (
+              <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium">
+                {t("cross.commentSelf")}
+              </span>
+            )}
           </p>
           {c.likes !== null && (
             <span
@@ -387,10 +430,12 @@ function Replies({
   branch,
   platform,
   total,
+  mark,
 }: {
   branch: Branch | undefined;
   platform: Platform;
   total: number;
+  mark?: OursMark;
 }) {
   const t = useT();
   return (
@@ -408,7 +453,7 @@ function Replies({
           <ul className="space-y-2.5">
             {branch.rows.map((r) => (
               <li key={r.id}>
-                <CommentRow c={r} platform={platform} small />
+                <CommentRow c={r} platform={platform} small mark={mark} />
               </li>
             ))}
           </ul>
