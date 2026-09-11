@@ -303,6 +303,9 @@ export const ptBR: Dict = {
   chart: {
     title: "Evolução",
     byDay: "Por dia",
+    byHour: "Por hora",
+    byWeek: "Por semana",
+    byMonth: "Por mês",
     cumulative: "Acumulado",
     empty: "Não há dados neste período.",
     days: "Dias",

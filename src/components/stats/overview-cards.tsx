@@ -14,7 +14,7 @@ import {
   XAxis,
 } from "recharts";
 import { Panel, PanelHead, Empty } from "./panel";
-import { fmtBucketAxis, fmtBucketFull, fmtCompact, fmtDayAxis, fmtNum } from "@/lib/format";
+import { fmtBucketAxis, fmtBucketFull, fmtCompact, fmtNum } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import type { Bucket } from "@/lib/queries";
 import type { DailyViews, Platform } from "@/lib/types";
@@ -41,11 +41,11 @@ const AXIS_TICK = { fontSize: 10, fill: "var(--muted-foreground)" } as const;
 // Подписи оси и подсказки: при часовом шаге — «14:00» и «11 September, 14:00–15:00»; при
 // остальных — дата начала отрезка, как было до часов.
 function axisLabel(iso: string, bucket: Bucket): string {
-  return bucket === "hour" ? fmtBucketAxis(iso, "hour") : fmtDayAxis(iso);
+  return fmtBucketAxis(iso, bucket);
 }
 
 function tipLabel(iso: string, bucket: Bucket): string {
-  return bucket === "hour" ? fmtBucketFull(iso, "hour") : fmtDayAxis(iso);
+  return fmtBucketFull(iso, bucket);
 }
 
 // Просмотры по дню публикации видео: база отдаёт ряд как есть (миграция v21), здесь остаётся
