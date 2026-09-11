@@ -315,6 +315,7 @@ function CommentList({
                     platform={platform}
                     total={c.replies ?? 0}
                     mark={mark}
+                    replyTo={c.author_handle}
                   />
                 )}
               </CommentRow>
@@ -337,11 +338,16 @@ function CommentList({
 // Строка комментария — одна и та же у корневого и у ответа: @ник, имя, текст, лайки, дата.
 // small — вид внутри ветки: кружок и текст мельче. tail дописывается к дате (кнопка веток),
 // children встают под строкой с отступом её колонки — там и живёт сама ветка.
+//
+// replyTo — имя автора корневого комментария: ставится только у ответов и только когда имя
+// известно (владелец, 2026-09-11). Без него ответ читался бы как обычный комментарий, а
+// отступ ветки — как случайный отступ.
 function CommentRow({
   c,
   platform,
   small = false,
   mark,
+  replyTo,
   tail,
   children,
 }: {
@@ -349,6 +355,7 @@ function CommentRow({
   platform: Platform;
   small?: boolean;
   mark?: OursMark;
+  replyTo?: string;
   tail?: React.ReactNode;
   children?: React.ReactNode;
 }) {
@@ -400,6 +407,11 @@ function CommentRow({
                 {t("cross.commentSelf")}
               </span>
             )}
+            {replyTo && (
+              <span className="ml-1.5 text-[10px] text-muted-foreground">
+                {t("comments.replyTo", { handle: `@${replyTo}` })}
+              </span>
+            )}
           </p>
           {c.likes !== null && (
             <span
@@ -426,20 +438,27 @@ function CommentRow({
 // Ветка ответов под корневым: полоса слева и отступ, внутри — те же строки помельче.
 // total — сколько ответов у комментария на площадке: снято бывает меньше (сборщик
 // берёт до 20), и тогда об этом говорится прямо, чтобы разницу не приняли за потерю.
+//
+// 🔴 Сдвиг и полоса — единственное, чем ответ отличается от корневого на глаз (владелец,
+// 2026-09-11: «непонятно, что это ответ»), поэтому отступ заметный, а цвет полосы — `border`,
+// тот же, что у всех разделителей: в тёмной теме он темнеет вместе с ними.
 function Replies({
   branch,
   platform,
   total,
   mark,
+  replyTo,
 }: {
   branch: Branch | undefined;
   platform: Platform;
   total: number;
   mark?: OursMark;
+  // Имя автора корневого комментария; пустое — пометки «в ответ @ник» не будет.
+  replyTo?: string;
 }) {
   const t = useT();
   return (
-    <div className="mt-2 border-l pl-3">
+    <div className="mt-2 border-l border-border pl-6">
       {branch === undefined || branch.status === "loading" ? (
         <Skeleton className="h-10 w-full" />
       ) : branch.status === "error" ? (
@@ -453,7 +472,13 @@ function Replies({
           <ul className="space-y-2.5">
             {branch.rows.map((r) => (
               <li key={r.id}>
-                <CommentRow c={r} platform={platform} small mark={mark} />
+                <CommentRow
+                  c={r}
+                  platform={platform}
+                  small
+                  mark={mark}
+                  replyTo={replyTo ? replyTo : undefined}
+                />
               </li>
             ))}
           </ul>

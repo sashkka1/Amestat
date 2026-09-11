@@ -193,6 +193,14 @@ export const en = {
     mentionTitle: "Mentioned in the caption: {handles}",
     mentionLine: "Our creator is mentioned in the caption: {handles}",
     column: "Cross",
+    // The three numbers in the comments column: collected · not by the author · from our
+    // other creators. The platform counter is a separate line — it is the bigger number and
+    // must not be read as one of the three.
+    countsTotal: "Comment texts collected: {n}",
+    countsOthers: "Not written by the video author: {n} (the author wrote {self})",
+    countsCross: "From our other creators: {n}",
+    countsCrossWho: "From our other creators: {n} — {handles}",
+    countsPlatform: "On the platform: {n}",
     creatorCell: "{handle}: {received} comments received from our other creators, {given} written to them",
     commentCross: "our creator",
     commentCrossTitle: "{handle} is one of our creators",
@@ -444,6 +452,8 @@ export const en = {
     reading: "Loading…",
     noName: "no name",
     likesTitle: "likes: {n}",
+    // Marks a reply inside a branch: without it an indented reply still reads as a comment.
+    replyTo: "in reply to {handle}",
     repliesError: "Could not read the replies: {error}",
     repliesNotTaken: "replies have not been collected yet",
     shownOf: "showing {shown} of {total}: the rest was not collected",
