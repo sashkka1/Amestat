@@ -241,7 +241,7 @@ export function CreatorStats({
 
   // Сетка дней и даты публикаций для карточки «Публикации по дням» — из уже прочитанного:
   // дни те же, по которым идёт «Динамика».
-  const overviewDays = useMemo(() => loaded?.daily.map((d) => d.day) ?? [], [loaded]);
+  const overviewDays = useMemo(() => loaded?.daily.map((d) => d.at) ?? [], [loaded]);
   const publishedAt = useMemo(
     () =>
       loaded
@@ -339,7 +339,12 @@ export function CreatorStats({
 
       {/* Из ряда обзора здесь только публикации по дням: площадка одна, поэтому ни тренда
           по площадкам, ни доли не бывает. */}
-      <PostsPerDay days={overviewDays} publishedAt={publishedAt} collapseKey="creator.posts" />
+      <PostsPerDay
+        days={overviewDays}
+        publishedAt={publishedAt}
+        bucket={bucketOf(loaded.range)}
+        collapseKey="creator.posts"
+      />
 
       <TopPosts
         posts={posts}

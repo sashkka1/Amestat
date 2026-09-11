@@ -274,13 +274,27 @@ export async function creatorsOverview(
 // 1826 строк и нечитаемая каша (владелец, 2026-09-10: «за год отображается криво»). Поэтому
 // длинный срок склеивается в базе: до двух месяцев — дни, до года с небольшим — недели, дальше
 // месяцы. Сумма ряда от шага не зависит: складываются те же ролики (миграция v26).
-export type Bucket = "day" | "week" | "month";
+// Короткий срок — по часам (миграция v27, владелец, 2026-09-11: «графики за сегодня не бьются по
+// времени»): день на «сегодня» давал одну-две точки и прямую между ними.
+export type Bucket = "hour" | "day" | "week" | "month";
 
 export function bucketOf(range: PeriodRange): Bucket {
   const days = (range.to.getTime() - range.from.getTime()) / 86_400_000;
+  if (days <= 2) return "hour";
   if (days <= 62) return "day";
   if (days <= 400) return "week";
   return "month";
+}
+
+// Пояс браузера (IANA) — в нём база режет ряд на отрезки (миграция v27). Иначе сутки резались
+// по UTC, и «сегодня» у владельца в UTC+3 распадалось на «вчера» и «сегодня». Решение владельца
+// от 09.09: хранится UTC, показывается по поясу браузера. Незнакомое имя база сама сводит к UTC.
+function browserTz(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
 }
 
 // С какого дня вообще есть что показывать: самая ранняя публикация среди видимых видео.
@@ -313,6 +327,7 @@ export async function dailyViewsAll(
     p_platform: platform,
     p_only_ours: scope === "ours",
     p_bucket: bucketOf(range),
+    p_tz: browserTz(),
   });
   fail(error);
   return data ?? [];
@@ -331,6 +346,7 @@ export async function creatorDailyViews(
     p_to: range.to.toISOString(),
     p_only_ours: scope === "ours",
     p_bucket: bucketOf(range),
+    p_tz: browserTz(),
   });
   fail(error);
   return data ?? [];

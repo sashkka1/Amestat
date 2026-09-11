@@ -72,11 +72,23 @@ function months(): string[] {
 // Полная расшифровка точки графика: день, неделя или месяц — так, чтобы при наведении было
 // видно, за что именно число (владелец, 2026-09-10: «за всё время не понимаю, за какую дату»).
 // Неделя печатается отрезком, месяц — названием с годом; год у дня добавляется, если он не
-// нынешний.
-export function fmtBucketFull(iso: string, bucket: "day" | "week" | "month" = "day"): string {
+// нынешний. Час — «11 September, 14:00–15:00» (миграция v27).
+export type BucketKind = "hour" | "day" | "week" | "month";
+
+// «14:00» — часы и минуты в поясе браузера, всегда 24-часовые: подпись оси должна быть ровно
+// такой и в en-US, где toLocaleTimeString дал бы «02:00 PM».
+function hhmm(d: Date): string {
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+export function fmtBucketFull(iso: string, bucket: BucketKind = "day"): string {
   const d = new Date(iso.length === 10 ? `${iso}T00:00:00` : iso);
   if (Number.isNaN(d.getTime())) return iso;
   const loc = locale();
+  if (bucket === "hour") {
+    const end = new Date(d.getTime() + 3_600_000);
+    return `${fmtBucketFull(iso, "day")}, ${hhmm(d)}–${hhmm(end)}`;
+  }
   if (bucket === "month") {
     return d.toLocaleDateString(loc, { month: "long", year: "numeric" });
   }
@@ -101,6 +113,17 @@ export function fmtDayAxis(iso: string): string {
   const d = new Date(iso.length === 10 ? `${iso}T00:00:00` : iso);
   if (Number.isNaN(d.getTime())) return iso;
   return `${d.getDate()} ${months()[d.getMonth()]}`;
+}
+
+// Подпись точки на оси по шагу ряда: час — «14:00», месяц — названием с годом, остальное —
+// «12 Aug», как у дня.
+export function fmtBucketAxis(iso: string, bucket: BucketKind): string {
+  if (bucket === "hour") {
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? iso : hhmm(d);
+  }
+  if (bucket === "month") return fmtBucketFull(iso, "month");
+  return fmtDayAxis(iso);
 }
 
 // «8 September» — день с месяцем словом, без года: так читается оговорка под полосой периода.

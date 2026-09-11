@@ -407,8 +407,13 @@ export type VideoStats = {
 // по дням. ⚠️ Значение дня — сумма ТЕКУЩИХ счётчиков видео, опубликованных в этот день, а не
 // накопленная сумма и не прирост по снимкам: сайт рисует значения как есть, а «накопительно»
 // складывает их бегущей суммой (`runningTotal` в lib/stats.ts).
+// Отрезок — час, день, неделя или месяц в поясе браузера (миграции v26, v27). `at` — его начало
+// как момент (ISO со смещением): по нему ставится и подписывается точка. `day` — местная дата
+// начала, оставлена для совместимости; раскладывать ряд по ней нельзя — при часовом шаге она
+// у 24 точек одна.
 export type DailyViews = {
   day: string;
+  at: string;
   views: number;
   likes: number;
   comments: number;
@@ -473,8 +478,16 @@ export type Database = {
         Args: { p_creator: string; p_from: string; p_to: string; p_only_ours?: boolean };
         Returns: VideoStats[];
       };
+      // p_bucket: hour | day | week | month; p_tz — пояс IANA (миграции v26, v27).
       creator_daily_views: {
-        Args: { p_creator: string; p_from: string; p_to: string; p_only_ours?: boolean };
+        Args: {
+          p_creator: string;
+          p_from: string;
+          p_to: string;
+          p_only_ours?: boolean;
+          p_bucket?: string;
+          p_tz?: string;
+        };
         Returns: DailyViews[];
       };
       creators_overview: {
@@ -483,7 +496,14 @@ export type Database = {
       };
       // p_platform необязателен (миграция v10): null — все площадки.
       daily_views_all: {
-        Args: { p_from: string; p_to: string; p_platform?: string | null; p_only_ours?: boolean };
+        Args: {
+          p_from: string;
+          p_to: string;
+          p_platform?: string | null;
+          p_only_ours?: boolean;
+          p_bucket?: string;
+          p_tz?: string;
+        };
         Returns: DailyViews[];
       };
       // Видео за срок вместе с последним снимком (миграция v23) — вместо пары

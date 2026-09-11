@@ -229,9 +229,9 @@ function Dashboard() {
       });
   }, [nowRows, creators]);
 
-  // Сетка дней и публикации для карточек под графиком — из уже прочитанного: дни те же,
-  // по которым идёт «Динамика», видео — те же, что стоят в таблицах страницы.
-  const overviewDays = useMemo(() => stats.data?.daily.map((d) => d.day) ?? [], [stats.data]);
+  // Сетка отрезков и публикации для карточек под графиком — из уже прочитанного: отрезки те же,
+  // по которым идёт «Динамика» (ключ `at`, миграция v27), видео — те же, что в таблицах страницы.
+  const overviewDays = useMemo(() => stats.data?.daily.map((d) => d.at) ?? [], [stats.data]);
   const publishedAt = useMemo(
     () =>
       range
@@ -309,6 +309,7 @@ function Dashboard() {
           {stats.data ? (
             <OverviewCards
               collapseKey="overview"
+              bucket={range ? bucketOf(range) : "day"}
               days={overviewDays}
               publishedAt={publishedAt}
               tiktok={stats.data.tiktok}

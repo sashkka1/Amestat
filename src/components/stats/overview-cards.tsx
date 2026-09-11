@@ -14,9 +14,9 @@ import {
   XAxis,
 } from "recharts";
 import { Panel, PanelHead, Empty } from "./panel";
-import { fmtCompact, fmtDayAxis, fmtNum } from "@/lib/format";
+import { fmtBucketAxis, fmtBucketFull, fmtCompact, fmtDayAxis, fmtNum } from "@/lib/format";
 import { useT } from "@/lib/i18n";
-import { toDateInputValue } from "@/lib/period";
+import type { Bucket } from "@/lib/queries";
 import type { DailyViews, Platform } from "@/lib/types";
 
 // Ряд из трёх карточек под «Динамикой»: сколько выходило видео, как шли просмотры по
@@ -38,30 +38,49 @@ const TIP_STYLE = {
 
 const AXIS_TICK = { fontSize: 10, fill: "var(--muted-foreground)" } as const;
 
-// Просмотры по дню публикации видео: база отдаёт ряд как есть (миграция v21), здесь остаётся
-// только разложить его по сетке дней страницы.
-function viewsByDay(rows: DailyViews[]): Map<string, number> {
-  return new Map(rows.map((d) => [d.day, d.views]));
+// Подписи оси и подсказки: при часовом шаге — «14:00» и «11 September, 14:00–15:00»; при
+// остальных — дата начала отрезка, как было до часов.
+function axisLabel(iso: string, bucket: Bucket): string {
+  return bucket === "hour" ? fmtBucketAxis(iso, "hour") : fmtDayAxis(iso);
 }
 
-// Публикации по дням: у видео дата с временем, а столбец — местные сутки.
-function countByDay(days: string[], publishedAt: string[]): Map<string, number> {
-  const out = new Map<string, number>(days.map((d) => [d, 0]));
+function tipLabel(iso: string, bucket: Bucket): string {
+  return bucket === "hour" ? fmtBucketFull(iso, "hour") : fmtDayAxis(iso);
+}
+
+// Просмотры по дню публикации видео: база отдаёт ряд как есть (миграция v21), здесь остаётся
+// только разложить его по сетке отрезков страницы. Ключ — `at`, начало отрезка (миграция v27).
+function viewsByDay(rows: DailyViews[]): Map<string, number> {
+  return new Map(rows.map((d) => [d.at, d.views]));
+}
+
+// Публикации по отрезкам: у видео момент публикации, а столбец — отрезок сетки (час, день,
+// неделя или месяц в поясе браузера — в нём же базу и просили резать ряд). Видео ложится в
+// последний отрезок, начавшийся не позже его публикации; раньше первого — мимо сетки.
+function countByBucket(slots: string[], publishedAt: string[]): number[] {
+  const starts = slots.map((s) => new Date(s).getTime());
+  const out = starts.map(() => 0);
   for (const iso of publishedAt) {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) continue;
-    const key = toDateInputValue(d);
-    if (out.has(key)) out.set(key, (out.get(key) ?? 0) + 1);
+    const t = new Date(iso).getTime();
+    if (Number.isNaN(t) || starts.length === 0 || t < starts[0]) continue;
+    let lo = 0;
+    let hi = starts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (starts[mid] <= t) lo = mid;
+      else hi = mid - 1;
+    }
+    out[lo] += 1;
   }
   return out;
 }
 
-// Столбцы публикаций по дням: сетка дня → сколько роликов вышло. Считается и здесь, и в
+// Столбцы публикаций: сетка отрезков → сколько роликов вышло. Считается и здесь, и в
 // одиночной карточке ниже — поэтому расчёт общий.
 function usePostRows(days: string[], publishedAt: string[]) {
   const rows = useMemo(() => {
-    const counted = countByDay(days, publishedAt);
-    return days.map((day) => ({ day, n: counted.get(day) ?? 0 }));
+    const counted = countByBucket(days, publishedAt);
+    return days.map((at, i) => ({ at, n: counted[i] }));
   }, [days, publishedAt]);
   const total = useMemo(() => rows.reduce((s, r) => s + r.n, 0), [rows]);
   return { rows, total };
@@ -69,15 +88,23 @@ function usePostRows(days: string[], publishedAt: string[]) {
 
 // Сам рисунок карточки «Публикации по дням» — без обёртки: в ряду обзора он стоит внутри
 // `Card`, а на карточке креатора — внутри отдельной панели.
-function PostsChart({ rows, total }: { rows: { day: string; n: number }[]; total: number }) {
+function PostsChart({
+  rows,
+  total,
+  bucket,
+}: {
+  rows: { at: string; n: number }[];
+  total: number;
+  bucket: Bucket;
+}) {
   const t = useT();
   if (total === 0) return <Empty>{t("overview.empty")}</Empty>;
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={rows} margin={{ top: 4, right: 4, left: 4, bottom: 0 }}>
         <XAxis
-          dataKey="day"
-          tickFormatter={fmtDayAxis}
+          dataKey="at"
+          tickFormatter={(v: string) => axisLabel(v, bucket)}
           tick={AXIS_TICK}
           tickLine={false}
           axisLine={false}
@@ -86,7 +113,7 @@ function PostsChart({ rows, total }: { rows: { day: string; n: number }[]; total
         <Tooltip
           cursor={{ fill: "var(--muted)" }}
           formatter={(v) => [fmtNum(Number(v)), t("overview.postsLegend")]}
-          labelFormatter={(l) => fmtDayAxis(String(l))}
+          labelFormatter={(l) => tipLabel(String(l), bucket)}
           contentStyle={TIP_STYLE}
         />
         <Bar dataKey="n" fill="var(--chart-1)" radius={[3, 3, 0, 0]} isAnimationActive={false} />
@@ -101,10 +128,12 @@ function PostsChart({ rows, total }: { rows: { day: string; n: number }[]; total
 export function PostsPerDay({
   days,
   publishedAt,
+  bucket,
   collapseKey,
 }: {
   days: string[];
   publishedAt: string[];
+  bucket: Bucket;
   collapseKey?: string;
 }) {
   const t = useT();
@@ -116,7 +145,7 @@ export function PostsPerDay({
         subtitle={t("overview.postsTotal", { n: fmtNum(total) })}
       />
       <div className="h-50 border-t p-4">
-        <PostsChart rows={rows} total={total} />
+        <PostsChart rows={rows} total={total} bucket={bucket} />
       </div>
     </Panel>
   );
@@ -127,11 +156,14 @@ export function OverviewCards({
   publishedAt,
   tiktok,
   instagram,
+  bucket,
   collapseKey,
 }: {
-  // Сетка дней срока — из того же ряда, что рисует «Динамику»: столбцы и линии карточек
-  // стоят по тем же дням, что и график над ними.
+  // Сетка отрезков срока (`at`) — из того же ряда, что рисует «Динамику»: столбцы и линии
+  // карточек стоят по тем же отрезкам, что и график над ними.
   days: string[];
+  // Шаг этой сетки: по нему подписываются ось и подсказка.
+  bucket: Bucket;
   // Даты публикации видео, попавших в срок (после фильтра площадки).
   publishedAt: string[];
   // Ряды по площадкам. Пустой — площадка отключена переключателем: тогда её нет ни в линиях,
@@ -147,7 +179,7 @@ export function OverviewCards({
   const trendRows = useMemo(() => {
     const tk = viewsByDay(tiktok);
     const ig = viewsByDay(instagram);
-    return days.map((day) => ({ day, tiktok: tk.get(day) ?? 0, instagram: ig.get(day) ?? 0 }));
+    return days.map((at) => ({ at, tiktok: tk.get(at) ?? 0, instagram: ig.get(at) ?? 0 }));
   }, [days, tiktok, instagram]);
 
   // Доля площадки — сумма её дневных значений за срок: то же число, что нарисовано линией.
@@ -172,7 +204,7 @@ export function OverviewCards({
           total={t("overview.postsTotal", { n: fmtNum(postsTotal) })}
           legend={[{ key: "posts", label: t("overview.postsLegend"), color: "var(--chart-1)" }]}
         >
-          <PostsChart rows={postRows} total={postsTotal} />
+          <PostsChart rows={postRows} total={postsTotal} bucket={bucket} />
         </Card>
 
         <Card
@@ -196,8 +228,8 @@ export function OverviewCards({
                   ))}
                 </defs>
                 <XAxis
-                  dataKey="day"
-                  tickFormatter={fmtDayAxis}
+                  dataKey="at"
+                  tickFormatter={(v: string) => axisLabel(v, bucket)}
                   tick={AXIS_TICK}
                   tickLine={false}
                   axisLine={false}
@@ -205,7 +237,7 @@ export function OverviewCards({
                 />
                 <Tooltip
                   formatter={(v, name) => [fmtNum(Number(v)), String(name)]}
-                  labelFormatter={(l) => fmtDayAxis(String(l))}
+                  labelFormatter={(l) => tipLabel(String(l), bucket)}
                   contentStyle={TIP_STYLE}
                 />
                 {(["tiktok", "instagram"] as Platform[])

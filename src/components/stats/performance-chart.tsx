@@ -12,10 +12,10 @@ import {
   YAxis,
 } from "recharts";
 import { Panel, PanelHead, Empty } from "./panel";
-import { fmtBucketFull, fmtCompact, fmtDayAxis, fmtNum } from "@/lib/format";
+import { fmtBucketAxis, fmtBucketFull, fmtCompact, fmtNum } from "@/lib/format";
 import { useT, type TKey } from "@/lib/i18n";
-import { toDateInputValue, type PeriodRange } from "@/lib/period";
-import { creatorDailyViews } from "@/lib/queries";
+import type { PeriodRange } from "@/lib/period";
+import { creatorDailyViews, type Bucket as ServerBucket } from "@/lib/queries";
 import { useScope } from "@/lib/dashboard-prefs";
 import { runningTotal } from "@/lib/stats";
 import type { DailyViews } from "@/lib/types";
@@ -50,7 +50,9 @@ const CREATOR_COLORS = [
 
 export type ChartCreator = { id: string; name: string };
 
-type Row = Record<string, number | string> & { day: string };
+// Ключ точки — `at`, начало отрезка как момент (миграция v27): при часовом шаге дата у 24 точек
+// одна, и раскладывать ряд по `day` значило бы склеить весь день в одну точку.
+type Row = Record<string, number | string> & { at: string };
 type Column = { key: string; values: number[] };
 
 // Ряд базы → то, что рисуем. База отдаёт день как «сколько набрали видео, вышедшие в этот
@@ -60,13 +62,13 @@ function toMode(values: number[], mode: Mode): number[] {
   return mode === "total" ? runningTotal(values) : values;
 }
 
-// Понедельник той недели, в которую попал день: по нему дни собираются в недельные столбцы,
-// он же становится подписью недели на оси.
+// Местная полночь понедельника той недели, в которую попал день: по ней дни собираются
+// в недельные столбцы, она же становится подписью недели на оси.
 function weekStart(iso: string): string {
-  const d = new Date(`${iso}T00:00:00`);
+  const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-  return toDateInputValue(d);
+  const monday = new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7));
+  return monday.toISOString();
 }
 
 // Колонки значений → строки recharts. Неделя суммирует свои дни, но только в режиме «по дням»:
@@ -74,8 +76,8 @@ function weekStart(iso: string): string {
 // посчитать одно и то же семь раз — там неделя берёт значение своего последнего дня.
 function buildRows(days: string[], cols: Column[], bucket: Bucket, mode: Mode): Row[] {
   if (bucket === "day") {
-    return days.map((day, i) => {
-      const row: Row = { day };
+    return days.map((at, i) => {
+      const row: Row = { at };
       for (const c of cols) row[c.key] = c.values[i] ?? 0;
       return row;
     });
@@ -86,7 +88,7 @@ function buildRows(days: string[], cols: Column[], bucket: Bucket, mode: Mode): 
     const wk = weekStart(days[i]);
     if (wk !== current) {
       current = wk;
-      const fresh: Row = { day: wk };
+      const fresh: Row = { at: wk };
       for (const c of cols) fresh[c.key] = 0;
       rows.push(fresh);
     }
@@ -125,8 +127,8 @@ export function PerformanceChart({
   collapseKey?: string;
   range?: PeriodRange | null;
   creators?: ChartCreator[];
-  // Шаг, которым ряд пришёл из базы: day | week | month.
-  serverBucket?: "day" | "week" | "month";
+  // Шаг, которым ряд пришёл из базы: hour | day | week | month.
+  serverBucket?: ServerBucket;
 }) {
   const t = useT();
   // Тот же стор охвата, что у полосы периода: график дочитывает ряды сам, значит и охват
@@ -168,9 +170,9 @@ export function PerformanceChart({
         setCreatorsError(null);
         // Сетку дней даёт generate_series внутри функции, поэтому она у всех креаторов одна;
         // берём её у первого непустого, а сводим всё равно по дню — на случай пустого ответа.
-        const days = series.find((s) => s.length > 0)?.map((d) => d.day) ?? data.map((d) => d.day);
+        const days = series.find((s) => s.length > 0)?.map((d) => d.at) ?? data.map((d) => d.at);
         const cols = top.map((c, i) => {
-          const byDay = new Map(series[i].map((d) => [d.day, d.views]));
+          const byDay = new Map(series[i].map((d) => [d.at, d.views]));
           return { key: c.id, values: days.map((day) => byDay.get(day) ?? 0) };
         });
         setLoaded({ key: cacheKey, days, cols });
@@ -207,14 +209,14 @@ export function PerformanceChart({
         mode,
       );
     }
-    const days = data.map((d) => d.day);
+    const days = data.map((d) => d.at);
     const cols = SERIES.map((s) => ({ key: s.key as string, values: toMode(data.map((d) => d[s.key]), mode) }));
     return buildRows(days, cols, bucket, mode);
   }, [byCreators, fresh, data, mode, bucket]);
 
   // Есть ли хоть одна ненулевая точка среди видимых серий.
   const allZero = useMemo(
-    () => rows.length > 0 && rows.every((r) => Object.entries(r).every(([k, v]) => k === "day" || !v)),
+    () => rows.length > 0 && rows.every((r) => Object.entries(r).every(([k, v]) => k === "at" || !v)),
     [rows],
   );
 
@@ -325,8 +327,8 @@ export function PerformanceChart({
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
               <XAxis
-                dataKey="day"
-                tickFormatter={(v: string) => (serverBucket === "month" ? fmtBucketFull(v, "month") : fmtDayAxis(v))}
+                dataKey="at"
+                tickFormatter={(v: string) => fmtBucketAxis(v, serverBucket)}
                 tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
                 tickLine={false}
                 axisLine={false}
@@ -409,7 +411,7 @@ function DayTip({
   payload?: readonly TipPayload[];
   label?: unknown;
   colors: Record<string, string>;
-  bucket?: "day" | "week" | "month";
+  bucket?: ServerBucket;
 }) {
   if (!active || !payload || payload.length === 0) return null;
   return (
