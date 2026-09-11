@@ -276,11 +276,14 @@ export async function creatorsOverview(
 // месяцы. Сумма ряда от шага не зависит: складываются те же ролики (миграция v26).
 // Короткий срок — по часам (миграция v27, владелец, 2026-09-11: «графики за сегодня не бьются по
 // времени»): день на «сегодня» давал одну-две точки и прямую между ними.
-export type Bucket = "hour" | "day" | "week" | "month";
+export type Bucket = "10min" | "hour" | "day" | "week" | "month";
 
 export function bucketOf(range: PeriodRange): Bucket {
   const days = (range.to.getTime() - range.from.getTime()) / 86_400_000;
-  if (days <= 2) return "hour";
+  // Десять минут — самый мелкий шаг (владелец, 2026-09-11: «сделай ещё точнее, буквально до
+  // десяти минут»). За двое суток это 288 точек: читаемо и далеко от потолка ответа в 1000.
+  if (days <= 2) return "10min";
+  if (days <= 8) return "hour";
   if (days <= 62) return "day";
   if (days <= 400) return "week";
   return "month";

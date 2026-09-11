@@ -310,6 +310,7 @@ export const en = {
   chart: {
     title: "Trend",
     byDay: "Per day",
+    byTenMin: "Per 10 min",
     byHour: "Per hour",
     byWeek: "Per week",
     byMonth: "Per month",

@@ -275,7 +275,7 @@ export function PerformanceChart({
         )}
         <div className="flex items-center gap-0.5 rounded-lg border p-0.5 text-xs">
           <ModeButton active={mode === "daily"} onClick={() => setMode("daily")}>
-            {t(serverBucket === "hour" ? "chart.byHour" : serverBucket === "week" ? "chart.byWeek" : serverBucket === "month" ? "chart.byMonth" : "chart.byDay")}
+            {t(serverBucket === "10min" ? "chart.byTenMin" : serverBucket === "hour" ? "chart.byHour" : serverBucket === "week" ? "chart.byWeek" : serverBucket === "month" ? "chart.byMonth" : "chart.byDay")}
           </ModeButton>
           <ModeButton active={mode === "total"} onClick={() => setMode("total")}>
             {t("chart.cumulative")}

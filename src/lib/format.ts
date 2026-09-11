@@ -73,7 +73,7 @@ function months(): string[] {
 // видно, за что именно число (владелец, 2026-09-10: «за всё время не понимаю, за какую дату»).
 // Неделя печатается отрезком, месяц — названием с годом; год у дня добавляется, если он не
 // нынешний. Час — «11 September, 14:00–15:00» (миграция v27).
-export type BucketKind = "hour" | "day" | "week" | "month";
+export type BucketKind = "10min" | "hour" | "day" | "week" | "month";
 
 // «14:00» — часы и минуты в поясе браузера, всегда 24-часовые: подпись оси должна быть ровно
 // такой и в en-US, где toLocaleTimeString дал бы «02:00 PM».
@@ -85,8 +85,8 @@ export function fmtBucketFull(iso: string, bucket: BucketKind = "day"): string {
   const d = new Date(iso.length === 10 ? `${iso}T00:00:00` : iso);
   if (Number.isNaN(d.getTime())) return iso;
   const loc = locale();
-  if (bucket === "hour") {
-    const end = new Date(d.getTime() + 3_600_000);
+  if (bucket === "hour" || bucket === "10min") {
+    const end = new Date(d.getTime() + (bucket === "hour" ? 3_600_000 : 600_000));
     return `${fmtBucketFull(iso, "day")}, ${hhmm(d)}–${hhmm(end)}`;
   }
   if (bucket === "month") {
@@ -118,7 +118,7 @@ export function fmtDayAxis(iso: string): string {
 // Подпись точки на оси по шагу ряда: час — «14:00», месяц — названием с годом, остальное —
 // «12 Aug», как у дня.
 export function fmtBucketAxis(iso: string, bucket: BucketKind): string {
-  if (bucket === "hour") {
+  if (bucket === "hour" || bucket === "10min") {
     const d = new Date(iso);
     return Number.isNaN(d.getTime()) ? iso : hhmm(d);
   }
