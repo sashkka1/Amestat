@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  listCommentReplies,
+  listRepliesFor,
   listVideoComments,
   videoCommentsSyncedAt,
   type CommentSort,
@@ -36,6 +36,9 @@ type Loaded = {
 };
 
 // Развёрнутая ветка ответов одного корневого комментария.
+// Сколько ответов видно сразу; остальные — по кнопке (владелец, 2026-09-12).
+const FIRST_REPLIES = 3;
+
 type Branch =
   | { status: "loading" }
   | { status: "ready"; rows: VideoComment[] }
@@ -238,40 +241,63 @@ function CommentList({
   // Какие ветки развёрнуты и что в них загружено. Свёрнутая ветка помнит ответы —
   // второй раз в базу не ходим.
   const t = useT();
-  const [open, setOpen] = useState<Record<string, boolean>>({});
+  // Сколько ответов ветки раскрыто: по умолчанию первые FIRST_REPLIES, по кнопке — все
+  // (владелец, 2026-09-12: «ответы не должны быть скрыты — показывай сразу первые три»).
+  const [full, setFull] = useState<Record<string, boolean>>({});
   const [branches, setBranches] = useState<Record<string, Branch>>({});
+
+  // Ветки грузятся вместе со страницей корневых — одним запросом на всех, у кого есть ответы.
+  const wanted = useMemo(
+    () => rows.filter((c) => (c.replies ?? 0) > 0).map((c) => c.id).join(","),
+    [rows],
+  );
+  useEffect(() => {
+    const ids = wanted === "" ? [] : wanted.split(",");
+    if (ids.length === 0) return;
+    let alive = true;
+    // Пометку «грузится» не ставим: пока записи нет, ветка и так показывает скелет, а
+    // синхронный setState внутри эффекта запрещён правилом React Compiler.
+    listRepliesFor(videoId, ids).then(
+      (all) => {
+        if (!alive) return;
+        const byParent = new Map<string, VideoComment[]>();
+        for (const r of all) {
+          const key = r.parent_id ?? "";
+          const arr = byParent.get(key) ?? [];
+          arr.push(r);
+          byParent.set(key, arr);
+        }
+        setBranches((prev) => {
+          const next = { ...prev };
+          for (const id of ids) next[id] = { status: "ready", rows: byParent.get(id) ?? [] };
+          return next;
+        });
+      },
+      (e: unknown) => {
+        if (!alive) return;
+        const error = e instanceof Error ? e.message : String(e);
+        setBranches((prev) => {
+          const next = { ...prev };
+          for (const id of ids) next[id] = { status: "error", error };
+          return next;
+        });
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [videoId, wanted]);
 
   const shown = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return rows;
     return rows.filter((c) => {
       if (matches(c, q)) return true;
-      // Развёрнутая ветка ищется вместе с корневым: совпадение в ответе оставляет
-      // ветку в списке. Свёрнутые не ищутся — их ответов в браузере ещё нет.
-      if (!open[c.id]) return false;
+      // Ответы приезжают вместе с корневыми, поэтому ищутся всегда.
       const branch = branches[c.id];
       return branch?.status === "ready" && branch.rows.some((r) => matches(r, q));
     });
-  }, [rows, search, open, branches]);
-
-  // Развернуть или свернуть ветку. Ответов не больше 20, поэтому страниц нет:
-  // один запрос на ветку, дальше показываем загруженное.
-  function toggleReplies(id: string) {
-    const wasOpen = open[id] === true;
-    setOpen((prev) => ({ ...prev, [id]: !wasOpen }));
-    if (wasOpen) return;
-    const branch = branches[id];
-    // Уже прочитанное не перечитываем; после ошибки следующее раскрытие пробует снова.
-    if (branch?.status === "ready" || branch?.status === "loading") return;
-    setBranches((prev) => ({ ...prev, [id]: { status: "loading" } }));
-    const done = (next: Branch) =>
-      // Ветку успели свернуть и открыть заново — за неё уже отвечает другой запрос.
-      setBranches((prev) => (prev[id]?.status === "loading" ? { ...prev, [id]: next } : prev));
-    listCommentReplies(videoId, id).then(
-      (rows) => done({ status: "ready", rows }),
-      (e: unknown) => done({ status: "error", error: e instanceof Error ? e.message : String(e) }),
-    );
-  }
+  }, [rows, search, branches]);
 
   if (shown.length === 0) {
     return (
@@ -285,7 +311,6 @@ function CommentList({
     <>
       <ul className="divide-y">
         {shown.map((c) => {
-          const expanded = open[c.id] === true;
           const hasReplies = c.replies !== null && c.replies > 0;
           return (
             <li key={c.id} className="py-2.5">
@@ -297,25 +322,22 @@ function CommentList({
                   hasReplies && (
                     <>
                       {" · "}
-                      <button
-                        type="button"
-                        onClick={() => toggleReplies(c.id)}
-                        aria-expanded={expanded}
-                        className="font-medium underline-offset-4 hover:text-foreground hover:underline"
-                      >
+                      <span>
                         {t("comments.replies")} · {fmtNum(c.replies)}
-                      </button>
+                      </span>
                     </>
                   )
                 }
               >
-                {expanded && (
+                {hasReplies && (
                   <Replies
                     branch={branches[c.id]}
                     platform={platform}
                     total={c.replies ?? 0}
                     mark={mark}
                     replyTo={c.author_handle}
+                    full={full[c.id] === true}
+                    onFull={() => setFull((prev) => ({ ...prev, [c.id]: true }))}
                   />
                 )}
               </CommentRow>
@@ -448,6 +470,8 @@ function Replies({
   total,
   mark,
   replyTo,
+  full = false,
+  onFull,
 }: {
   branch: Branch | undefined;
   platform: Platform;
@@ -455,6 +479,9 @@ function Replies({
   mark?: OursMark;
   // Имя автора корневого комментария; пустое — пометки «в ответ @ник» не будет.
   replyTo?: string;
+  // Раскрыта ли ветка целиком: по умолчанию видны первые FIRST_REPLIES.
+  full?: boolean;
+  onFull?: () => void;
 }) {
   const t = useT();
   return (
@@ -470,7 +497,7 @@ function Replies({
       ) : (
         <>
           <ul className="space-y-2.5">
-            {branch.rows.map((r) => (
+            {(full ? branch.rows : branch.rows.slice(0, FIRST_REPLIES)).map((r) => (
               <li key={r.id}>
                 <CommentRow
                   c={r}
@@ -482,7 +509,16 @@ function Replies({
               </li>
             ))}
           </ul>
-          {branch.rows.length < total && (
+          {!full && branch.rows.length > FIRST_REPLIES && (
+            <button
+              type="button"
+              onClick={onFull}
+              className="pt-2 text-[11px] font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            >
+              {t("comments.moreReplies", { n: fmtNum(branch.rows.length - FIRST_REPLIES) })}
+            </button>
+          )}
+          {(full || branch.rows.length <= FIRST_REPLIES) && branch.rows.length < total && (
             <p className="pt-2 text-[11px] text-muted-foreground">
               {t("comments.shownOf", { shown: fmtNum(branch.rows.length), total: fmtNum(total) })}
             </p>

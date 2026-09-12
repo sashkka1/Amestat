@@ -240,6 +240,26 @@ export async function listCommentReplies(videoId: string, parentId: string): Pro
   return data ?? [];
 }
 
+// Ответы сразу для нескольких корневых: один запрос вместо запроса на каждую ветку.
+// Владелец, 2026-09-12: «ответные комментарии не должны быть скрыты — показывай сразу
+// первые три, дальше можно развернуть». Значит ветки грузятся вместе со страницей корневых,
+// и делать это по одному запросу на комментарий нельзя.
+// Потолок на всякий случай: у видео с сотней корневых ответов бывает много, а PostgREST
+// всё равно режет ответ на 1000 строках — лучше честный лимит, чем молчаливая обрезка.
+export async function listRepliesFor(videoId: string, parentIds: string[]): Promise<VideoComment[]> {
+  if (parentIds.length === 0) return [];
+  const { data, error } = await createClient()
+    .from("video_comments")
+    .select("*")
+    .eq("video_id", videoId)
+    .in("parent_id", parentIds)
+    .order("created_at", { ascending: true, nullsFirst: false })
+    .order("id", { ascending: true })
+    .limit(900);
+  fail(error);
+  return data ?? [];
+}
+
 // Когда у этого видео последний раз снимали тексты комментариев. Отдельным запросом:
 // video_stats_between про колонку videos.comments_synced_at не знает.
 export async function videoCommentsSyncedAt(videoId: string): Promise<string | null> {

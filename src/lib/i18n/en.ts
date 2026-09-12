@@ -453,6 +453,7 @@ export const en = {
     replyTo: "in reply to {handle}",
     repliesError: "Could not read the replies: {error}",
     repliesNotTaken: "replies have not been collected yet",
+    moreReplies: "{n} more replies",
     shownOf: "showing {shown} of {total}: the rest was not collected",
   },
 

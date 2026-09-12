@@ -438,6 +438,7 @@ export const ptBR: Dict = {
     replyTo: "em resposta a {handle}",
     repliesError: "Não foi possível ler as respostas: {error}",
     repliesNotTaken: "as respostas ainda não foram coletadas",
+    moreReplies: "mais {n} respostas",
     shownOf: "mostrando {shown} de {total}: o resto não foi coletado",
   },
 
