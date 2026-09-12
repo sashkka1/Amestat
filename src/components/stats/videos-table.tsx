@@ -85,9 +85,8 @@ export function VideosTable({
   showCreator?: boolean;
   defaultSort?: Key;
   // Перекрёстность по id видео (миграция v29). Задана — колонка комментариев показывает три
-  // числа («снято · чужих · перекрёстных», владелец 2026-09-11) и значок упоминания; отдельной
-  // колонки «Перекрёстно» больше нет. Не задана — таблица прежняя: дашборд про перекрёстность
-  // не знает вовсе.
+  // числа («снято · не авторских · перекрёстных», владелец 2026-09-11) и значок упоминания;
+  // отдельной колонки «Перекрёстно» нет. Не задана — в колонке счётчик площадки, как был.
   cross?: Map<string, CrossInfo>;
   // Задан — появляется колонка «Состояние» с переключателем «не наше / смотрим / наше».
   onSetState?: (videoId: string, state: VideoState) => void;
@@ -251,8 +250,8 @@ export function VideosTable({
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{fmtNum(r.views)}</TableCell>
                   <TableCell className="text-right tabular-nums">{fmtNum(r.likes)}</TableCell>
-                  {/* На «Amestat Test» здесь три числа со своей подсказкой (снято · чужих ·
-                      перекрёстных) и значок упоминания; на дашборде — счётчик площадки, как был. */}
+                  {/* Три числа со своей подсказкой (снято · не авторских · перекрёстных)
+                      и значок упоминания. Перекрёстности нет — счётчик площадки, как был. */}
                   <TableCell className="text-right tabular-nums">
                     <span className="inline-flex items-center justify-end gap-1">
                       {cross ? (

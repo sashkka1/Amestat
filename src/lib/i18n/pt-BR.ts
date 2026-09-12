@@ -52,8 +52,6 @@ export const ptBR: Dict = {
 
   nav: {
     dashboard: "Painel",
-    // Nome próprio da página: não se traduz.
-    test: "Amestat Test",
     creators: "Criadores",
     managers: "Gerentes de criadores",
     archive: "Arquivo",
@@ -176,7 +174,6 @@ export const ptBR: Dict = {
   },
 
   cross: {
-    pageTitle: "Amestat Test",
     badgeTitle: "{n} comentários de {handles}",
     badgeTitleNoNames: "{n} comentários dos nossos outros criadores",
     mentionTitle: "Mencionado na legenda: {handles}",

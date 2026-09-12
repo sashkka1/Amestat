@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Panel } from "@/components/stats/panel";
 import { VideoStateToggle } from "@/components/video-state-toggle";
-import { CrossBadge, MentionMark } from "@/components/stats/cross-badge";
+import { CrossCounts, MentionMark } from "@/components/stats/cross-badge";
 import { VideoHistoryChart } from "./daily-chart";
 import { VideoComments, type OursMark } from "./video-comments";
 import { videoHistory } from "@/lib/queries";
@@ -79,9 +79,8 @@ export function VideoPanel({
   // Строка под ссылкой на площадку: шторка дашборда говорит ею, что за срок снимков не было
   // и счётчики показаны текущие.
   note?: string | null;
-  // Перекрёстность этого видео (страница «Amestat Test»): жёлтое «(N)» у строки
-  // «Комментарии» и значок «@», если наш креатор назван в подписи. Не задана — панель
-  // прежняя, как на дашборде и карточке креатора.
+  // Перекрёстность этого видео (миграция v29): три числа у строки «Комментарии» и значок
+  // «@», если наш креатор назван в подписи. Не задана — в строке одно число, счётчик площадки.
   cross?: CrossInfo;
   // Подсветка комментариев наших креаторов в списке ниже.
   mark?: OursMark;
@@ -175,12 +174,15 @@ export function VideoPanel({
                   <TableCell>{t(m.label)}</TableCell>
                   {/* Одно число — текущее значение счётчика (владелец, 2026-09-09).
                       Прирост за срок из колонки убран: он остаётся в расчёте справа,
-                      где сравнивается с медианой, но глазами тут нужен итог. */}
+                      где сравнивается с медианой, но глазами тут нужен итог.
+                      Исключение — комментарии: там три числа той же формы, что в таблице
+                      видео (владелец, 2026-09-12), а счётчик площадки уходит в подсказку. */}
                   <TableCell className="text-right tabular-nums">
-                    <span className="inline-flex items-center gap-1">
-                      {fmtNum(now)}
-                      {m.key === "comments" && (
-                        <CrossBadge n={cross?.cross ?? 0} handles={cross?.handles ?? []} />
+                    <span className="inline-flex items-center justify-end gap-1">
+                      {m.key === "comments" && cross ? (
+                        <CrossCounts info={cross} platformTotal={now} />
+                      ) : (
+                        fmtNum(now)
                       )}
                     </span>
                   </TableCell>

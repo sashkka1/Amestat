@@ -10,34 +10,34 @@ import { useCallback, useSyncExternalStore } from "react";
 // режиме хранилища может не быть вовсе, и обращение к нему кидает), значение дублируется в
 // памяти — свернули блок, значит он свёрнут хотя бы до перезагрузки.
 //
-// ⚠️ Хранится именно «свёрнуто», а не «раскрыто»: умолчание — развёрнутый блок, и пустое
-// хранилище обязано значить именно его.
+// ⚠️ Хранится именно «свёрнуто», а не «раскрыто»: обычное умолчание — развёрнутый блок.
+//
+// ⚠️ Блок может проситься свёрнутым с самого начала (`defaultCollapsed`) — так стоит матрица
+// «кто кого комментировал» на дашборде (владелец, 2026-09-12). Поэтому «ничего не сохранено»
+// и «сохранено „развёрнуто"» — РАЗНЫЕ вещи: первое отдаёт умолчание блока, второе — выбор
+// владельца. Сведи их к одному `=== "1"`, и раскрытая владельцем матрица сворачивалась бы
+// обратно при каждой загрузке страницы.
 
 export const COLLAPSED_PREFIX = "amestat.collapsed.";
 
 const collapsedNow = new Map<string, boolean>();
 const listeners = new Map<string, Set<() => void>>();
 
-function readSaved(key: string): boolean {
+function readSaved(key: string): boolean | null {
   try {
-    return window.localStorage.getItem(COLLAPSED_PREFIX + key) === "1";
+    const raw = window.localStorage.getItem(COLLAPSED_PREFIX + key);
+    return raw === null ? null : raw === "1";
   } catch {
-    return false;
+    return null;
   }
 }
 
-function getCollapsed(key: string): boolean {
+function getCollapsed(key: string, byDefault: boolean): boolean {
   const known = collapsedNow.get(key);
   if (known !== undefined) return known;
-  const saved = readSaved(key);
+  const saved = readSaved(key) ?? byDefault;
   collapsedNow.set(key, saved);
   return saved;
-}
-
-// Статические страницы Next печатает заранее, до всякого хранилища: там блок всегда
-// развёрнут, а сохранённое положение встаёт сразу после подключения.
-function getServerCollapsed(): boolean {
-  return false;
 }
 
 function setCollapsed(key: string, next: boolean): void {
@@ -51,7 +51,13 @@ function setCollapsed(key: string, next: boolean): void {
   if (set) for (const onChange of set) onChange();
 }
 
-export function useCollapsed(key: string): { open: boolean; toggle: () => void } {
+// `defaultCollapsed` — каким блок встаёт, пока владелец его не трогал. Статические страницы
+// Next печатает заранее, до всякого хранилища: там блок стоит в этом самом умолчании, а
+// сохранённое положение встаёт сразу после подключения.
+export function useCollapsed(
+  key: string,
+  defaultCollapsed = false,
+): { open: boolean; toggle: () => void } {
   const subscribe = useCallback(
     (onChange: () => void) => {
       const set = listeners.get(key) ?? new Set<() => void>();
@@ -64,10 +70,11 @@ export function useCollapsed(key: string): { open: boolean; toggle: () => void }
     },
     [key],
   );
-  const snapshot = useCallback(() => getCollapsed(key), [key]);
-  const collapsed = useSyncExternalStore(subscribe, snapshot, getServerCollapsed);
+  const snapshot = useCallback(() => getCollapsed(key, defaultCollapsed), [key, defaultCollapsed]);
+  const server = useCallback(() => defaultCollapsed, [defaultCollapsed]);
+  const collapsed = useSyncExternalStore(subscribe, snapshot, server);
   const toggle = useCallback(() => {
-    setCollapsed(key, !getCollapsed(key));
-  }, [key]);
+    setCollapsed(key, !getCollapsed(key, defaultCollapsed));
+  }, [key, defaultCollapsed]);
   return { open: !collapsed, toggle };
 }

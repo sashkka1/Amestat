@@ -7,6 +7,7 @@ import { AuthGate } from "@/components/auth-gate";
 import { Page, PageError, PageSkeleton } from "@/components/page";
 import { PlatformSwitch } from "@/components/platform-switch";
 import { SyncButton } from "@/components/sync-button";
+import { CrossMatrixPanel } from "@/components/stats/cross-matrix";
 import { KpiRow, totalsToKpis } from "@/components/stats/kpi-row";
 import { OverviewCards } from "@/components/stats/overview-cards";
 import { PeriodBar } from "@/components/stats/period-bar";
@@ -19,12 +20,20 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   bucketOf,
   creatorsOverview,
+  crossStats,
   dailyViewsAll,
   listCreators,
   listVideosWithLatest,
   sumOverview,
 } from "@/lib/queries";
 import { setVideoState } from "@/lib/api/videos";
+import {
+  buildCrossMatrix,
+  crossByCreator,
+  crossByVideo,
+  crossTotals,
+  handlesOf,
+} from "@/lib/cross";
 import { earliestAdded, publishedIn, toPosts, toTableRows } from "@/lib/video-rows";
 import { matchesScope, useCompare, useScope } from "@/lib/dashboard-prefs";
 import { useT } from "@/lib/i18n";
@@ -154,12 +163,17 @@ function Dashboard() {
   // ⚠️ Видео читаются здесь же и тем же сроком (миграция v23): один вызов `videos_with_latest`
   // вместо девяти запросов «страницы videos + пачки video_latest», и он уходит в общий
   // Promise.all рядом со сводкой. Отсюда берут строки и «Новые видео», и «Лучшие видео».
+  //
+  // ⚠️ Перекрёстность (`cross_stats`, миграция v29) читается тем же сроком, той же площадкой
+  // и тем же охватом — иначе «20 · 15 · 3» стояло бы рядом с числом, посчитанным по другому
+  // набору видео. Отдельной страницы под неё больше нет (владелец, 2026-09-12): её видят все,
+  // кого пустили на дашборд, и своей проверки роли здесь нет — страница и так под входом.
   const comparing = compare.on;
   const stats = useLoader(async () => {
     if (!period.range) return null;
     const range = period.range;
     const previous = comparing ? period.previous : null;
-    const [now, prev, daily, split, videos] = await Promise.all([
+    const [now, prev, daily, split, videos, cross] = await Promise.all([
       creatorsOverview(range, scope),
       previous ? creatorsOverview(previous, scope) : Promise.resolve(null),
       dailyViewsAll(range, rpcPlatform, scope),
@@ -170,10 +184,11 @@ function Dashboard() {
           ])
         : null,
       listVideosWithLatest(range, { platform: rpcPlatform, scope }),
+      crossStats(range, { platform: rpcPlatform, scope }),
     ]);
     const tiktok: DailyViews[] = rpcPlatform === "instagram" ? [] : split ? split[0] : daily;
     const instagram: DailyViews[] = rpcPlatform === "tiktok" ? [] : split ? split[1] : daily;
-    return { now, prev, daily, tiktok, instagram, videos };
+    return { now, prev, daily, tiktok, instagram, videos, cross };
   }, [fromMs, toMs, rpcPlatform, comparing, scope]);
 
   const creatorIds = useMemo(() => new Set(creators.map((c) => c.id)), [creators]);
@@ -184,6 +199,22 @@ function Dashboard() {
   const prevRows = useMemo(
     () => stats.data?.prev?.filter((o) => creatorIds.has(o.creator_id)) ?? null,
     [stats.data, creatorIds],
+  );
+
+  // Перекрёстность в трёх видах: по видео (три числа у комментариев), по креатору (столбец
+  // в «Лучших креаторах») и матрицей. Считается из одних и тех же строк — разойтись нечему.
+  const crossRows = useMemo(
+    () => (stats.data ? stats.data.cross.filter((r) => creatorIds.has(r.creator_id)) : []),
+    [stats.data, creatorIds],
+  );
+  const byVideo = useMemo(() => crossByVideo(crossRows), [crossRows]);
+  const byCreator = useMemo(() => crossByCreator(crossRows, creators), [crossRows, creators]);
+  const matrix = useMemo(() => buildCrossMatrix(crossRows, creators), [crossRows, creators]);
+  const totalsCross = useMemo(() => crossTotals(crossRows), [crossRows]);
+  // Имена всех, кто оставил перекрёстные комментарии за срок, — для подсказки плитки.
+  const crossHandles = useMemo(
+    () => [...new Set(crossRows.flatMap((r) => r.cross_authors))].sort(),
+    [crossRows],
   );
 
   // toTableRows выбрасывает видео тех, кого нет в переданном списке креаторов, — поэтому
@@ -251,6 +282,18 @@ function Dashboard() {
     () => (openRow ? (allCreators.find((c) => c.id === openRow.creatorId) ?? null) : null),
     [allCreators, openRow],
   );
+  // Подсветка своих в комментариях открытого видео: имена наших креаторов ЕГО площадки и
+  // имя владельца ролика. Площадка обязательна — @имя в TikTok и в Instagram разные люди.
+  const openMark = useMemo(
+    () =>
+      openCreator
+        ? {
+            handles: handlesOf(allCreators, openCreator.platform),
+            ownerHandle: openCreator.handle,
+          }
+        : undefined,
+    [allCreators, openCreator],
+  );
 
   // Обход кончился — перечитываем и списки, и сводку за срок; шторка по этому же счётчику
   // перечитывает историю и комментарии открытого видео.
@@ -289,7 +332,13 @@ function Dashboard() {
                ⚠️ Ждать прошлый срок нельзя: пока он едет (сравнение только что включили),
                плитки уезжали в скелет — и число просмотров пропадало с экрана на ровном
                месте. Нет прошлого — плитка стоит без строки дельты, и это честно. */
-            <KpiRow items={totalsToKpis(totals, prevTotals, stats.data?.daily)} collapseKey="kpi" />
+            <KpiRow
+              items={totalsToKpis(totals, prevTotals, stats.data?.daily, {
+                comments: totalsCross.cross,
+                handles: crossHandles,
+              })}
+              collapseKey="kpi"
+            />
           ) : (
             <Skeleton className="h-28 w-full" />
           )}
@@ -320,7 +369,7 @@ function Dashboard() {
           )}
 
           {stats.data ? (
-            <TopPosts posts={topPosts} collapseKey="top-posts" onSelect={openVideo} />
+            <TopPosts posts={topPosts} collapseKey="top-posts" onSelect={openVideo} cross={byVideo} />
           ) : (
             <Skeleton className="h-56 w-full" />
           )}
@@ -328,7 +377,7 @@ function Dashboard() {
           {nowRows ? (
             <TopCreators
               collapseKey="top-creators"
-              rows={buildCreatorRows(creators, nowRows, prevRows ?? [])}
+              rows={buildCreatorRows(creators, nowRows, prevRows ?? [], byCreator)}
               countLabel={
                 platformFilter === "all"
                   ? t("topCreators.countAll")
@@ -339,6 +388,20 @@ function Dashboard() {
             <Skeleton className="h-56 w-full" />
           )}
 
+          {/* Матрица «кто кого комментировал» — свёрнутой (владелец, 2026-09-12): на
+              дашборде она не главное, но должна быть под рукой. Внутри неё же итог за срок
+              и честная строка про то, что вообще сравнимо. */}
+          {stats.data ? (
+            <CrossMatrixPanel
+              matrix={matrix}
+              totals={totalsCross}
+              collapseKey="cross-matrix"
+              defaultCollapsed
+            />
+          ) : (
+            <Skeleton className="h-16 w-full" />
+          )}
+
           {stats.data ? (
             <VideosTable
               rows={scopedRows}
@@ -347,19 +410,22 @@ function Dashboard() {
               collapseKey="new-videos"
               onRowClick={openVideo}
               selectedId={openId}
+              cross={byVideo}
             />
           ) : (
             <Skeleton className="h-56 w-full" />
           )}
 
-          {/* Та же панель, что встроена в карточку креатора, — здесь шторкой справа: со
-              страницы не уводит, а ссылка с `?video=` открывает её сразу. */}
+          {/* Та же панель, что открывает карточка креатора, — шторкой справа: со страницы
+              не уводит, а ссылка с `?video=` открывает её сразу. */}
           <VideoSheet
             video={openRow}
             creator={openCreator}
             range={range}
             scope={scope}
             refreshKey={syncKey}
+            cross={openId ? byVideo.get(openId) : undefined}
+            mark={openMark}
             onState={(id, next, before) => void changeState(id, next, before)}
             onClose={closeVideo}
           />

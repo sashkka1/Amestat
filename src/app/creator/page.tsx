@@ -8,7 +8,13 @@ import { PeriodBar } from "@/components/stats/period-bar";
 import { SyncButton } from "@/components/sync-button";
 import { CreatorHeader } from "@/components/creator/creator-header";
 import { CreatorStats } from "@/components/creator/creator-stats";
-import { creatorById, listCreatorManagers, listCreatorTags, listTags } from "@/lib/queries";
+import {
+  creatorById,
+  listCreatorManagers,
+  listCreatorTags,
+  listCreators,
+  listTags,
+} from "@/lib/queries";
 import { listManagers } from "@/lib/api/profiles";
 import { useCompare, useScope } from "@/lib/dashboard-prefs";
 import { useT } from "@/lib/i18n";
@@ -24,15 +30,19 @@ type Data = {
   ownTags: Tag[];
   managers: Profile[];
   assigned: Set<string>;
+  // Все видимые креаторы — только чтобы узнать своих среди авторов комментариев: имя автора
+  // сверяется с этим списком по той же площадке (`lib/cross.ts`).
+  allCreators: Creator[];
 };
 
 async function loadCreator(id: string): Promise<Data> {
-  const [creator, allTags, creatorTags, managers, links] = await Promise.all([
+  const [creator, allTags, creatorTags, managers, links, allCreators] = await Promise.all([
     creatorById(id),
     listTags(),
     listCreatorTags(),
     listManagers(),
     listCreatorManagers(),
+    listCreators(),
   ]);
   const ownIds = new Set(creatorTags.filter((ct) => ct.creator_id === id).map((ct) => ct.tag_id));
   return {
@@ -41,6 +51,7 @@ async function loadCreator(id: string): Promise<Data> {
     ownTags: allTags.filter((t) => ownIds.has(t.id)),
     managers,
     assigned: new Set(links.filter((l) => l.creator_id === id).map((l) => l.manager_id)),
+    allCreators,
   };
 }
 
@@ -139,6 +150,7 @@ function CreatorView({ id, videoId }: { id: string; videoId: string | null }) {
           />
           <CreatorStats
             creator={creator}
+            allCreators={data.allCreators}
             period={period}
             refreshKey={version}
             initialVideoId={videoId}

@@ -18,9 +18,8 @@ import type { PeriodRange } from "@/lib/period";
 import type { Creator, VideoStats } from "@/lib/types";
 import type { VideoState } from "@/lib/video-state";
 
-// Видео дашборда в выдвижной шторке справа (владелец, 2026-09-09: «клик по видео должен
-// открывать ту же подробную статистику, что на странице креатора»). Содержимое — тот же
-// `VideoPanel`, что встроен в карточку креатора: разъехаться им нечем.
+// Видео в выдвижной шторке справа — на ВСЕХ страницах (владелец, 2026-09-12: «видео всегда
+// открывается шторкой справа»). Содержимое — тот же `VideoPanel`: разъехаться им нечем.
 //
 // ⚠️ Sheet в `components/ui/` нет, поэтому шторка — это `Dialog` радикса, поставленный на
 // правый край во всю высоту. Появится настоящий Sheet — меняется только эта обёртка.
@@ -28,6 +27,10 @@ import type { VideoState } from "@/lib/video-state";
 // Данные читаются лениво, при открытии: дашборд про креатора этого видео не знает ничего,
 // кроме id, а звать `video_stats_between` на всех подряд ради панели, которую могут и не
 // открыть, — лишняя тысяча строк на каждую смену срока.
+//
+// ⚠️ Карточка креатора те же строки уже прочитала и отдаёт их свойством `rows` — тогда
+// шторка не ходит в базу вовсе. Второй такой запрос дал бы те же цифры, но открытие ролика
+// ждало бы его на ровном месте.
 
 type Loaded = { key: string; rows: VideoStats[] };
 
@@ -73,6 +76,7 @@ export function VideoSheet({
   onClose,
   cross,
   mark,
+  rows,
 }: {
   // Строка таблицы дашборда: null — шторка закрыта.
   video: VideoTableRow | null;
@@ -85,10 +89,12 @@ export function VideoSheet({
   // Состояние меняется тем же переключателем, что в таблице; строку дашборда правит хозяин.
   onState: (videoId: string, next: VideoState, before: VideoState) => void;
   onClose: () => void;
-  // Перекрёстность этого видео и подсветка своих в комментариях — только со страницы
-  // «Amestat Test»; дашборд их не передаёт, и шторка там прежняя.
+  // Перекрёстность этого видео и подсветка своих в комментариях (миграция v29).
   cross?: CrossInfo;
   mark?: OursMark;
+  // Строки `video_stats_between` за тот же срок, уже прочитанные хозяином (карточка
+  // креатора). Заданы — шторка своего запроса не делает.
+  rows?: VideoStats[] | null;
 }) {
   const t = useT();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
@@ -97,7 +103,7 @@ export function VideoSheet({
   const creatorId = creator?.id ?? null;
   const open = video !== null && creator !== null;
   const key =
-    open && creatorId && range
+    open && creatorId && range && !rows
       ? `${creatorId}|${range.from.getTime()}|${range.to.getTime()}|${scope}|${refreshKey}`
       : null;
 
@@ -119,7 +125,11 @@ export function VideoSheet({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, creatorId, scope]);
 
-  const current = key !== null && loaded?.key === key ? loaded : null;
+  // Свои строки хозяина или свои же прочитанные — одно и то же для всего, что ниже.
+  const current: Loaded | null = useMemo(
+    () => (rows ? { key: "own", rows } : key !== null && loaded?.key === key ? loaded : null),
+    [rows, key, loaded],
+  );
   const error = key !== null && failed?.key === key ? failed.error : null;
 
   const shown = useMemo(() => {
@@ -146,7 +156,10 @@ export function VideoSheet({
         <DialogContent
           showCloseButton={false}
           aria-describedby={undefined}
-          className="inset-y-0 right-0 left-auto top-0 flex h-full w-full max-w-[calc(100%-2rem)] flex-col translate-x-0 translate-y-0 gap-0 rounded-none rounded-l-xl p-0 data-open:slide-in-from-right data-closed:slide-out-to-right sm:max-w-[42rem]"
+          /* Ширина: около половины широкого монитора, на узком — почти весь экран
+             (владелец, 2026-09-12). Оба ограничителя `max-w` из `DialogContent` сняты:
+             иначе `sm:max-w-sm` ужал бы шторку до 24rem на всём, что шире телефона. */
+          className="inset-y-0 right-0 left-auto top-0 flex h-full w-[min(48rem,92vw)] max-w-none flex-col translate-x-0 translate-y-0 gap-0 rounded-none rounded-l-xl p-0 data-open:slide-in-from-right data-closed:slide-out-to-right sm:max-w-none"
         >
           {/* Шапка шторки: чей ролик и куда идти за подробностями по креатору. */}
           <div className="flex items-center justify-between gap-2 border-b px-4 py-3">

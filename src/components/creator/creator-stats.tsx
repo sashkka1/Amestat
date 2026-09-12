@@ -11,16 +11,19 @@ import { PerformanceChart } from "@/components/stats/performance-chart";
 import { TopPosts, type PostItem } from "@/components/stats/top-posts";
 import { VideosTable, type VideoTableRow } from "@/components/stats/videos-table";
 import { PageError } from "@/components/page";
-import { VideoPanel, activeRows, panelMedians } from "./video-panel";
+import { VideoSheet } from "@/components/video-sheet";
+import { activeRows, panelMedians } from "./video-panel";
 import {
   bucketOf,
   creatorDailyViews,
   creatorFollowers,
+  crossStats,
   listVideoWatch,
   videoStatsBetween,
   type Totals,
 } from "@/lib/queries";
 import { setVideoState } from "@/lib/api/videos";
+import { crossByVideo, crossTotals, handlesOf } from "@/lib/cross";
 import { matchesScope, useCompare, useScope, type Scope } from "@/lib/dashboard-prefs";
 import { videoState, type VideoState } from "@/lib/video-state";
 import { engagementOf, sum } from "@/lib/stats";
@@ -29,7 +32,7 @@ import { useT } from "@/lib/i18n";
 import { publishedIn } from "@/lib/video-rows";
 import type { PeriodRange } from "@/lib/period";
 import type { PeriodState } from "@/lib/use-period";
-import type { Creator, DailyViews, VideoStats } from "@/lib/types";
+import type { Creator, CrossStats, DailyViews, VideoStats } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Loaded = {
@@ -46,21 +49,27 @@ type Loaded = {
   daily: DailyViews[];
   followersNow: number | null;
   followersBefore: number | null;
+  // Перекрёстность видео этого креатора (миграция v29) — строки того же срока и охвата.
+  cross: CrossStats[];
 };
 
 async function loadStats(
   key: string,
-  creatorId: string,
+  creator: Creator,
   range: PeriodRange,
   previous: PeriodRange | null,
   scope: Scope,
 ): Promise<Loaded> {
-  const [rows, prevRows, watch, daily, followers] = await Promise.all([
+  const creatorId = creator.id;
+  const [rows, prevRows, watch, daily, followers, cross] = await Promise.all([
     videoStatsBetween(creatorId, range, scope),
     previous ? videoStatsBetween(creatorId, previous, scope) : Promise.resolve(null),
     listVideoWatch(creatorId),
     creatorDailyViews(creatorId, range, scope),
     creatorFollowers(creatorId, range),
+    // Своего креатора у `cross_stats` в параметрах нет: сужаем площадкой, а чужие строки
+    // отсеиваем здесь. Сверка имён всё равно идёт по всем нашим креаторам той же площадки.
+    crossStats(range, { platform: creator.platform, scope }),
   ]);
   return {
     key,
@@ -72,6 +81,7 @@ async function loadStats(
     daily,
     followersNow: followers.now,
     followersBefore: followers.before,
+    cross: cross.filter((r) => r.creator_id === creatorId),
   };
 }
 
@@ -96,17 +106,29 @@ function totalsOf(rows: VideoStats[], range: PeriodRange): Totals {
   return t;
 }
 
+// Адрес правится мимо роутера — тем же приёмом, что на дашборде: перерисовывать страницу
+// ради параметра нечего, а ссылка обязана оставаться живой.
+function syncVideoParam(videoId: string | null): void {
+  const url = new URL(window.location.href);
+  if (videoId) url.searchParams.set("video", videoId);
+  else url.searchParams.delete("video");
+  window.history.replaceState(null, "", url);
+}
+
 export function CreatorStats({
   creator,
+  allCreators,
   period,
   refreshKey,
   initialVideoId = null,
 }: {
   creator: Creator;
+  // Все видимые креаторы — для подсветки своих в комментариях открытого ролика.
+  allCreators: Creator[];
   period: PeriodState;
   // Меняется снаружи (креатора отредактировали) — данные перечитываются.
   refreshKey: number;
-  // `?video=` в адресе: карточка «Лучших видео» ведёт сюда с уже открытым роликом.
+  // `?video=` в адресе: ссылка с открытым роликом открывает шторку сразу.
   initialVideoId?: string | null;
 }) {
   const t = useT();
@@ -122,6 +144,17 @@ export function CreatorStats({
     setLastFromUrl(initialVideoId);
     if (initialVideoId) setSelectedId(initialVideoId);
   }
+
+  // Открытие и закрытие ролика ведёт и адрес: ссылку с `?video=` можно дать, и карточка
+  // откроется с той же шторкой — ровно как на дашборде.
+  const openVideo = useCallback((videoId: string) => {
+    setSelectedId(videoId);
+    syncVideoParam(videoId);
+  }, []);
+  const closeVideo = useCallback(() => {
+    setSelectedId(null);
+    syncVideoParam(null);
+  }, []);
 
   // Полоса периода на странице держит эти две настройки; сторы общие с дашбордом
   // (`lib/dashboard-prefs.ts`), поэтому выбор один на весь сайт.
@@ -141,7 +174,7 @@ export function CreatorStats({
   useEffect(() => {
     if (key === null || !range) return;
     let alive = true;
-    loadStats(key, creator.id, range, previous, scope).then(
+    loadStats(key, creator, range, previous, scope).then(
       (d) => {
         if (alive) setLoaded(d);
       },
@@ -205,7 +238,20 @@ export function CreatorStats({
       loaded.followersNow !== null && loaded.followersBefore !== null
         ? loaded.followersNow - loaded.followersBefore
         : null;
-    return { now, prev, medians, detailedCount, watchCount, activeCount: active.length, followersDelta };
+    // Перекрёстность за срок целиком: жёлтое «(N)» у плитки «Комментарии» и имена в подсказке.
+    const cross = crossTotals(loaded.cross);
+    const crossHandles = [...new Set(loaded.cross.flatMap((r) => r.cross_authors))].sort();
+    return {
+      now,
+      prev,
+      medians,
+      detailedCount,
+      watchCount,
+      activeCount: active.length,
+      followersDelta,
+      cross,
+      crossHandles,
+    };
   }, [loaded]);
 
   const tableRows: VideoTableRow[] = useMemo(() => {
@@ -273,7 +319,21 @@ export function CreatorStats({
       }));
   }, [scopedRows, loaded]);
 
-  const selected = loaded?.rows.find((r) => r.video_id === selectedId) ?? null;
+  // Перекрёстность по id видео: три числа в колонке комментариев таблицы, в «Лучших видео»
+  // и в шторке. Строки уже сужены до этого креатора в `loadStats`.
+  const byVideo = useMemo(() => crossByVideo(loaded?.cross ?? []), [loaded]);
+  // Открытый шторкой ролик — строка таблицы, как на дашборде: шторке нужны обложка, ссылка
+  // и состояние, а не только счётчики.
+  const openRow = useMemo(
+    () => (selectedId ? (tableRows.find((r) => r.id === selectedId) ?? null) : null),
+    [tableRows, selectedId],
+  );
+  // Подсветка своих в комментариях: наши креаторы ЕГО площадки и имя владельца ролика.
+  const mark = useMemo(
+    () => ({ handles: handlesOf(allCreators, creator.platform), ownerHandle: creator.handle }),
+    [allCreators, creator.platform, creator.handle],
+  );
+
   // Состояние строки до нажатия: нужно и переключателю в таблице, и в карточке — по нему
   // делается откат, если база отказала.
   const stateOf = (videoId: string): VideoState =>
@@ -293,7 +353,13 @@ export function CreatorStats({
       {/* Дневной ряд у плиток тот же, что рисует «Динамика»: спарклайн в плитке — это её
           кусок, а не отдельный расчёт. Прошлого срока нет (сравнение выключено) — строки
           с дельтой у плитки нет вовсе. */}
-      <KpiRow items={totalsToKpis(summary.now, summary.prev, loaded.daily)} collapseKey="creator.kpi" />
+      <KpiRow
+        items={totalsToKpis(summary.now, summary.prev, loaded.daily, {
+          comments: summary.cross.cross,
+          handles: summary.crossHandles,
+        })}
+        collapseKey="creator.kpi"
+      />
 
       {/* Три плитки про самого креатора: их считает не сводка по видео, а снимки профиля
           и медианы за срок, поэтому они стоят своим блоком. */}
@@ -351,28 +417,35 @@ export function CreatorStats({
         title={t("creatorStats.topVideos")}
         showCreator={false}
         collapseKey="creator.top-posts"
+        onSelect={openVideo}
+        cross={byVideo}
       />
-
-      {selected && (
-        <VideoPanel
-          row={selected}
-          state={stateOf(selected.video_id)}
-          onState={(next) => void changeState(selected.video_id, next, stateOf(selected.video_id))}
-          medians={summary.medians}
-          platform={creator.platform}
-          refreshKey={refreshKey}
-          onClose={() => setSelectedId(null)}
-        />
-      )}
 
       <VideosTable
         rows={scopedRows}
         title={t("metric.videos")}
         collapseKey="creator.videos"
         showCreator={false}
+        cross={byVideo}
         onSetState={(id, next) => void changeState(id, next, stateOf(id))}
-        onRowClick={(id) => setSelectedId((prev) => (prev === id ? null : id))}
+        onRowClick={(id) => (id === selectedId ? closeVideo() : openVideo(id))}
         selectedId={selectedId}
+      />
+
+      {/* Подробности ролика — шторкой справа, а не врезкой посреди страницы (владелец,
+          2026-09-12: «видео всегда открывается шторкой справа»). Строки за срок у карточки
+          уже прочитаны, поэтому шторка берёт их готовыми и в базу не ходит. */}
+      <VideoSheet
+        video={openRow}
+        creator={creator}
+        range={loaded.range}
+        scope={scope}
+        refreshKey={refreshKey}
+        rows={loaded.rows}
+        cross={selectedId ? byVideo.get(selectedId) : undefined}
+        mark={mark}
+        onState={(id, next, before) => void changeState(id, next, before)}
+        onClose={closeVideo}
       />
     </div>
   );

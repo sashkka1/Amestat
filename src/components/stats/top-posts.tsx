@@ -7,7 +7,7 @@ import { Cover } from "@/components/cover";
 import { PlatformIcon } from "@/components/platform";
 import { Input } from "@/components/ui/input";
 import { Panel, PanelHead, Empty } from "./panel";
-import { CrossBadge, MentionMark } from "./cross-badge";
+import { CrossCounts, MentionMark } from "./cross-badge";
 import { fmtCompact, fmtDayAxis, fmtNum } from "@/lib/format";
 import { engagementRate } from "@/lib/stats";
 import { useT, type TKey } from "@/lib/i18n";
@@ -71,8 +71,8 @@ export function TopPosts({
   limit?: number;
   showCreator?: boolean;
   collapseKey?: string;
-  // Перекрёстность по id видео (миграция v29): задана — под обложкой встаёт строка
-  // «Комментарии · N (M)». Не задана — карточка прежняя, как на дашборде.
+  // Перекрёстность по id видео (миграция v29): задана — под обложкой встают три числа
+  // «снято · не авторских · от других наших». Не задана — карточка без строки комментариев.
   cross?: Map<string, CrossInfo>;
   // Задан — щелчок остаётся на странице и отдаёт видео хозяину (шторка дашборда). Не задан —
   // прежний переход на карточку креатора с открытым видео (карточка креатора, владелец
@@ -174,14 +174,12 @@ export function TopPosts({
                     {p.creatorName}
                   </p>
                 )}
+                {/* Комментарии тремя числами — та же форма, что в таблице видео и в шторке
+                    (владелец, 2026-09-12): снято · не авторских · от других наших. */}
                 {cross && (
                   <p className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
                     <MessageCircleIcon className="size-3 shrink-0" />
-                    <span className="tabular-nums">{fmtNum(p.comments)}</span>
-                    <CrossBadge
-                      n={cross.get(p.id)?.cross ?? 0}
-                      handles={cross.get(p.id)?.handles ?? []}
-                    />
+                    <CrossCounts info={cross.get(p.id)} platformTotal={p.comments} />
                     <MentionMark handles={cross.get(p.id)?.mentions ?? []} />
                   </p>
                 )}

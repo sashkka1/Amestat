@@ -16,18 +16,27 @@ import { cn } from "@/lib/utils";
 // обновления»: положение живёт в localStorage под этим ключом (`lib/collapsed.ts`).
 // ⚠️ Сворачивание — только показ: данные грузятся как раньше, свёрнутая карточка ничего
 // не отменяет и ничего не откладывает.
+//
+// `defaultCollapsed` — карточка встаёт свёрнутой, пока владелец её не раскрывал. Так стоит
+// матрица перекрёстности на дашборде: заголовок виден, содержимое — по щелчку.
 export function Panel({
   className,
   collapseKey,
+  defaultCollapsed = false,
   children,
 }: {
   className?: string;
   collapseKey?: string;
+  defaultCollapsed?: boolean;
   children: React.ReactNode;
 }) {
   if (collapseKey === undefined) return <PanelBox className={className}>{children}</PanelBox>;
   return (
-    <CollapsiblePanel collapseKey={collapseKey} className={className}>
+    <CollapsiblePanel
+      collapseKey={collapseKey}
+      defaultCollapsed={defaultCollapsed}
+      className={className}
+    >
       {children}
     </CollapsiblePanel>
   );
@@ -51,14 +60,16 @@ const CollapseCtx = createContext<Collapse | null>(null);
 // `PanelHead` стоит первым ребёнком, а всё остальное — содержимое.
 function CollapsiblePanel({
   collapseKey,
+  defaultCollapsed,
   className,
   children,
 }: {
   collapseKey: string;
+  defaultCollapsed: boolean;
   className?: string;
   children: React.ReactNode;
 }) {
-  const collapse = useCollapsed(collapseKey);
+  const collapse = useCollapsed(collapseKey, defaultCollapsed);
   const kids = Children.toArray(children);
   const heads = kids.filter((node) => isValidElement(node) && node.type === PanelHead);
   const body = kids.filter((node) => !(isValidElement(node) && node.type === PanelHead));

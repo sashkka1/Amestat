@@ -58,8 +58,6 @@ export const en = {
 
   nav: {
     dashboard: "Dashboard",
-    // The cross-check page; the name is not translated — it is the page's name.
-    test: "Amestat Test",
     creators: "Creators",
     managers: "Creator managers",
     archive: "Archive",
@@ -186,7 +184,6 @@ export const en = {
   // replies and caption mentions — the platforms hand back likes, views, follows and saves
   // as bare numbers, with no author, so those are named as missing instead of being hidden.
   cross: {
-    pageTitle: "Amestat Test",
     // The yellow "(N)" next to a comment count.
     badgeTitle: "{n} comments from {handles}",
     badgeTitleNoNames: "{n} comments from our other creators",
