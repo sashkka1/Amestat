@@ -10,7 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  buildMessage, sendAt, streak, sleepGap, isWarm, realtimeStep, realtimeDown, squashKnown,
+  buildMessage, dataLost, sendAt, streak, sleepGap, isWarm, realtimeStep, realtimeDown, squashKnown,
   DB_STREAK, REALTIME_DOWN_MS, WARMUP_MS, JUMP_MS, SAME_ERROR_MS,
 } from "./notices.mjs";
 
@@ -169,4 +169,20 @@ test("squashKnown: счётчик повторов внутри обхода н�
   const first = squashKnown([{ code: "creator", text: "@a: профиль не найден" }], {}, T0);
   const again = squashKnown([{ code: "creator", text: "@a: профиль не найден", count: 3 }], first.memory, T0 + MIN);
   assert.match(again.items[0].text, /ещё 3 креаторов/);
+});
+
+
+// --- Письмо только при потере данных (владелец, 2026-09-13) ---
+
+test("dataLost: все креаторы собрались, замечания информационные — письма нет", () => {
+  const items = [{ code: "slow", text: "@a: собирался 3 мин" }, { code: "direct", text: "откат на браузер" }];
+  assert.equal(dataLost({ failed: 0, items }), false);
+});
+
+test("dataLost: хоть один креатор не собрался — письмо нужно", () => {
+  assert.equal(dataLost({ failed: 1, items: [{ code: "creator", text: "@a: профиль не найден" }] }), true);
+});
+
+test("dataLost: обход не начался (run) — письмо нужно даже без ошибок креаторов", () => {
+  assert.equal(dataLost({ failed: 0, items: [{ code: "run", text: "обход не начался" }] }), true);
 });

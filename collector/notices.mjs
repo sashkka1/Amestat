@@ -301,10 +301,31 @@ export function notice(code, text) {
  * Конец обхода: одно сообщение владельцу, если замечания были. Отдаёт, ушло ли оно.
  * Исключений не бросает: звонок владельцу не имеет права свалить обход (как и в `telegram.mjs`).
  */
+/**
+ * Потеряны ли данные обхода — только тогда владельцу нужно письмо.
+ * Владелец, 2026-09-13: «сообщение в Telegram должно приходить, только если случилась проблема,
+ * из-за которой не обновились данные; если обновление прошло штатно — отчёт не нужен».
+ * Потеря = хоть один креатор не собрался (`failed > 0`) или обход не начался / сорвался
+ * целиком (замечание `run`). Всё прочее — медленно, откат прямого запроса на браузер, повтор
+ * пустого списка, частично снятые комментарии — данные в итоге дошли, и это только лог.
+ * Чистая функция: её проверяют тесты.
+ */
+export function dataLost({ failed = 0, items = [] } = {}) {
+  if (Number(failed) > 0) return true;
+  return (items ?? []).some((i) => String(i?.code) === "run");
+}
+
 export async function reportRun({ runId = null, trigger = "manual", depth = "all", depthFrom = null, depthTo = null, done = 0, failed = 0, slotLabel = null, log } = {}) {
   const all = run ?? [];
   run = null;
-  if (all.length === 0) return false;
+  if (all.length === 0 && !(Number(failed) > 0)) return false;
+  if (!dataLost({ failed, items: all })) {
+    // Замечания остаются в логе обхода: на сайте видно, что было, но телефон не беспокоим.
+    const say = log ?? logLine;
+    say(`замечания (${all.length}) — только в лог: данные обновились полностью, письма нет`);
+    for (const i of all) say(`  [${i.code}] ${i.text}${i.count > 1 ? ` ×${i.count}` : ""}`);
+    return false;
+  }
   const now = Date.now();
   const state = loadState();
   const { items, memory, suppressed } = squashKnown(all, state.creatorErrors ?? {}, now);
@@ -343,8 +364,18 @@ let timer = null;
  * раньше минуты после первого замечания пачки.
  * На прогреве (первые 90 с после старта и после сна) замечания о сети не копятся вовсе.
  */
+// Резидент пишет владельцу только о том, что оставило данные без обновления: обход не смог
+// начаться или сорвался (`run`). Связь с базой, Realtime, опрос, назначенный повтор, добитые
+// браузеры — данные этим не теряются (просьба подхватится, повтор сам доберёт, сторож в базе
+// напишет, если просьба не принята за три минуты), поэтому это только лог (владелец, 2026-09-13).
+const RESIDENT_ALERT_CODES = new Set(["run"]);
+
 export function residentNotice(code, text, now = Date.now()) {
   if (muted(code)) return;
+  if (!RESIDENT_ALERT_CODES.has(String(code))) {
+    logLine(`[${code}] ${clean(text)} — только в лог`);
+    return;
+  }
   if (isWarm(now, warmUntil) && WARM_CODES.has(String(code))) {
     logLine(`прогрев: [${code}] ${clean(text)} — только в лог`);
     return;
