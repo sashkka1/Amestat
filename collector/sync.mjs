@@ -106,6 +106,7 @@ import { collectInstagramComments } from "./comments-instagram.mjs";
 import { launchProfile, trimTraffic, ensureProfileCopy, PROFILE_OPERA, PROFILE_TIKTOK } from "./browser.mjs";
 import { rehostImage, isOurs, avatarPath, coverPath } from "./images.mjs";
 import { notice, startRun, reportRun, takeSessionHints } from "./notices.mjs";
+import { ensureRadminOff } from "./radmin.mjs";
 import { takeLaunchSlot } from "./tiktok-gate.mjs";
 import { labelOf, rememberBad, rememberGood } from "./proxies.mjs";
 import { startSyncLog, pushSyncLog, stopSyncLog } from "./synclog.mjs";
@@ -992,6 +993,11 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
       notice("db", `просьбы не помечены взятыми: ${text}`);
     }
   }
+
+  // 🔴 Radmin VPN перебивает исключение Surfshark, и браузер остаётся без сети (владелец,
+  // 2026-09-14: «когда идёт сборка и включён Radmin — Radmin выключить»). Перед ЛЮБЫМ обходом.
+  // Своих исключений не бросает: не вышло — строка в лог, обход идёт как есть.
+  await ensureRadminOff({ browserChoice: env.browser, log });
 
   let done = 0, failed = 0, firstError = null;
   const flags = { comments, replies, allVideos, videos, maxVideos };
