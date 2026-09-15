@@ -556,6 +556,11 @@ export type Database = {
         Args: { p_id: string };
         Returns: string;
       };
+      // Стереть запись архива насовсем (миграция v31). Отдаёт handle стёртого креатора.
+      purge_archived_creator: {
+        Args: { p_id: string };
+        Returns: string;
+      };
       // Пароль менеджеру ставит админ, старого не видя (миграция v3).
       admin_set_password: {
         Args: { p_user: string; p_password: string };

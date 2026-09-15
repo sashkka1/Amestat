@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { RotateCcwIcon } from "lucide-react";
+import { RotateCcwIcon, Trash2Icon } from "lucide-react";
 import { toast } from "sonner";
 import { AuthGate } from "@/components/auth-gate";
 import { Page, PageError, PageSkeleton } from "@/components/page";
@@ -13,7 +13,7 @@ import { LocalTime } from "@/components/local-time";
 import { Panel, PanelHead, Empty } from "@/components/stats/panel";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { restoreCreator } from "@/lib/api/creators";
+import { purgeArchivedCreator, restoreCreator } from "@/lib/api/creators";
 import { listArchive } from "@/lib/queries";
 import { fmtNum } from "@/lib/format";
 import { useT } from "@/lib/i18n";
@@ -43,6 +43,9 @@ function ArchiveScreen() {
   // Подтверждение — тот же приём, что у удаления креатора и менеджера: полоса над списком
   // с вопросом и двумя кнопками, а не `confirm()` браузера.
   const [busy, setBusy] = useState(false);
+  // Кого собираемся стереть насовсем. Возврат обратим и спрашивать не о чем, а удаление
+  // записи архива — нет: после него о креаторе не остаётся ничего (миграция v31).
+  const [confirmPurge, setConfirmPurge] = useState<{ id: string; handle: string } | null>(null);
   // Переключатель тот же, что на дашборде и в «Креаторах»: положение общее через localStorage.
   const platform = usePlatformFilter();
   const platformFilter = platform.filter;
@@ -63,6 +66,21 @@ function ArchiveScreen() {
       return;
     }
     toast.success(t("archive.restored", { handle }));
+    reload();
+  }
+
+  async function purge() {
+    if (!confirmPurge) return;
+    const { id, handle } = confirmPurge;
+    setBusy(true);
+    const res = await purgeArchivedCreator(id);
+    setBusy(false);
+    if (!res.ok) {
+      toast.error(res.error);
+      return;
+    }
+    setConfirmPurge(null);
+    toast.success(t("archive.purged", { handle }));
     reload();
   }
 
@@ -90,6 +108,19 @@ function ArchiveScreen() {
               records: t.plural("records", list.length),
             })}
           />
+          {confirmPurge && (
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3">
+              <p className="text-sm">{t("archive.purgeConfirm", { handle: confirmPurge.handle })}</p>
+              <div className="flex gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setConfirmPurge(null)} disabled={busy}>
+                  {t("common.no")}
+                </Button>
+                <Button variant="destructive" size="sm" onClick={purge} disabled={busy}>
+                  {busy ? t("archive.purging") : t("common.yesDelete")}
+                </Button>
+              </div>
+            </div>
+          )}
           {list.length === 0 ? (
             <Empty>
               {data.length === 0 ? t("archive.emptyNone") : t("archive.emptyPlatform")}
@@ -142,18 +173,33 @@ function ArchiveScreen() {
                       </TableCell>
                       <TableCell>{a.deleted_by_login || t("archive.unknown")}</TableCell>
                       <TableCell className="text-right">
-                        {/* Без подтверждения: нажал — вернулся (владелец, 2026-09-10).
-                            Возврат обратим — креатора можно удалить снова. */}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => restore(a.id, a.handle)}
-                          disabled={busy}
-                          aria-label={t("archive.restore")}
-                        >
-                          <RotateCcwIcon data-icon="inline-start" />
-                          {busy ? t("archive.restoring") : t("archive.restore")}
-                        </Button>
+                        <div className="flex items-center justify-end gap-1">
+                          {/* Без подтверждения: нажал — вернулся (владелец, 2026-09-10).
+                              Возврат обратим — креатора можно удалить снова. */}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => restore(a.id, a.handle)}
+                            disabled={busy}
+                            aria-label={t("archive.restore")}
+                          >
+                            <RotateCcwIcon data-icon="inline-start" />
+                            {busy ? t("archive.restoring") : t("archive.restore")}
+                          </Button>
+                          {/* А это необратимо, поэтому через полосу подтверждения над таблицей
+                              (владелец, 2026-09-15). */}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-destructive hover:text-destructive"
+                            onClick={() => setConfirmPurge({ id: a.id, handle: a.handle })}
+                            disabled={busy}
+                            aria-label={t("archive.purge")}
+                          >
+                            <Trash2Icon data-icon="inline-start" />
+                            {t("archive.purge")}
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );

@@ -533,6 +533,11 @@ export const ptBR: Dict = {
       "Restaurar @{handle}? O cadastro e os gerentes voltam; vídeos, capturas e comentários não — a próxima coleta os junta de novo.",
     restoring: "Restaurando…",
     restored: "@{handle} restaurado, os dados chegam na próxima coleta",
+    purge: "Excluir",
+    purging: "Excluindo…",
+    purgeConfirm:
+      "Excluir o registro de arquivo de @{handle}? Não sobra nada sobre esse criador e «Restaurar» deixa de ser possível. Isso não pode ser desfeito.",
+    purged: "O registro de arquivo de @{handle} foi apagado",
   },
 
   connected: {
@@ -682,6 +687,7 @@ export const ptBR: Dict = {
     creatorSaveFailed: "Não foi possível salvar: {message}",
     creatorDeleteFailed: "Não foi possível excluir: {message}",
     creatorRestoreFailed: "Não foi possível restaurar: {message}",
+    archivePurgeFailed: "Não foi possível excluir o registro de arquivo: {message}",
     creatorTagFailed: "A tag não foi salva: {message}",
     tagEmptyName: "O nome da tag está vazio",
     tagBadColor: "A cor deve ser no formato #RRGGBB",
