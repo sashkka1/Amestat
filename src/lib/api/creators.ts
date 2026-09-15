@@ -75,12 +75,34 @@ export async function updateCreator(
   return { ok: true, data: undefined };
 }
 
-export async function deleteCreator(id: string): Promise<ActionResult> {
-  const supabase = createClient();
+// Удаление с карточки креатора — это уход в АРХИВ (миграция v32, владелец 2026-09-15: «при
+// удалении статистика не теряется… он просто перестаёт обновляться и числится только в
+// архиве»). Видео, снимки и комментарии остаются на месте, картинки в бакете тоже: «Вернуть»
+// поднимает креатора со всей историей.
+export async function archiveCreator(id: string): Promise<ActionResult> {
+  const { error } = await createClient().rpc("set_creator_archived", { p_id: id, p_on: true });
+  if (error) {
+    return fail(isRaised(error) ? error.message : tr("api.creatorDeleteFailed", { message: error.message }));
+  }
+  return { ok: true, data: undefined };
+}
 
-  // Свои картинки в бакете подчищаем; снимки и видео уйдут каскадом в базе. Два места:
-  // `<id>/` — что загрузил владелец, `instagram/<id>/` — аватар и обложки, которые сборщик
-  // переложил из Instagram (их CDN не даёт показывать картинки на чужом сайте).
+// «Не обновлять этого креатора» — только руками (миграция v32). Профиль удалён или закрыт,
+// обход на нём падает каждый раз, а карточка со старой статистикой нужна на сайте.
+export async function setCreatorSyncOff(id: string, on: boolean): Promise<ActionResult> {
+  const { error } = await createClient().from("creators").update({ sync_off: on }).eq("id", id);
+  if (error) return fail(tr("api.creatorSaveFailed", { message: error.message }));
+  return { ok: true, data: undefined };
+}
+
+// Корзина в архиве: стереть креатора насовсем вместе со всей историей (миграция v32).
+//
+// ⚠️ Единственное настоящее удаление во всём сайте. Видео, снимки и комментарии уходят
+// каскадом в базе, картинки — здесь: `<id>/` это то, что загрузил владелец, а
+// `instagram/<id>/` — аватар и обложки, переложенные сборщиком (их CDN не даёт показывать
+// на чужом сайте). Отдаёт handle стёртого: сайту нужно назвать его в сообщении.
+export async function purgeCreator(id: string): Promise<ActionResult<string>> {
+  const supabase = createClient();
   for (const folder of [id, `instagram/${id}`]) {
     const { data: files } = await supabase.storage.from("avatars").list(folder);
     if (files && files.length > 0) {
@@ -88,9 +110,11 @@ export async function deleteCreator(id: string): Promise<ActionResult> {
     }
   }
 
-  const { error } = await supabase.from("creators").delete().eq("id", id);
-  if (error) return fail(tr("api.creatorDeleteFailed", { message: error.message }));
-  return { ok: true, data: undefined };
+  const { data, error } = await supabase.rpc("purge_creator", { p_id: id });
+  if (error) {
+    return fail(isRaised(error) ? error.message : tr("api.archivePurgeFailed", { message: error.message }));
+  }
+  return { ok: true, data: String(data ?? "") };
 }
 
 // Вернуть креатора из архива (миграция v25). Всё делает база одной функцией: проверяет
@@ -112,11 +136,18 @@ export async function purgeArchivedCreator(id: string): Promise<ActionResult<str
   return { ok: true, data: String(data ?? "") };
 }
 
-// ⚠️ Возвращается только карточка: видео, снимки и комментарии ушли каскадом при удалении,
-// их соберёт ближайший обход. Картинки в бакете тоже удалены (см. deleteCreator) — аватар
-// вернётся из архивной ссылки или обновится обходом.
-export async function restoreCreator(id: string): Promise<ActionResult> {
-  const { error } = await createClient().rpc("restore_creator", { p_id: id });
+// Вернуть из архива. Две дороги, потому что и записи в архиве двух видов (миграция v32):
+//   "creator" — карточка с отметкой: гасим отметку, и креатор возвращается СО ВСЕЙ историей;
+//   "legacy"  — старая строка `creators_archive` (до v32): заводим карточку заново, истории
+//               у неё нет вовсе, её соберёт ближайший обход.
+export async function restoreCreator(
+  id: string,
+  kind: "creator" | "legacy" = "creator",
+): Promise<ActionResult> {
+  const { error } =
+    kind === "legacy"
+      ? await createClient().rpc("restore_creator", { p_id: id })
+      : await createClient().rpc("set_creator_archived", { p_id: id, p_on: false });
   if (error) {
     // Свой текст базы («уже заведён», «только администратор») показываем как есть.
     return fail(isRaised(error) ? error.message : tr("api.creatorRestoreFailed", { message: error.message }));

@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { EditCreatorDialog } from "./edit-creator-dialog";
-import { deleteCreator, updateCreator } from "@/lib/api/creators";
+import { archiveCreator, setCreatorSyncOff, updateCreator } from "@/lib/api/creators";
 import { assignManager, unassignManager } from "@/lib/api/managers";
 import { markCreatorVideosOurs } from "@/lib/api/videos";
 import { profileName } from "@/lib/api/profiles";
@@ -45,6 +45,9 @@ export function CreatorHeader({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
   const [allOurs, setAllOurs] = useState(creator.all_videos_ours);
+  // «Не обновлять»: ставится руками, когда профиль удалён или закрыт и обход падает на нём
+  // каждый раз (миграция v32). Карточка со старой статистикой при этом остаётся.
+  const [syncOff, setSyncOff] = useState(creator.sync_off);
   const [, startTransition] = useTransition();
 
   // Галочки тегов меняем сразу; свежие теги придут при следующем перечитывании.
@@ -78,9 +81,24 @@ export function CreatorHeader({
     });
   }
 
+  function toggleSyncOff(on: boolean) {
+    setSyncOff(on);
+    startTransition(async () => {
+      const res = await setCreatorSyncOff(creator.id, on);
+      if (!res.ok) {
+        toast.error(res.error);
+        setSyncOff(!on);
+        return;
+      }
+      onChanged();
+    });
+  }
+
+  // Удаление уводит креатора в архив ВМЕСТЕ со всей историей (миграция v32): на сайте его
+  // больше нет и обходы его не трогают, но «Вернуть» в архиве поднимает всё обратно.
   async function remove() {
     setBusy(true);
-    const res = await deleteCreator(creator.id);
+    const res = await archiveCreator(creator.id);
     setBusy(false);
     if (!res.ok) {
       toast.error(res.error);
@@ -166,6 +184,12 @@ export function CreatorHeader({
               <Checkbox checked={allOurs} onCheckedChange={(v) => toggleAllOurs(v === true)} />
               {t("creator.allOurs")}
             </label>
+            {isAdmin && (
+              <label className="inline-flex cursor-pointer items-center gap-1.5" title={t("creator.syncOffHint")}>
+                <Checkbox checked={syncOff} onCheckedChange={(v) => toggleSyncOff(v === true)} />
+                {t("creator.syncOff")}
+              </label>
+            )}
           </div>
           {creator.needs_reconnect && (
             <p className="text-xs text-destructive">{t("creator.needsReconnect")}</p>

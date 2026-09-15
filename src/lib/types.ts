@@ -75,6 +75,14 @@ export type Creator = {
   tiktok_open_id: string | null;
   // Ключ протух — обход не идёт, пока креатор не пройдёт по ссылке заново.
   needs_reconnect: boolean;
+  // В архиве с этой минуты (миграция v32): карточка не показывается и не обновляется, но вся
+  // история цела и вернётся вместе с ней. null — обычный, живой креатор.
+  archived_at: string | null;
+  archived_by: string | null;
+  archived_by_login: string;
+  // «Не обновлять» — ставится только руками (миграция v32): профиль удалён или заблокирован,
+  // и обход на нём падает каждый раз. Карточка при этом остаётся на сайте.
+  sync_off: boolean;
 };
 
 export type CreatorInsert = {
@@ -94,6 +102,12 @@ export type CreatorInsert = {
   connected_by?: string | null;
   tiktok_open_id?: string | null;
   needs_reconnect?: boolean;
+  // Архив и ручная пауза (миграция v32). Отметку архива сайт ставит функцией
+  // `set_creator_archived`, а не update — здесь она ради полноты формы строки.
+  archived_at?: string | null;
+  archived_by?: string | null;
+  archived_by_login?: string;
+  sync_off?: boolean;
 };
 
 export type CreatorUpdate = Partial<CreatorInsert>;
@@ -125,6 +139,27 @@ export type CreatorArchive = {
   deleted_at: string;
   deleted_by: string | null;
   deleted_by_login: string;
+};
+
+// Строка страницы «Архив». Их два вида, и ведут они себя по-разному (миграция v32):
+//   kind: "creator" — карточка с отметкой `archived_at`: история цела, «Вернуть» возвращает всё;
+//   kind: "legacy"  — старая строка `creators_archive` (до v32): данные ушли каскадом ещё тогда,
+//                     вернётся только карточка. Таких всего три, новые не появляются.
+export type ArchiveEntry = {
+  kind: "creator" | "legacy";
+  id: string;
+  platform: Platform;
+  handle: string;
+  display_name: string;
+  avatar_url: string | null;
+  profile_url: string;
+  added_at: string;
+  managers: string[];
+  deleted_at: string;
+  deleted_by_login: string;
+  // Сколько истории лежит за карточкой. У старых строк — ноль: стирать уже нечего.
+  videos: number;
+  comments: number;
 };
 
 export type Tag = {
@@ -556,10 +591,38 @@ export type Database = {
         Args: { p_id: string };
         Returns: string;
       };
-      // Стереть запись архива насовсем (миграция v31). Отдаёт handle стёртого креатора.
+      // Стереть старую запись архива насовсем (миграция v31). Отдаёт handle стёртого креатора.
       purge_archived_creator: {
         Args: { p_id: string };
         Returns: string;
+      };
+      // Убрать в архив (p_on = true) и вернуть (false) — миграция v32. История не трогается.
+      set_creator_archived: {
+        Args: { p_id: string; p_on: boolean };
+        Returns: string;
+      };
+      // Стереть креатора насовсем вместе с видео, снимками и комментариями (v32).
+      purge_creator: {
+        Args: { p_id: string };
+        Returns: string;
+      };
+      // Список архива: карточки с отметкой и сколько истории за ними сохранено (v32).
+      list_archive: {
+        Args: Record<string, never>;
+        Returns: {
+          id: string;
+          platform: Platform;
+          handle: string;
+          display_name: string;
+          avatar_url: string | null;
+          profile_url: string;
+          added_at: string;
+          managers: string[];
+          deleted_at: string;
+          deleted_by_login: string;
+          videos: number;
+          comments: number;
+        }[];
       };
       // Пароль менеджеру ставит админ, старого не видя (миграция v3).
       admin_set_password: {

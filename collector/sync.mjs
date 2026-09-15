@@ -1002,10 +1002,15 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
   let done = 0, failed = 0, firstError = null;
   const flags = { comments, replies, allVideos, videos, maxVideos };
   try {
-    const where = `${creatorId ? `&id=eq.${creatorId}` : ""}${failedOnly ? "&sync_error=not.is.null" : ""}`;
+    // 🔴 Архивных и помеченных «не обновлять» не берём вовсе (миграция v32, владелец
+    // 2026-09-15). На сайте архивных прячет RLS, но сборщик ходит СЛУЖЕБНЫМ ключом — мимо
+    // неё, — поэтому здесь фильтр стоит явно, и он же держит ручную паузу у креатора,
+    // чей профиль удалён (@aurea.ora, 15.09): «его заново обновлять не нужно».
+    const skip = "&archived_at=is.null&sync_off=is.false";
+    const where = `${creatorId ? `&id=eq.${creatorId}` : ""}${failedOnly ? "&sync_error=not.is.null" : ""}${skip}`;
     const creators = await get(`creators?select=${CREATOR_FIELDS}${where}&order=sort_order.asc,added_at.asc`);
     if (creators.length === 0) {
-      log(failedOnly ? "ни у кого нет ошибки — повторять нечего" : creatorId ? "креатор не найден в базе" : "в базе нет ни одного креатора");
+      log(failedOnly ? "ни у кого нет ошибки — повторять нечего" : creatorId ? "креатор не найден, в архиве или помечен «не обновлять»" : "в базе нет ни одного креатора, которого нужно обходить");
     }
 
     // Полосы известны заранее: по ним считается и оценка, и остаток каждой в прогнозе.

@@ -272,7 +272,9 @@ async function runRetry(slotLabel, { handles = [], videos = "all", maxVideos = n
   // Ошибки могло уже не остаться: следующий слот, догон или просьба с сайта успели собрать всех.
   let failedCreators;
   try {
-    failedCreators = await get("creators?select=id,handle,sync_error&sync_error=not.is.null");
+    // Архивных и тех, у кого стоит «не обновлять», повтор не поднимает (миграция v32):
+    // иначе он каждый час бился бы о креатора, которого сам же владелец и отключил.
+    failedCreators = await get("creators?select=id,handle,sync_error&sync_error=not.is.null&archived_at=is.null&sync_off=is.false");
   } catch (e) {
     // База недоступна — повтор не смог даже начаться. Это как раз тот случай, когда
     // владельцу надо сказать: сам он этого не увидит, сайт тоже читает из базы.

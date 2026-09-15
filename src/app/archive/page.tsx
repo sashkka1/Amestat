@@ -13,7 +13,7 @@ import { LocalTime } from "@/components/local-time";
 import { Panel, PanelHead, Empty } from "@/components/stats/panel";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { purgeArchivedCreator, restoreCreator } from "@/lib/api/creators";
+import { purgeArchivedCreator, purgeCreator, restoreCreator } from "@/lib/api/creators";
 import { listArchive } from "@/lib/queries";
 import { fmtNum } from "@/lib/format";
 import { useT } from "@/lib/i18n";
@@ -54,9 +54,9 @@ function ArchiveScreen() {
   );
 
 
-  async function restore(id: string, handle: string) {
+  async function restore(id: string, handle: string, kind: "creator" | "legacy") {
     setBusy(true);
-    const res = await restoreCreator(id);
+    const res = await restoreCreator(id, kind);
     setBusy(false);
     if (!res.ok) {
       toast.error(res.error);
@@ -66,9 +66,11 @@ function ArchiveScreen() {
     reload();
   }
 
-  async function purge(id: string, handle: string) {
+  // Корзина стирает насовсем. У карточки с историей (kind "creator") уходят и видео с
+  // комментариями, у старой строки архива стирать уже нечего — только саму строку.
+  async function purge(id: string, handle: string, kind: "creator" | "legacy") {
     setBusy(true);
-    const res = await purgeArchivedCreator(id);
+    const res = kind === "legacy" ? await purgeArchivedCreator(id) : await purgeCreator(id);
     setBusy(false);
     if (!res.ok) {
       toast.error(res.error);
@@ -116,6 +118,7 @@ function ArchiveScreen() {
                   <TableHead className="text-muted-foreground">{t("archive.added")}</TableHead>
                   <TableHead className="text-muted-foreground">{t("archive.deleted")}</TableHead>
                   <TableHead className="text-muted-foreground">{t("archive.deletedBy")}</TableHead>
+                  <TableHead className="text-muted-foreground">{t("archive.history")}</TableHead>
                   <TableHead />
                 </TableRow>
               </TableHeader>
@@ -153,6 +156,17 @@ function ArchiveScreen() {
                         <LocalTime iso={a.deleted_at} />
                       </TableCell>
                       <TableCell>{a.deleted_by_login || t("archive.unknown")}</TableCell>
+                      {/* Сколько истории сохранено за карточкой: её вернёт «Вернуть» и сотрёт
+                          корзина. У трёх старых строк (kind "legacy") истории нет вовсе —
+                          она ушла каскадом ещё до миграции v32. */}
+                      <TableCell className="text-muted-foreground">
+                        {a.kind === "legacy"
+                          ? t("archive.noHistory")
+                          : t("archive.historyCount", {
+                              videos: fmtNum(a.videos),
+                              comments: fmtNum(a.comments),
+                            })}
+                      </TableCell>
                       <TableCell className="text-right">
                         {/* Обе кнопки — только значки и без подтверждения (владелец,
                             2026-09-15: «подпись не нужна, подтверждение не нужно ни на одно
@@ -161,7 +175,7 @@ function ArchiveScreen() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            onClick={() => restore(a.id, a.handle)}
+                            onClick={() => restore(a.id, a.handle, a.kind)}
                             disabled={busy}
                             title={t("archive.restore")}
                             aria-label={t("archive.restore")}
@@ -172,7 +186,7 @@ function ArchiveScreen() {
                             variant="ghost"
                             size="icon"
                             className="text-destructive hover:text-destructive"
-                            onClick={() => purge(a.id, a.handle)}
+                            onClick={() => purge(a.id, a.handle, a.kind)}
                             disabled={busy}
                             title={t("archive.purge")}
                             aria-label={t("archive.purge")}

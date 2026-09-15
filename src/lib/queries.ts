@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/client";
 import { engagementOf } from "./stats";
 import type {
   Creator,
+  ArchiveEntry,
   CreatorArchive,
   CreatorLatest,
   CreatorManager,
@@ -73,13 +74,54 @@ export async function listCreatorManagers(): Promise<CreatorManager[]> {
   return data ?? [];
 }
 
-export async function listArchive(): Promise<CreatorArchive[]> {
-  const { data, error } = await createClient()
-    .from("creators_archive")
-    .select("*")
-    .order("deleted_at", { ascending: false });
-  fail(error);
-  return data ?? [];
+// Архив собирается из двух мест (миграция v32):
+//   `list_archive()` — карточки с отметкой `archived_at`, у них цела вся история;
+//   `creators_archive` — три старые строки, оставшиеся с прежнего порядка, когда удаление
+//   уносило видео и снимки каскадом. Новых там не появляется, вернуть можно только карточку.
+// Оба вида показываются одним списком, вид помечен полем `kind` — от него зависит, что делают
+// кнопки «Вернуть» и «Удалить».
+export async function listArchive(): Promise<ArchiveEntry[]> {
+  const supabase = createClient();
+  const [fresh, legacy] = await Promise.all([
+    supabase.rpc("list_archive"),
+    supabase.from("creators_archive").select("*").order("deleted_at", { ascending: false }),
+  ]);
+  fail(fresh.error);
+  fail(legacy.error);
+
+  const rows: ArchiveEntry[] = (fresh.data ?? []).map((a) => ({
+    kind: "creator" as const,
+    id: a.id,
+    platform: a.platform,
+    handle: a.handle,
+    display_name: a.display_name,
+    avatar_url: a.avatar_url,
+    profile_url: a.profile_url,
+    added_at: a.added_at,
+    managers: a.managers ?? [],
+    deleted_at: a.deleted_at,
+    deleted_by_login: a.deleted_by_login,
+    videos: Number(a.videos ?? 0),
+    comments: Number(a.comments ?? 0),
+  }));
+  for (const a of (legacy.data ?? []) as CreatorArchive[]) {
+    rows.push({
+      kind: "legacy",
+      id: a.id,
+      platform: a.platform,
+      handle: a.handle,
+      display_name: a.display_name,
+      avatar_url: a.avatar_url,
+      profile_url: a.profile_url,
+      added_at: a.added_at,
+      managers: a.managers ?? [],
+      deleted_at: a.deleted_at,
+      deleted_by_login: a.deleted_by_login,
+      videos: 0,
+      comments: 0,
+    });
+  }
+  return rows.sort((a, b) => b.deleted_at.localeCompare(a.deleted_at));
 }
 
 // Видео за срок вместе со свежим снимком — ОДИН вызов `videos_with_latest` (миграция v23).
