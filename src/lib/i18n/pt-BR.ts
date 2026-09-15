@@ -560,9 +560,12 @@ export const ptBR: Dict = {
     stateError: "Não foi possível ler o estado",
     collectorSilent:
       "O coletor não responde, o pedido foi salvo: vamos atualizar assim que ele acordar",
-    unavailableText:
-      "A atualização está indisponível no momento, a mensagem foi enviada, vamos atualizar em breve",
-    unavailableTitle: "A atualização está indisponível agora, o dono já foi avisado",
+    // Сборщик молчал, просьбу никто не принял. Кнопка при этом СВОБОДНА (владелец,
+    // 2026-09-14), поэтому слова зовут нажать ещё раз, а не объявляют запрет.
+    notTakenText:
+      "O pedido anterior não foi executado: sem conexão com o coletor. O dono já foi avisado — aperte Atualizar de novo se ainda quiser",
+    notTakenTitle:
+      "O pedido anterior não foi executado: sem conexão com o coletor. O dono já foi avisado — aperte para pedir de novo",
     phaseQueued: "Na fila…",
     phaseSeen: "Recebido, aguardando a fila…",
     phaseRunning: "Atualizando…",

@@ -179,19 +179,27 @@ export function estimateText(runs: SyncRun[]): string | null {
 }
 
 // База сама написала владельцу в Telegram: просьбу никто не принял за три минуты.
+// 🔴 С этого места кнопка СВОБОДНА (владелец, 2026-09-14: «не нужно было лочить кнопку… если
+// кто-то хочет пытаться, пусть пытается; я уже когда приду, запущу сервер»). Просьба осталась
+// в базе и выполнится, когда сборщик проснётся, — эти слова говорят, что прошлая не прошла, а
+// не запрещают следующую.
 // Формулировки две, потому что места разные: у кнопки — целая строка рядом, места хватает;
 // в строке списка — короткая подсказка на иконке.
-export function unavailableText(): string {
-  return tr("sync.unavailableText");
+export function notTakenText(): string {
+  return tr("sync.notTakenText");
 }
 
-export function unavailableTitle(): string {
-  return tr("sync.unavailableTitle");
+export function notTakenTitle(): string {
+  return tr("sync.notTakenTitle");
 }
 
 // Состояние пачки просьб: решает слабейшее звено — пока хоть одна не принята, вся пачка
-// в очереди. seenAny и notified смотрят на всю пачку сразу: хоть где-то есть — значит есть.
+// в очереди. seenAny смотрит на всю пачку сразу: хоть где-то есть — значит есть.
 // Пустая пачка — покой: ждать нечего.
+// ⚠️ notified — наоборот, `every`: «пачку бросили» верно только тогда, когда брошена каждая
+// просьба. Иначе свежее нажатие поверх старой непринятой просьбы сразу показало бы «прошлая
+// не выполнена» и оставило кнопку свободной, хотя новую просьбу ещё никто не успел не принять
+// (сторож в базе ждёт три минуты).
 export function stage(reqs: SyncRequest[]): { phase: Phase; seenAny: boolean; notified: boolean } {
   if (reqs.length === 0) return { phase: "idle", seenAny: false, notified: false };
   const phase: Phase = reqs.every((r) => r.taken_at)
@@ -202,7 +210,7 @@ export function stage(reqs: SyncRequest[]): { phase: Phase; seenAny: boolean; no
   return {
     phase,
     seenAny: reqs.some((r) => r.seen_at || r.taken_at),
-    notified: reqs.some((r) => r.notified_at),
+    notified: reqs.every((r) => r.notified_at),
   };
 }
 

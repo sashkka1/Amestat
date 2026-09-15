@@ -575,9 +575,12 @@ export const en = {
     stateError: "Could not read the state",
     collectorSilent:
       "The collector is not answering, the request is saved: we will update as soon as it wakes up",
-    unavailableText:
-      "Updating is unavailable right now, a message has been sent, we will update shortly",
-    unavailableTitle: "Updating is unavailable right now, the owner has been notified",
+    // Сборщик молчал, просьбу никто не принял. Кнопка при этом СВОБОДНА (владелец,
+    // 2026-09-14), поэтому слова зовут нажать ещё раз, а не объявляют запрет.
+    notTakenText:
+      "The previous request was not carried out: no connection to the collector. The owner has been notified — press Update again if you still want it",
+    notTakenTitle:
+      "The previous request was not carried out: no connection to the collector. The owner has been notified — press to ask again",
     phaseQueued: "Queued…",
     phaseSeen: "Accepted, waiting in the queue…",
     phaseRunning: "Updating…",

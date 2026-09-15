@@ -271,9 +271,14 @@ export function useSyncQueue(creatorIds: string[], onDone: () => void): SyncQueu
       });
     }
     // Отправляем прямо сейчас — строки в базе ещё нет, но ждать её уже начали.
-    for (const c of sending)
-      if (!out.has(c))
+    // ⚠️ Строка с брошенной просьбой (`unavailable`) тоже перебивается: кнопка там рабочая,
+    // и после нажатия человек обязан сразу увидеть, что новая просьба пошла, а не прежние
+    // слова «прошлая не выполнена».
+    for (const c of sending) {
+      const cur = out.get(c);
+      if (!cur || cur.unavailable)
         out.set(c, { phase: "queued", unavailable: false, trigger: null, progress: null, work: null });
+    }
     return out;
   }, [reqs, ids, sending, running]);
 

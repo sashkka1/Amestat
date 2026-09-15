@@ -17,11 +17,10 @@ import {
   useSyncRange,
 } from "@/components/sync-choice";
 import { useT } from "@/lib/i18n";
-import { phaseText, unavailableTitle, depthWord, maxVideosWord } from "@/lib/sync-phase";
+import { phaseText, notTakenTitle, depthWord, maxVideosWord } from "@/lib/sync-phase";
 import type { PeriodRange } from "@/lib/period";
 import type { RowSync } from "@/lib/use-sync-queue";
 import type { SyncDepth, SyncPick, SyncVideos } from "@/lib/types";
-import { cn } from "@/lib/utils";
 
 // Кнопка обновления в строке списка креаторов. Блоков «Кого» и «Площадка» здесь нет: охват
 // задан строкой, а площадка у одного креатора одна — выбирать не из чего. Остальное такое
@@ -68,26 +67,33 @@ export function RowSyncButton({
     [resetRange],
   );
 
-  if (state) {
-    // Пока просьба открыта, кнопка выключена: иначе на одну и ту же работу копится очередь.
-    // Подсказка висит на обёртке — у выключенной кнопки отключены и события мыши, а с ними
-    // пропал бы и title. «Недоступно» не крутится: ждать нечего, пока сборщик не поднялся.
+  // 🔴 Сборщик не отозвался (`unavailable`) — кнопка остаётся рабочей (владелец, 2026-09-14:
+  // «не нужно было лочить кнопку… если кто-то хочет пытаться, пусть пытается»). Прошлая
+  // просьба жива и выполнится, когда резидент проснётся; о ней говорит подсказка ниже.
+  if (state && !state.unavailable) {
+    // Пока просьба открыта и её кто-то ведёт, кнопка выключена: иначе на одну и ту же работу
+    // копится очередь. Подсказка висит на обёртке — у выключенной кнопки отключены и события
+    // мыши, а с ними пропал бы и title.
     // Идёт обход — говорим чей и сколько сделано: «Обход по расписанию · Обновляем 3 из 10
     // · @npodcast123» (миграция v14). Счётчиков ещё нет — остаются слова фазы.
     // Насколько обход близок к концу — тем же счётом, что полоса во всплывашке кнопки
     // «Обновить» (миграция v24). ⚠️ Полосы здесь нет: подсказка строки — это `title`
     // браузера, и разметку он не покажет; доля и прогноз идут словами в ту же строку.
-    const title = state.unavailable
-      ? unavailableTitle()
-      : [state.trigger, state.progress ?? phaseText(state.phase), state.work].filter(Boolean).join(" · ");
+    const title = [state.trigger, state.progress ?? phaseText(state.phase), state.work]
+      .filter(Boolean)
+      .join(" · ");
     return (
       <span className="inline-flex" title={title}>
         <Button variant="ghost" size="icon-sm" disabled aria-label={title}>
-          <RefreshCwIcon className={cn(!state.unavailable && "animate-spin")} />
+          <RefreshCwIcon className="animate-spin" />
         </Button>
       </span>
     );
   }
+
+  // Прошлая просьба этой строки не дошла до сборщика: кнопка рабочая, но подсказка говорит
+  // об этом — иначе нажавший второй раз думал бы, что первое нажатие просто пропало.
+  const buttonTitle = state?.unavailable ? notTakenTitle() : t("sync.rowButton");
 
   // У кого брать тексты, решает охват: флаг выводится, а не выбирается (владелец, 2026-09-09).
   const pick: SyncPick = { comments, replies, allVideos: allVideosFlag({ comments, videos }), videos };
@@ -106,8 +112,8 @@ export function RowSyncButton({
         <Button
           variant="ghost"
           size="icon-sm"
-          title={t("sync.rowButton")}
-          aria-label={t("sync.rowButton")}
+          title={buttonTitle}
+          aria-label={buttonTitle}
         >
           <RefreshCwIcon />
         </Button>
