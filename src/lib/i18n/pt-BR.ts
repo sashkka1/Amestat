@@ -529,14 +529,8 @@ export const ptBR: Dict = {
     noManagers: "com ninguém",
     unknown: "desconhecido",
     restore: "Restaurar",
-    restoreConfirm:
-      "Restaurar @{handle}? O cadastro e os gerentes voltam; vídeos, capturas e comentários não — a próxima coleta os junta de novo.",
-    restoring: "Restaurando…",
     restored: "@{handle} restaurado, os dados chegam na próxima coleta",
-    purge: "Excluir",
-    purging: "Excluindo…",
-    purgeConfirm:
-      "Excluir o registro de arquivo de @{handle}? Não sobra nada sobre esse criador e «Restaurar» deixa de ser possível. Isso não pode ser desfeito.",
+    purge: "Excluir de vez",
     purged: "O registro de arquivo de @{handle} foi apagado",
   },
 

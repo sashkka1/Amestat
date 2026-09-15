@@ -544,14 +544,8 @@ export const en = {
     noManagers: "nobody",
     unknown: "unknown",
     restore: "Restore",
-    restoreConfirm:
-      "Restore @{handle}? The card and its managers come back; videos, snapshots and comments do not — the next run collects them again.",
-    restoring: "Restoring…",
     restored: "@{handle} restored, the data arrives with the next run",
-    purge: "Delete",
-    purging: "Deleting…",
-    purgeConfirm:
-      "Delete the archive record for @{handle}? Nothing about this creator will be left, and “Restore” will no longer be possible. This cannot be undone.",
+    purge: "Delete for good",
     purged: "The archive record for @{handle} is gone",
   },
 
