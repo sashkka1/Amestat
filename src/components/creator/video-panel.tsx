@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { ExternalLinkIcon, XIcon } from "lucide-react";
 import { Cover } from "@/components/cover";
+import { GONE_IMAGE_CLASS, GoneLine } from "@/components/gone-mark";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -115,7 +116,7 @@ export function VideoPanel({
   const body = (
     <>
       <div className="flex gap-4">
-        <Cover src={row.cover_url} width={56} />
+        <Cover src={row.cover_url} width={56} className={row.gone_at ? GONE_IMAGE_CLASS : undefined} />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex items-start justify-between gap-2">
             <p className="text-sm font-medium">{row.caption || t("common.noCaption")}</p>
@@ -143,6 +144,9 @@ export function VideoPanel({
           <p className="text-xs text-muted-foreground">
             {t("videoPanel.published", { date: fmtDateTime(row.published_at) })}
           </p>
+          {/* Строкой, а не пилюлей: в шапке есть место, и ссылка «открыть на площадке»
+              выше должна читаться вместе с объяснением, почему она уже не откроется. */}
+          <GoneLine at={row.gone_at} kind="video" />
           {note && <p className="text-xs text-muted-foreground">{note}</p>}
           {cross && cross.mentions.length > 0 && (
             <p className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-500">

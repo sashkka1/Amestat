@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { EyeIcon, MessageCircleIcon, SearchIcon } from "lucide-react";
 import { Cover } from "@/components/cover";
+import { GONE_IMAGE_CLASS, GoneBadge } from "@/components/gone-mark";
 import { PlatformIcon } from "@/components/platform";
 import { Input } from "@/components/ui/input";
 import { Panel, PanelHead, Empty } from "./panel";
@@ -30,6 +31,9 @@ export type PostItem = {
   creatorName: string;
   handle: string;
   platform: Platform;
+  // «Похоже, удалено с площадки» (миграция v33); null — обычное видео. На отбор и сортировку
+  // не влияет: карточка остаётся на своём месте, но гаснет и получает пилюлю.
+  goneAt: string | null;
 };
 
 type Sort = "views" | "likes" | "comments" | "engagement";
@@ -199,7 +203,9 @@ export function TopPosts({
 function CoverBox({ post, rank }: { post: PostItem; rank: number }) {
   return (
     <div className="relative">
-      <Cover src={post.coverUrl} width={150} className="w-full" />
+      {/* Гаснет только сама обложка, а не номер места и просмотры поверх неё: иначе
+          затемнение съело бы и подписи, которые остаются верными (миграция v33). */}
+      <Cover src={post.coverUrl} width={150} className={cn("w-full", post.goneAt && GONE_IMAGE_CLASS)} />
       <span className="absolute left-2 top-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[11px] font-semibold text-white">
         #{rank}
       </span>
@@ -210,6 +216,8 @@ function CoverBox({ post, rank }: { post: PostItem; rank: number }) {
         <EyeIcon className="size-3" />
         {fmtCompact(post.views)}
       </span>
+      {/* Справа внизу — свободный угол обложки: слева стоят просмотры, сверху номер места. */}
+      <GoneBadge at={post.goneAt} kind="video" className="absolute bottom-2 right-2 bg-background/90" />
     </div>
   );
 }

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { SearchIcon } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { Cover } from "@/components/cover";
+import { GONE_ROW_CLASS, GoneBadge } from "@/components/gone-mark";
 import { PlatformIcon } from "@/components/platform";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,6 +40,9 @@ export type VideoTableRow = {
   saves: number;
   // Три состояния вместо прежнего «наше / не наше» (миграция v17) — `lib/video-state.ts`.
   state: VideoState;
+  // «Похоже, удалено с площадки» (миграция v33); null — обычное видео. На сортировку, отбор
+  // и числа не влияет: отметка только затемняет строку и ставит пилюлю.
+  goneAt: string | null;
 };
 
 type Key = "views" | "likes" | "comments" | "shares" | "saves" | "engagement" | "published";
@@ -213,7 +217,11 @@ export function VideosTable({
                   key={r.id}
                   onClick={onRowClick ? () => onRowClick(r.id) : undefined}
                   data-state={r.id === selectedId ? "selected" : undefined}
-                  className={cn(onRowClick && "cursor-pointer", STATE_ROW_CLASS[r.state])}
+                  className={cn(
+                    onRowClick && "cursor-pointer",
+                    STATE_ROW_CLASS[r.state],
+                    r.goneAt && GONE_ROW_CLASS,
+                  )}
                 >
                   {showCreator && (
                     <TableCell>
@@ -246,6 +254,9 @@ export function VideosTable({
                       >
                         {r.caption || t("common.noCaption")}
                       </a>
+                      {/* Отметка удаления стоит рядом с подписью: ссылка на площадку
+                          у такого видео уже никуда не ведёт (миграция v33). */}
+                      <GoneBadge at={r.goneAt} kind="video" />
                     </div>
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{fmtNum(r.views)}</TableCell>

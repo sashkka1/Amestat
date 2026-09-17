@@ -9,6 +9,7 @@ import { AuthGate } from "@/components/auth-gate";
 import { Page, PageError, PageSkeleton } from "@/components/page";
 import { Avatar } from "@/components/avatar";
 import { CreatorLabel } from "@/components/creator-label";
+import { GoneBadge } from "@/components/gone-mark";
 import { PlatformChip } from "@/components/platform";
 import { PlatformSwitch } from "@/components/platform-switch";
 import { LocalTime } from "@/components/local-time";
@@ -267,6 +268,7 @@ function ManagerView({ id }: { id: string }) {
                     free.map((c) => (
                       <SelectItem key={c.id} value={c.id}>
                         <CreatorLabel platform={c.platform} name={c.display_name} handle={c.handle} />
+                        <GoneBadge at={c.gone_at} kind="creator" />
                       </SelectItem>
                     ))
                   )}
@@ -303,6 +305,7 @@ function ManagerView({ id }: { id: string }) {
                               handle={c.handle}
                               className="font-medium"
                             />
+                            <GoneBadge at={c.gone_at} kind="creator" />
                           </Link>
                         </TableCell>
                         <TableCell>

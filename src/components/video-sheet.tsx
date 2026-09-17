@@ -45,6 +45,9 @@ function fallbackRow(video: VideoTableRow): VideoStats {
     cover_url: video.coverUrl,
     url: video.url,
     ours: video.state === "ours",
+    // Отметка «похоже, удалено» приходит со строкой дашборда (миграция v33): за срок
+    // строки нет, а знать об удалении панель обязана.
+    gone_at: video.goneAt,
     views_now: video.views,
     likes_now: video.likes,
     comments_now: video.comments,

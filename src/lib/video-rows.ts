@@ -30,6 +30,8 @@ export function toTableRows(videos: VideoRow[], creators: Creator[]): VideoTable
         shares: v.shares,
         saves: v.saves,
         state: videoState(v),
+        // Отметка «похоже, удалено» (миграция v33) — как есть из строки видео.
+        goneAt: v.gone_at,
       },
     ];
   });
@@ -50,6 +52,7 @@ export function toPosts(rows: VideoTableRow[]): PostItem[] {
     creatorName: r.creatorName,
     handle: r.handle,
     platform: r.platform,
+    goneAt: r.goneAt,
   }));
 }
 

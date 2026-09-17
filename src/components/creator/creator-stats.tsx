@@ -274,6 +274,8 @@ export function CreatorStats({
       shares: r.shares_now ?? 0,
       saves: r.saves_now ?? 0,
       state: videoState({ ours: r.ours, watch: loaded.watch.has(r.video_id) }),
+      // Отметку «похоже, удалено» отдаёт сама функция video_stats_between (миграция v33).
+      goneAt: r.gone_at,
     }));
   }, [loaded, creator]);
 
@@ -316,6 +318,7 @@ export function CreatorStats({
         creatorName: r.creatorName,
         handle: r.handle,
         platform: r.platform,
+        goneAt: r.goneAt,
       }));
   }, [scopedRows, loaded]);
 

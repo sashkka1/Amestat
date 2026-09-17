@@ -419,6 +419,13 @@ export const ptBR: Dict = {
     hintOurs: "Nosso: coletamos detalhes e os textos dos comentários",
   },
 
+  gone: {
+    video: "Excluído",
+    creator: "Perfil excluído",
+    videoTitle: "Não encontrado na plataforma desde {date} — parece excluído",
+    creatorTitle: "Perfil não encontrado na plataforma desde {date} — parece excluído",
+  },
+
   comments: {
     head: "Comentários",
     takenAt: "coletados em",

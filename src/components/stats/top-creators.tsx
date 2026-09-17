@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Avatar } from "@/components/avatar";
 import { CreatorLabel } from "@/components/creator-label";
+import { GONE_ROW_CLASS, GoneBadge } from "@/components/gone-mark";
 import { PlatformChip } from "@/components/platform";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -15,6 +16,7 @@ import { engagementOf } from "@/lib/stats";
 import { useT } from "@/lib/i18n";
 import type { CrossCreator } from "@/lib/cross";
 import type { Creator, CreatorOverview } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 export type CreatorRow = {
   creator: Creator;
@@ -141,7 +143,12 @@ export function TopCreators({
             {shown.map((r, i) => {
               const name = r.creator.display_name || r.creator.handle;
               return (
-                <TableRow key={r.creator.id}>
+                <TableRow
+                  key={r.creator.id}
+                  /* Похоже, профиль удалён (миграция v33). Из рейтинга строка не уходит:
+                     просмотры за срок он всё равно набрал, и статистику мы не меняем. */
+                  className={cn(r.creator.gone_at && GONE_ROW_CLASS)}
+                >
                   <TableCell className="text-muted-foreground tabular-nums">{i + 1}</TableCell>
                   <TableCell>
                     <Link
@@ -155,6 +162,7 @@ export function TopCreators({
                         handle={r.creator.handle}
                         className="font-medium"
                       />
+                      <GoneBadge at={r.creator.gone_at} kind="creator" />
                     </Link>
                   </TableCell>
                   <TableCell>

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { ExternalLinkIcon, Trash2Icon, UsersIcon } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar } from "@/components/avatar";
+import { GONE_IMAGE_CLASS, GoneBadge, GoneLine } from "@/components/gone-mark";
 import { PlatformChip } from "@/components/platform";
 import { TagPill } from "@/components/tag-pill";
 import { LocalTime } from "@/components/local-time";
@@ -111,7 +112,12 @@ export function CreatorHeader({
   return (
     <section className="flex flex-col gap-2 rounded-xl border bg-card px-4 py-3 shadow-sm">
       <div className="flex items-center gap-3">
-        <Avatar src={creator.avatar_url} name={name} size={44} />
+        <Avatar
+          src={creator.avatar_url}
+          name={name}
+          size={44}
+          className={creator.gone_at ? GONE_IMAGE_CLASS : undefined}
+        />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <div className="flex flex-wrap items-start justify-between gap-2">
             {/* Только хэндл (владелец, 2026-09-09): имя креатора не показываем нигде на
@@ -128,6 +134,7 @@ export function CreatorHeader({
                   <ExternalLinkIcon className="size-3.5" />
                 </a>
                 <PlatformChip platform={creator.platform} />
+                <GoneBadge at={creator.gone_at} kind="creator" />
               </div>
             </div>
             <div className="flex items-center gap-1">
@@ -194,7 +201,12 @@ export function CreatorHeader({
           {creator.needs_reconnect && (
             <p className="text-xs text-destructive">{t("creator.needsReconnect")}</p>
           )}
-          {creator.sync_error && <p className="text-xs text-destructive">{creator.sync_error}</p>}
+          <GoneLine at={creator.gone_at} kind="creator" />
+          {/* Профиль похоже удалён — текст ошибки обхода не показываем: это та же новость
+              другими словами, а две красные строки об одном читаются как две беды. */}
+          {!creator.gone_at && creator.sync_error && (
+            <p className="text-xs text-destructive">{creator.sync_error}</p>
+          )}
         </div>
       </div>
 

@@ -7,6 +7,7 @@ import { AuthGate } from "@/components/auth-gate";
 import { Page, PageError, PageSkeleton } from "@/components/page";
 import { Avatar } from "@/components/avatar";
 import { CreatorLabel } from "@/components/creator-label";
+import { GONE_ROW_CLASS, GoneBadge } from "@/components/gone-mark";
 import { PlatformSwitch } from "@/components/platform-switch";
 import { TagPill } from "@/components/tag-pill";
 import { LocalTime } from "@/components/local-time";
@@ -42,6 +43,7 @@ import { useSyncQueue } from "@/lib/use-sync-queue";
 import { useProfile } from "@/lib/profile-context";
 import { earliestAdded } from "@/lib/video-rows";
 import { periodLabel, toDateInputValue, type PeriodRange } from "@/lib/period";
+import { cn } from "@/lib/utils";
 import type { Creator, CreatorLatest, CreatorOverview, CreatorTag, Tag } from "@/lib/types";
 
 // Списки страницы: они от срока не зависят вовсе и читаются один раз.
@@ -439,7 +441,12 @@ function CreatorsScreen() {
                 {visible.map((r) => {
                   const name = r.creator.display_name || r.creator.handle;
                   return (
-                    <TableRow key={r.creator.id}>
+                    <TableRow
+                      key={r.creator.id}
+                      /* Похоже, профиль удалён с площадки (миграция v33) — строка гаснет
+                         целиком, но остаётся на месте: история за ней цела. */
+                      className={cn(r.creator.gone_at && GONE_ROW_CLASS)}
+                    >
                       <TableCell>
                         <Link
                           href={`/creator/?id=${r.creator.id}`}
@@ -532,6 +539,10 @@ function CreatorsScreen() {
 
 function Status({ creator }: { creator: Creator }) {
   const t = useT();
+  // 🔴 Первым делом: профиля на площадке нет (миграция v33), и всё остальное в этой колонке
+  // — следствие. `sync_error` у такого креатора не показываем: это та же новость другими
+  // словами, а дату первого подозрения говорит подсказка пилюли.
+  if (creator.gone_at) return <GoneBadge at={creator.gone_at} kind="creator" />;
   if (creator.needs_reconnect) {
     return <span className="text-[var(--down)]">{t("creators.statusNeedsReconnect")}</span>;
   }

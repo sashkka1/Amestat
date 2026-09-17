@@ -433,6 +433,16 @@ export const en = {
     hintOurs: "Ours: we collect details and comment texts",
   },
 
+  // Mark for what the collector no longer finds on the platform (migration v33, owner
+  // 2026-09-17). The date is when it was first missed, not a verdict: it comes back if the
+  // video or the profile shows up again.
+  gone: {
+    video: "Deleted",
+    creator: "Profile deleted",
+    videoTitle: "Not found on the platform since {date} — looks deleted",
+    creatorTitle: "Profile not found on the platform since {date} — looks deleted",
+  },
+
   comments: {
     head: "Comments",
     takenAt: "collected",
