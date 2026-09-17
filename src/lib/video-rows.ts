@@ -30,8 +30,9 @@ export function toTableRows(videos: VideoRow[], creators: Creator[]): VideoTable
         shares: v.shares,
         saves: v.saves,
         state: videoState(v),
-        // Отметка «похоже, удалено» (миграция v33) — как есть из строки видео.
-        goneAt: v.gone_at,
+        // Отметка «похоже, удалено» (миграция v33). Профиля нет — нет и его видео (владелец,
+        // 2026-09-17): пока сборщик не проставил отметку каждому, дата берётся у креатора.
+        goneAt: v.gone_at ?? c.gone_at,
       },
     ];
   });

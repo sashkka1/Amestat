@@ -275,7 +275,8 @@ export function CreatorStats({
       saves: r.saves_now ?? 0,
       state: videoState({ ours: r.ours, watch: loaded.watch.has(r.video_id) }),
       // Отметку «похоже, удалено» отдаёт сама функция video_stats_between (миграция v33).
-      goneAt: r.gone_at,
+      // Профиля нет — нет и его видео (владелец, 2026-09-17): отметка креатора накрывает все.
+      goneAt: r.gone_at ?? creator.gone_at,
     }));
   }, [loaded, creator]);
 
