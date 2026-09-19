@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
+import { FilePick } from "@/components/file-pick";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -130,11 +131,7 @@ export function PayDialog({
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="pay-doc">{t("payments.payDoc")}</Label>
-            <Input
-              id="pay-doc"
-              type="file"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-            />
+            <FilePick id="pay-doc" file={file} onPick={setFile} />
             <p className="text-xs text-muted-foreground">{t("payments.payDocHint")}</p>
           </div>
           <div className="flex flex-col gap-1.5">

@@ -17,6 +17,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { FilePick } from "@/components/file-pick";
 import { PlatformIcon } from "@/components/platform";
 import { RulesFields, defaultsDraft, parseRules, type RulesDraft } from "@/components/payments/rules-panel";
 import { createCreator, setCreatorAvatar } from "@/lib/api/creators";
@@ -239,11 +240,11 @@ export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="avatar">{t("addCreator.avatar")}</Label>
-            <Input
+            <FilePick
               id="avatar"
-              type="file"
+              file={file}
+              onPick={setFile}
               accept="image/jpeg,image/png,image/webp"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             />
             <p className="text-xs text-muted-foreground">{t("addCreator.avatarHint")}</p>
           </div>

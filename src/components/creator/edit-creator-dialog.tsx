@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { PencilIcon } from "lucide-react";
 import { toast } from "sonner";
+import { FilePick } from "@/components/file-pick";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -110,11 +111,11 @@ export function EditCreatorDialog({
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="edit-avatar">{t("editCreator.avatar")}</Label>
-            <Input
+            <FilePick
               id="edit-avatar"
-              type="file"
+              file={file}
+              onPick={setFile}
               accept="image/jpeg,image/png,image/webp"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             />
             {creator.avatar_custom && (
               <p className="text-xs text-muted-foreground">{t("editCreator.customAvatar")}</p>

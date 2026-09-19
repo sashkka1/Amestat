@@ -53,6 +53,10 @@ export const en = {
     reading: "Loading…",
     ellipsis: "…",
     noCaption: "no caption",
+    // Подписи своего поля выбора файла: у нативного их пишет браузер на своём языке.
+    chooseFile: "Choose file",
+    noFile: "No file chosen",
+    clearFile: "Remove the file",
     passwordsDiffer: "Passwords do not match",
   },
 

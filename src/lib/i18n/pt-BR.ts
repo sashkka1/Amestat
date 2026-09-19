@@ -47,6 +47,9 @@ export const ptBR: Dict = {
     reading: "Carregando…",
     ellipsis: "…",
     noCaption: "sem legenda",
+    chooseFile: "Escolher arquivo",
+    noFile: "Nenhum arquivo escolhido",
+    clearFile: "Remover o arquivo",
     passwordsDiffer: "As senhas não coincidem",
   },
 
