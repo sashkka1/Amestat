@@ -3,7 +3,9 @@
 
 export type Platform = "tiktok" | "instagram";
 // retry — повтор через час после неудачного обхода по расписанию, заводит сборщик (миграция v7).
-export type SyncTrigger = "schedule" | "catchup" | "manual" | "retry";
+// `window` — сборщик закрывает окно расчёта выплат (миграция v38): обход одного креатора в
+// момент, когда у его видео прошла отметка «публикация + окно».
+export type SyncTrigger = "schedule" | "catchup" | "manual" | "retry" | "window";
 // Глубина обхода (миграции v7 и v18): all — весь список видео, week — за последние 7 дней,
 // month — за последние 30 дней, range — за выбранный период (depth_from … depth_to).
 // ⚠️ У 'range' обе границы обязательны и depth_from < depth_to — это проверка в базе;

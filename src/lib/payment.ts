@@ -31,9 +31,10 @@ export function defaultRulesFor(creatorId: string): PaymentRules {
 // Состояние видео в расчёте.
 //   final   — окно закрылось, обход после отметки был: сумма окончательная;
 //   pending — окно ещё идёт (или обхода после отметки не было): сумма — оценка по текущим;
-//   nodata  — внутри окна не было ни одного снимка: в деньги не идёт вовсе;
+//   nodata  — внутри окна не было ни одного снимка: платить не за что;
+//   gone    — видео похоже удалено с площадки: сумма видна, но не платится;
 //   paid    — уже закрыто выплатой.
-export type MoneyState = "final" | "pending" | "nodata" | "paid";
+export type MoneyState = "final" | "pending" | "nodata" | "gone" | "paid";
 
 export type VideoMoney = {
   base: number;
@@ -53,9 +54,11 @@ function cents(n: number): number {
 }
 
 export function videoMoney(stat: PaymentStat, rules: PaymentRules): VideoMoney {
-  // Видео, которое сборщик не видел внутри окна, не считается вовсе (владелец, 2026-09-19:
-  // «первоначально не будем считать статистику»). В порог `videos_threshold` оно при этом
-  // входит — видео сделано.
+  // Видео, которое сборщик не видел внутри окна, платить не за что (владелец, 2026-09-19:
+  // «оставить без выплат вообще… помечать, что выплат нет»). Причина не в лени расчёта:
+  // просмотров на 72-м часу не существует — площадка отдаёт только текущее число, а ролик
+  // впервые попал к нам через сотни часов после публикации. В порог `videos_threshold` оно
+  // при этом входит: видео сделано.
   if (!stat.has_early) {
     return { base: 0, bonus: 0, extra: 0, total: 0, views: null, state: "nodata", paymentId: stat.payment_id };
   }
@@ -78,7 +81,11 @@ export function videoMoney(stat: PaymentStat, rules: PaymentRules): VideoMoney {
     extra,
     total: cents(base + bonus + extra),
     views,
-    state: stat.payment_id !== null ? "paid" : settled ? "final" : "pending",
+    // 🔴 За удалённое с площадки видео не платят (владелец, 2026-09-19). Сумма при этом
+    // считается и видна в строке — «посмотреть можно, в общий счёт не идёт», — а вот уже
+    // выплаченное удаление не отменяет: `paid` сильнее.
+    state:
+      stat.payment_id !== null ? "paid" : stat.gone_at !== null ? "gone" : settled ? "final" : "pending",
     paymentId: stat.payment_id,
   };
 }
@@ -104,7 +111,9 @@ export type CreatorMoney = {
   videos: number;
   videosFinal: number;
   videosPending: number;
+  // Видео, за которые не платим: без данных внутри окна и удалённые с площадки.
   videosNoData: number;
+  videosGone: number;
   videosPaid: number;
   // Порог открыт — созревшие видео идут в долг; закрыт — всё висит в ожидании.
   gateOpen: boolean;
@@ -145,10 +154,13 @@ export function creatorMoney(
   let videosFinal = 0;
   let videosPending = 0;
   let videosNoData = 0;
+  let videosGone = 0;
   let videosPaid = 0;
   for (const m of rows) {
     if (m.state === "paid") videosPaid += 1;
     else if (m.state === "nodata") videosNoData += 1;
+    // Удалённое в деньги не идёт ни в долг, ни в ожидание: сумма у строки есть, в счёт не идёт.
+    else if (m.state === "gone") videosGone += 1;
     else if (m.state === "final") {
       videosFinal += 1;
       payableTotal += m.total;
@@ -184,6 +196,7 @@ export function creatorMoney(
     videosFinal,
     videosPending,
     videosNoData,
+    videosGone,
     videosPaid,
     gateOpen,
     videosToGate: Math.max(r.videos_threshold - mine.length, 0),
@@ -205,13 +218,14 @@ export type MoneyTotals = {
   creatorsDue: number;
   videosFinal: number;
   videosPending: number;
-  videosNoData: number;
+  // Сколько видео не оплачивается: без данных внутри окна плюс удалённые с площадки.
+  videosUnpaid: number;
 };
 
 export function sumMoney(rows: CreatorMoney[]): MoneyTotals {
   const t: MoneyTotals = {
     paid: 0, due: 0, pending: 0, creatorsDue: 0,
-    videosFinal: 0, videosPending: 0, videosNoData: 0,
+    videosFinal: 0, videosPending: 0, videosUnpaid: 0,
   };
   for (const c of rows) {
     t.paid += c.paidTotal;
@@ -220,7 +234,7 @@ export function sumMoney(rows: CreatorMoney[]): MoneyTotals {
     if (c.due > 0) t.creatorsDue += 1;
     t.videosFinal += c.videosFinal;
     t.videosPending += c.videosPending;
-    t.videosNoData += c.videosNoData;
+    t.videosUnpaid += c.videosNoData + c.videosGone;
   }
   t.paid = cents(t.paid);
   t.due = cents(t.due);

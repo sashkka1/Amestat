@@ -40,6 +40,10 @@ import { cn } from "@/lib/utils";
 // Числа берутся из `payment_stats` (миграция v37), а деньги считает `lib/payment.ts` — одна
 // формула на весь сайт.
 
+// Граница двух половин таблицы: слева начисления, справа деньги. Одна константа на шапку и
+// на строки — разъехаться им нельзя.
+const GROUP_EDGE = "border-l pl-5";
+
 type Data = {
   creators: Creator[];
   stats: PaymentStat[];
@@ -123,8 +127,8 @@ function PaymentsScreen() {
     },
     {
       key: "nodata",
-      label: t("payments.videosNoData"),
-      value: fmtNum(totals.videosNoData),
+      label: t("payments.videosUnpaid"),
+      value: fmtNum(totals.videosUnpaid),
       icon: EyeOffIcon,
       hint: t("payments.stateNoDataHint"),
     },
@@ -149,16 +153,17 @@ function PaymentsScreen() {
               <Table className="border-t">
                 <TableHeader>
                   <TableRow>
+                    {/* Две половины таблицы, разделённые чертой (владелец, 2026-09-19):
+                        слева — за что начислено, справа — деньги. Черту рисует GROUP_EDGE
+                        на первой колонке правой половины; она же стоит в строках. */}
                     <TableHead>{t("payments.colCreator")}</TableHead>
                     <TableHead className="text-right">{t("payments.colVideos")}</TableHead>
-                    <TableHead className="text-right">{t("payments.colPaid")}</TableHead>
-                    <TableHead className="text-right">{t("payments.colPending")}</TableHead>
-                    {/* Три ставки отдельными колонками — из них складывается долг справа
-                        (владелец: «по каждой колонке за что конкретно мы платим»). */}
                     <TableHead className="text-right">{t("payments.colBase")}</TableHead>
                     <TableHead className="text-right">{t("payments.colBonus")}</TableHead>
                     <TableHead className="text-right">{t("payments.colExtra")}</TableHead>
-                    <TableHead className="text-right">{t("payments.colDue")}</TableHead>
+                    <TableHead className={cn("text-right", GROUP_EDGE)}>{t("payments.colDue")}</TableHead>
+                    <TableHead className="text-right">{t("payments.colPending")}</TableHead>
+                    <TableHead className="text-right">{t("payments.colPaid")}</TableHead>
                     <TableHead>{t("payments.colLastPaid")}</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -230,17 +235,16 @@ function CreatorRow({
       </TableCell>
       <TableCell className="text-right tabular-nums">
         {fmtNum(money.videos)}
+        {/* Порог коротко, одной дробью (владелец, 2026-09-19: «давай писать как-то очень
+            сильно короче»): «2/4» вместо прежней фразы. Полностью — в подсказке. */}
         {!money.gateOpen && (
-          <span className="ml-1 text-xs text-muted-foreground">
-            ({t("payments.gateLeft", { n: money.videosToGate })})
+          <span
+            className="ml-1 text-xs text-muted-foreground"
+            title={t("payments.gateClosed", { n: money.rules.videos_threshold })}
+          >
+            /{money.rules.videos_threshold}
           </span>
         )}
-      </TableCell>
-      <TableCell className="text-right tabular-nums text-muted-foreground">
-        {fmtMoney(money.paidTotal)}
-      </TableCell>
-      <TableCell className="text-right tabular-nums text-muted-foreground">
-        {fmtMoney(money.pendingTotal)}
       </TableCell>
       {/* Порог не набран — платить нечего, и прочерк честнее нуля: сумма у креатора есть,
           просто она вся в ожидании. */}
@@ -249,8 +253,16 @@ function CreatorRow({
           {money.gateOpen ? fmtMoney(money.payableParts[part]) : "—"}
         </TableCell>
       ))}
-      <TableCell className={cn("text-right font-medium tabular-nums", money.due > 0 && "text-[var(--up)]")}>
+      <TableCell
+        className={cn("text-right font-medium tabular-nums", GROUP_EDGE, money.due > 0 && "text-[var(--up)]")}
+      >
         {fmtMoney(money.due)}
+      </TableCell>
+      <TableCell className="text-right tabular-nums text-muted-foreground">
+        {fmtMoney(money.pendingTotal)}
+      </TableCell>
+      <TableCell className="text-right tabular-nums text-muted-foreground">
+        {fmtMoney(money.paidTotal)}
       </TableCell>
       <TableCell className="whitespace-nowrap text-muted-foreground">
         {money.lastPaidAt ? <LocalTime iso={money.lastPaidAt} mode="date" /> : t("payments.never")}

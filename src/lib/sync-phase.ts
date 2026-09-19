@@ -27,11 +27,15 @@ export function phaseText(phase: Exclude<Phase, "idle">): string {
 
 // Чей обход идёт (владелец, 2026-09-09: «чтобы понимать, чей обход, когда сам ничего не
 // просил»). Подпись серым над строкой хода — и у кнопки, и в подсказке строки списка.
-const TRIGGER_KEY: Record<SyncTrigger, "sync.triggerSchedule" | "sync.triggerCatchup" | "sync.triggerRetry" | "sync.triggerManual"> = {
+const TRIGGER_KEY: Record<
+  SyncTrigger,
+  "sync.triggerSchedule" | "sync.triggerCatchup" | "sync.triggerRetry" | "sync.triggerManual" | "sync.triggerWindow"
+> = {
   schedule: "sync.triggerSchedule",
   catchup: "sync.triggerCatchup",
   retry: "sync.triggerRetry",
   manual: "sync.triggerManual",
+  window: "sync.triggerWindow",
 };
 
 // Подпись пачки: сборщик сводит просьбы в один обход, поэтому берём первый — у сведённых

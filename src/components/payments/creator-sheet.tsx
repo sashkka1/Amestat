@@ -58,18 +58,17 @@ export function CreatorPaymentSheet({
       value: fmtMoney(money.due),
       icon: BanknoteIcon,
       tone: money.due > 0 ? "due" : "plain",
-      hint: money.gateOpen ? undefined : t("payments.gateClosed", { n: money.rules.videos_threshold }),
       onClick: () => setPaying(true),
     },
     { key: "pending", label: t("payments.pending"), value: fmtMoney(money.pendingTotal), icon: ClockIcon },
+    // Плитки в попапе без подписей под числом (владелец, 2026-09-19: пометку про четыре
+    // видео «можно вообще не отмечать»). Порог виден в таблице креаторов, состояние каждого
+    // видео — колонкой «Status» ниже.
     {
       key: "videos",
       label: t("payments.colVideos"),
       value: fmtNum(money.videos),
       icon: VideoIcon,
-      hint: money.gateOpen
-        ? `${t("payments.videosFinal")}: ${money.videosFinal + money.videosPaid} · ${t("payments.videosNoData")}: ${money.videosNoData}`
-        : t("payments.gateLeft", { n: money.videosToGate }),
     },
   ];
 
@@ -81,27 +80,31 @@ export function CreatorPaymentSheet({
           <div className="grid gap-4 lg:grid-cols-[19rem_minmax(0,1fr)]">
             {/* Левая колонка: кто это, по каким ставкам считаем и что уже платили. */}
             <div className="flex min-w-0 flex-col gap-4">
-              <div className="flex items-center gap-3">
-                <Avatar
-                  src={creator.avatar_url}
-                  name={name}
-                  size={56}
-                  className={creator.gone_at ? GONE_IMAGE_CLASS : undefined}
-                />
-                <div className="min-w-0">
+              {/* Кнопка выплаты стоит здесь же, в правом нижнем углу блока с иконкой
+                  (владелец, 2026-09-19), а не отдельной строкой над таблицей видео. */}
+              <div className="flex items-end justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <Avatar
+                    src={creator.avatar_url}
+                    name={name}
+                    size={64}
+                    className={creator.gone_at ? GONE_IMAGE_CLASS : undefined}
+                  />
                   <CreatorLabel
                     platform={creator.platform}
                     name={creator.display_name}
                     handle={creator.handle}
                     className="text-base font-semibold"
                   />
-                  <p className="text-xs text-muted-foreground">
-                    {t("payments.historyFor", {
-                      n: money.videos,
-                      videos: t.plural("videos", money.videos),
-                    })}
-                  </p>
                 </div>
+                <Button
+                  size="sm"
+                  onClick={() => setPaying(true)}
+                  disabled={covered.length === 0 && money.due <= 0}
+                >
+                  <BanknoteIcon data-icon="inline-start" />
+                  {t("payments.pay")}
+                </Button>
               </div>
               <RulesPanel creatorId={creator.id} rules={money.rules} onSaved={onChanged} />
               <PaymentHistory payments={payments} covers={covers} />
@@ -110,12 +113,6 @@ export function CreatorPaymentSheet({
             {/* Правая колонка: деньги по этому креатору и его видео. */}
             <div className="flex min-w-0 flex-col gap-4">
               <MoneyTiles items={tiles} />
-              <div className="flex justify-end">
-                <Button onClick={() => setPaying(true)} disabled={covered.length === 0 && money.due <= 0}>
-                  <BanknoteIcon data-icon="inline-start" />
-                  {t("payments.pay")}
-                </Button>
-              </div>
               <VideosMoneyTable rows={rows} gateOpen={money.gateOpen} />
             </div>
           </div>
