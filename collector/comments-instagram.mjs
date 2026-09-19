@@ -49,8 +49,8 @@ const MISSING_TEXT = /Sorry, this page isn'?t available|Извините, эта
 
 // Те же слова, что в `instagram-web.mjs`: беда одна и та же, и владелец должен читать
 // одинаковый текст, откуда бы он ни пришёл.
-const ERR_SESSION = "Instagram: сессия фейкового аккаунта истекла — войди в Opera заново и сними копию профиля";
-const ERR_LIMIT = "Instagram: площадка ограничила запросы, попробуй позже";
+const ERR_SESSION = "Instagram: the fake account session has expired — log in again in Opera and take a fresh profile copy";
+const ERR_LIMIT = "Instagram: the platform rate-limited the requests, try later";
 
 const num = (x) => (x === null || x === undefined || x === "" ? null : Number(x));
 
@@ -72,8 +72,12 @@ function findConnections(value, out = []) {
   return out;
 }
 
-/** Один комментарий в общей форме сборщика или null, если нет `pk` — ключа строки в базе. */
-function oneComment(node, parentFallback = null) {
+/**
+ * Один комментарий в общей форме сборщика или null, если нет `pk` — ключа строки в базе.
+ * ⚠️ Им же разбирает ответы прямой путь (`instagram-direct.mjs`): узел REST `api/v1/.../comments/`
+ * и узел `graphql` — один и тот же объект, и второе написание правила разошлось бы молча.
+ */
+export function oneComment(node, parentFallback = null) {
   const id = node?.pk ?? null;
   if (!id) return null;
   // У удалённых и закрытых авторов `user` пуст, а имя лежит в `fallback_user_info`.
@@ -170,9 +174,9 @@ function scrollComments(page) {
 export async function collectInstagramComments(ctx, video, { max = 100, repliesMax = 20, expandReplies = true, log } = {}) {
   const videoId = String(video?.id ?? "");
   const url = String(video?.url ?? "");
-  if (!videoId || !url) throw new Error("у публикации нет id или адреса");
-  if (!/\/(p|reel|tv)\//.test(url)) throw new Error(`адрес не ведёт на публикацию: ${url}`);
-  const who = `${String(video?.creatorHandle ?? "").replace(/^@/, "") || "?"} публикация ${videoId}`;
+  if (!videoId || !url) throw new Error("post has no id or url");
+  if (!/\/(p|reel|tv)\//.test(url)) throw new Error(`url does not point to a post: ${url}`);
+  const who = `${String(video?.creatorHandle ?? "").replace(/^@/, "") || "?"} post ${videoId}`;
 
   const page = await ctx.newPage();
   const seen = new Map();
@@ -231,7 +235,7 @@ export async function collectInstagramComments(ctx, video, { max = 100, repliesM
       const res = await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
       status = res?.status() ?? null;
     } catch (e) {
-      throw new Error(`страница публикации не открылась: ${String(e?.message ?? e).split("\n")[0]}`);
+      throw new Error(`post page did not open: ${String(e?.message ?? e).split("\n")[0]}`);
     }
     if (status === 429) throw new Error(ERR_LIMIT);
     await page.waitForTimeout(SETTLE_MS);
@@ -250,22 +254,22 @@ export async function collectInstagramComments(ctx, video, { max = 100, repliesM
     // пометка есть, а пятнадцать комментариев из страницы разобрались). Приговором это
     // становится, только когда собрать не удалось ничего.
     if (head.onLoginPage || ((lostSession || head.loginForm) && seen.size === 0)) {
-      log?.(`    вход не подтвердился: адрес ${page.url()}, форма входа=${head.loginForm}, login_required=${lostSession}, комментариев ${seen.size}`);
-      notice("session", `${who}: вход не подтвердился (форма входа=${head.loginForm}, login_required=${lostSession})`);
+      log?.(`    login not confirmed: url ${page.url()}, login form=${head.loginForm}, login_required=${lostSession}, comments ${seen.size}`);
+      notice("session", `${who}: login not confirmed (login form=${head.loginForm}, login_required=${lostSession})`);
       throw new Error(ERR_SESSION);
     }
     // Признаки истёкшей сессии стоит знать и тогда, когда собрать всё-таки удалось: сегодня
     // прошло, завтра встанет. ⚠️ Письмом это не бывает: копится и уходит одной строкой в лог
     // на обход и площадку — иначе выходило замечание на каждую публикацию.
-    if (lostSession || head.loginForm) sessionHint("instagram (profile-opera)", `${who}: форма входа=${head.loginForm}, login_required=${lostSession}`);
+    if (lostSession || head.loginForm) sessionHint("instagram (profile-opera)", `${who}: login form=${head.loginForm}, login_required=${lostSession}`);
     // Ограничение объявляем, только когда оно и правда помешало: пришедшие комментарии
     // сильнее одинокой пометки в чужом ответе.
     if ((limited || RATE_TEXT.test(head.bodyText)) && seen.size === 0) {
-      notice("limit", `${who}: Instagram ограничил запросы`);
+      notice("limit", `${who}: Instagram rate-limited the requests`);
       throw new Error(ERR_LIMIT);
     }
     if (status === 404 || (MISSING_TEXT.test(head.bodyText) && seen.size === 0)) {
-      throw new Error(`Instagram: публикация недоступна: ${url}`);
+      throw new Error(`Instagram: post is unavailable: ${url}`);
     }
 
     let stale = 0, rounds = 0, score = 0;
@@ -277,11 +281,11 @@ export async function collectInstagramComments(ctx, video, { max = 100, repliesM
       stale = seen.size === before ? stale + 1 : 0;
     }
     if (lostSession && seen.size === 0) {
-      notice("session", `${who}: login_required и ни одного комментария`);
+      notice("session", `${who}: login_required and not a single comment`);
       throw new Error(ERR_SESSION);
     }
 
-    log?.(`    публикация ${videoId}: комментариев ${seen.size}, тел ${bodies}, кругов ${rounds}${hasNext ? "" : " (список кончился)"}`);
+    log?.(`    post ${videoId}: comments ${seen.size}, bodies ${bodies}, rounds ${rounds}${hasNext ? "" : " (list ended)"}`);
 
     // Ответы: только под корневыми, попавшими в сбор, и только там, где они есть.
     const roots = [...seen.values()].slice(0, max);
@@ -294,12 +298,12 @@ export async function collectInstagramComments(ctx, video, { max = 100, repliesM
       ({ opened, more: moreClicks, timedOut } = await expandBranches(page, state, {
         open: BRANCH_OPEN, more: BRANCH_MORE, branches, repliesMax, pauseMs: BRANCH_PAUSE_MS, log,
       }));
-      if (timedOut) notice("replies", `${who}: на ветки не хватило времени, раскрыто ${opened} из ${branches}`);
+      if (timedOut) notice("replies", `${who}: not enough time for branches, opened ${opened} of ${branches}`);
     }
     const replies = pickReplies(state.replies.values(), roots, repliesMax);
     if (branches > 0) {
-      log?.(`    ответов: собрано ${replies.length} у ${branchesOf(replies)} веток (${expandReplies ? `раскрыто ${opened} из ${branches}, дожато ${moreClicks}` : "ветки не раскрывались — только даровые"})`);
-      if (replies.length === 0 && expandReplies) notice("replies", `${who}: ответы не снялись ни у одной из ${branches} веток`);
+      log?.(`    replies: collected ${replies.length} across ${branchesOf(replies)} branches (${expandReplies ? `opened ${opened} of ${branches}, more clicks ${moreClicks}` : "branches not opened — free ones only"})`);
+      if (replies.length === 0 && expandReplies) notice("replies", `${who}: no replies collected from any of the ${branches} branches`);
     }
     return [...roots, ...replies];
   } finally {

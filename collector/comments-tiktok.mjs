@@ -162,7 +162,7 @@ async function openOnce(page, link) {
   try {
     const res = await page.goto(link, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
     const status = res?.status() ?? null;
-    if (status !== null && status >= 400) return { error: `ответ ${status}`, post: false };
+    if (status !== null && status >= 400) return { error: `HTTP ${status}`, post: false };
   } catch (e) {
     return { error: String(e?.message ?? e).split("\n")[0], post: false };
   }
@@ -187,19 +187,19 @@ async function openOnce(page, link) {
 export async function openPost(page, url, video, log) {
   const first = await openOnce(page, url);
   if (!first.error && first.post) return "/video/";
-  const why = first.error ?? "поста на странице нет";
+  const why = first.error ?? "no post on the page";
   const alt = photoUrl(url, video);
   if (!alt || alt === url) {
-    if (first.error) throw new Error(`страница видео не открылась: ${why}`);
+    if (first.error) throw new Error(`video page did not open: ${why}`);
     return "/video/";   // адреса `/photo/` не из чего собрать — работаем с тем, что открылось
   }
-  log?.(`    /video/ не открылся, пробую /photo/ (${why})`);
-  notice("photo", `${video?.id ?? "видео"}: /video/ не открылся (${why}) — иду по /photo/`);
+  log?.(`    /video/ did not open, trying /photo/ (${why})`);
+  notice("photo", `${video?.id ?? "video"}: /video/ did not open (${why}) — going to /photo/`);
   const second = await openOnce(page, alt);
   if (!second.error) return "/photo/";
-  if (first.error) throw new Error(`страница видео не открылась: ${why}; /photo/ тоже: ${second.error}`);
+  if (first.error) throw new Error(`video page did not open: ${why}; /photo/ either: ${second.error}`);
   // `/video/` всё-таки открывалась, просто без плеера, — возвращаемся к ней и пробуем как есть.
-  log?.(`    /photo/ не открылся (${second.error}) — работаю с /video/`);
+  log?.(`    /photo/ did not open (${second.error}) — working with /video/`);
   await openOnce(page, url);
   return "/video/";
 }
@@ -212,11 +212,11 @@ export async function openPost(page, url, video, log) {
 async function openCommentsTab(page, log) {
   const tries = [
     ['[data-e2e="comments"]', () => page.locator('[data-e2e="comments"]').filter({ visible: true }).first()],
-    ...TAB_LABELS.map((label) => [`текст «${label}»`, () => page.getByText(label, { exact: true }).filter({ visible: true }).first()]),
+    ...TAB_LABELS.map((label) => [`text «${label}»`, () => page.getByText(label, { exact: true }).filter({ visible: true }).first()]),
     ['[data-e2e="comment-icon"]', () => page.locator('[data-e2e="comment-icon"]').filter({ visible: true }).first()],
   ];
   const until = Date.now() + TAB_WAIT_MS;
-  let lastError = "не нашлась";
+  let lastError = "not found";
   while (Date.now() < until) {
     for (const [what, make] of tries) {
       try {
@@ -230,7 +230,7 @@ async function openCommentsTab(page, log) {
     }
     await page.waitForTimeout(1_000);
   }
-  log?.(`    вкладка комментариев не открылась (${lastError})`);
+  log?.(`    comments tab did not open (${lastError})`);
   return null;
 }
 
@@ -279,8 +279,8 @@ function readState(page, itemSelector, stopRe) {
 export async function collectTikTokComments(ctx, video, { max = 100, repliesMax = 20, expandReplies = true, profile = "profile-tiktok", log } = {}) {
   const videoId = String(video?.id ?? "");
   const url = String(video?.url ?? "");
-  if (!videoId || !url) throw new Error("у видео нет id или адреса");
-  const who = `${String(video?.creatorHandle ?? "").replace(/^@/, "") || "?"} видео ${videoId}`;
+  if (!videoId || !url) throw new Error("video has no id or url");
+  const who = `${String(video?.creatorHandle ?? "").replace(/^@/, "") || "?"} video ${videoId}`;
 
   const page = await ctx.newPage();
   // Новая вкладка открывает окно заново — уводим его за край экрана сразу, до навигации:
@@ -339,7 +339,7 @@ export async function collectTikTokComments(ctx, video, { max = 100, repliesMax 
       // Первая страница после запуска браузера открывается «холодной»: правой панели нет
       // вовсе и ждать её бесполезно (живой обход 2026-09-08 потерял так первое видео).
       // Перезагрузка её ставит на место.
-      log?.("    правой панели нет — перезагружаю страницу и пробую ещё раз");
+      log?.("    no right panel — reloading the page and trying again");
       try {
         await page.reload({ waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
       } catch {
@@ -376,22 +376,22 @@ export async function collectTikTokComments(ctx, video, { max = 100, repliesMax 
     }
 
     view = await readState(page, ITEM_SELECTOR, STOP_SCREEN.source);
-    log?.(`    видео ${videoId}: комментариев ${seen.size}, тел ${bodies} (пустых ${empty}), кругов ${rounds}, строк в списке ${view.real}/${view.items}, вкладка ${opened ?? "не открылась"}, адрес ${where}${view.stopScreen ? ", СТОП-ЭКРАН" : ""}`);
+    log?.(`    video ${videoId}: comments ${seen.size}, bodies ${bodies} (empty ${empty}), rounds ${rounds}, rows in list ${view.real}/${view.items}, tab ${opened ?? "did not open"}, url ${where}${view.stopScreen ? ", STOP SCREEN" : ""}`);
 
     if (seen.size === 0) {
       if (view.stopScreen) {
-        notice("stop", `${who}: TikTok показал капчу`);
-        throw new Error(`TikTok показал капчу на видео ${videoId}`);
+        notice("stop", `${who}: TikTok showed a captcha`);
+        throw new Error(`TikTok showed a captcha on video ${videoId}`);
       }
       // Пустые тела при отрисованных заглушках — та же капча, только ещё не показанная.
       // ⚠️ Код здесь `session`, а не `stop`, и профиль назван нарочно: копий постоянного
       // профиля две (`profile-opera` и `profile-tiktok`), сессия фейка в них живёт своей
       // жизнью, и владелец должен видеть, в КАКОЙ из них кончился вход.
       if (bodies > 0 && empty === bodies) {
-        notice("session", `${profile}: ${who} — ${bodies} пустых ответов на комментарии (сессия фейка в этой копии профиля истекла? окно скрыто?)`);
-        throw new Error(`TikTok отдал ${bodies} пустых ответов на комментарии видео ${videoId} (профиль ${profile}: сессия истекла или окно скрыто)`);
+        notice("session", `${profile}: ${who} — ${bodies} empty comment responses (has the fake account session in this profile copy expired? is the window hidden?)`);
+        throw new Error(`TikTok returned ${bodies} empty comment responses for video ${videoId} (profile ${profile}: session expired or window hidden)`);
       }
-      if (bodies === 0) throw new Error(`TikTok не запросил комментарии видео ${videoId}: вкладка ${opened ?? "не открылась"}, на экране «${view.head}»`);
+      if (bodies === 0) throw new Error(`TikTok did not request comments for video ${videoId}: tab ${opened ?? "did not open"}, on screen «${view.head}»`);
     }
 
     // Ответы: только под корневыми, попавшими в сбор, и только там, где они есть.
@@ -404,12 +404,12 @@ export async function collectTikTokComments(ctx, video, { max = 100, repliesMax 
       ({ opened: branchesOpened, more: moreClicks, timedOut } = await expandBranches(page, state, {
         open: BRANCH_OPEN, more: BRANCH_MORE, branches, repliesMax, pauseMs: BRANCH_PAUSE_MS, log,
       }));
-      if (timedOut) notice("replies", `${who}: на ветки не хватило времени, раскрыто ${branchesOpened} из ${branches}`);
+      if (timedOut) notice("replies", `${who}: not enough time for branches, opened ${branchesOpened} of ${branches}`);
     }
     const replies = pickReplies(state.replies.values(), roots, repliesMax);
     if (branches > 0) {
-      log?.(`    ответов: собрано ${replies.length} у ${branchesOf(replies)} веток (${expandReplies ? `раскрыто ${branchesOpened} из ${branches}, дожато ${moreClicks}, тел ${replyBodies}` : "ветки не раскрывались — только даровые"})`);
-      if (replies.length === 0 && expandReplies) notice("replies", `${who}: ответы не снялись ни у одной из ${branches} веток`);
+      log?.(`    replies: collected ${replies.length} across ${branchesOf(replies)} branches (${expandReplies ? `opened ${branchesOpened} of ${branches}, more clicks ${moreClicks}, bodies ${replyBodies}` : "branches not opened — free ones only"})`);
+      if (replies.length === 0 && expandReplies) notice("replies", `${who}: no replies collected from any of the ${branches} branches`);
     }
     return [...roots, ...replies];
   } finally {

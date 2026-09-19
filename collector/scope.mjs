@@ -85,13 +85,13 @@ export function normalizeDepth(depth, from = null, to = null) {
     if (a === null || b === null || Date.parse(a) >= Date.parse(b)) {
       return {
         depth: "all", from: null, to: null,
-        note: `глубина «период» без границ (от ${from ?? "—"} до ${to ?? "—"}) — иду по всему списку`,
+        note: `depth "range" without bounds (from ${from ?? "—"} to ${to ?? "—"}) — going through the whole list`,
       };
     }
     return { depth: "range", from: a, to: b, note: null };
   }
   if (kind !== "" && kind !== "all") {
-    return { depth: "all", from: null, to: null, note: `неизвестная глубина «${depth}» — иду по всему списку` };
+    return { depth: "all", from: null, to: null, note: `unknown depth "${depth}" — going through the whole list` };
   }
   return { depth: "all", from: null, to: null, note: null };
 }
@@ -128,10 +128,10 @@ export function depthBounds(depth, { from = null, to = null } = {}, now = Date.n
  */
 export function depthWord(depth) {
   const kind = String(depth ?? "all").trim().toLowerCase();
-  if (kind === "week") return "неделя";
-  if (kind === "month") return "месяц";
-  if (kind === "range") return "период";
-  return "всё";
+  if (kind === "week") return "week";
+  if (kind === "month") return "month";
+  if (kind === "range") return "range";
+  return "all";
 }
 
 /**
@@ -142,7 +142,7 @@ export function depthWord(depth) {
  */
 export function depthLabel(depth, from = null, to = null) {
   const word = depthWord(depth);
-  if (word !== "период") return word;
+  if (word !== "range") return word;
   const a = msOf(from), b = msOf(to);
   if (a === null || b === null) return word;
   const day = (ms) => {
@@ -220,6 +220,102 @@ export function missingTracked(trackedIds, seenIds) {
   const seen = idSet(seenIds);
   const out = [];
   for (const id of idSet(trackedIds)) if (!seen.has(id)) out.push(id);
+  return out;
+}
+
+/**
+ * Недобор списка: пришло меньше, чем мы про этого креатора УЖЕ знаем.
+ *
+ * Зачем (владелец, 2026-09-16 — «боязливая система»): при мёртвой сессии Instagram шапка профиля
+ * читается и гостю, а лента — нет. Тогда обход выходит зелёным: подписчики обновились, видео нет,
+ * ни один креатор не упал, письма не будет. Своя проверка у Instagram есть (`instagram-web.mjs`),
+ * но только при глубине «всё» и только против счётчика площадки; эта — против БАЗЫ, на обеих
+ * площадках и при любой глубине.
+ *
+ * `rawCount` — сколько видео пришло ДО отбора по глубине и потолку; `knownTotal` — сколько видео
+ * этого креатора лежит в базе; `profileCount` — что о числе публикаций сказала сама площадка
+ * (`null` — не сказала); `listEnded` — площадка сама сказала, что список кончился.
+ *
+ * Отдаёт `null` (всё в порядке) или `{ kind, text }`:
+ *   • `empty` — не пришло НИЧЕГО, хотя мы знаем, что там есть. Самый громкий случай;
+ *   • `short` — список кончился, а видео в нём меньше, чем площадка сама насчитала в профиле.
+ *
+ * 🔴 Правка того же дня, после первой версии: судить можно только по тому, что площадка ОТДАЛА,
+ * а не по тому, что осталось после наших фильтров. Первая версия сравнивала видео после отбора
+ * по глубине с базой — и просьба «неделя» у креатора, молчавшего неделю, выглядела бы пустым
+ * списком; а недолистанный список крупного аккаунта (67 из 473) выглядел бы недобором. Отсюда:
+ * `empty` — по `rawCount`; `short` — только у законченного списка и только против профиля.
+ * Какие именно видео пропали — это `vanishedVideos` ниже, одно письмо на видео.
+ * ⚠️ Обратное (пришло БОЛЬШЕ, чем в базе или в профиле) — норма: так выглядят новые видео.
+ * Чистая функция: её проверяют тесты.
+ */
+export function shortfall({ rawCount = 0, knownTotal = 0, profileCount = null, listEnded = false } = {}) {
+  const raw = Math.max(0, Number(rawCount) || 0);
+  const total = Math.max(0, Number(knownTotal) || 0);
+  const byProfile = Number.isFinite(Number(profileCount)) && Number(profileCount) > 0 ? Number(profileCount) : null;
+
+  if (raw === 0 && (total > 0 || byProfile !== null)) {
+    const parts = [];
+    if (total > 0) parts.push(`in DB ${total}`);
+    if (byProfile !== null) parts.push(`profile says ${byProfile}`);
+    return { kind: "empty", text: `empty list: not a single video came back (${parts.join(", ")})` };
+  }
+  if (listEnded === true && byProfile !== null && raw < byProfile) {
+    return { kind: "short", text: `list ended at ${raw} videos, but the profile says ${byProfile}` };
+  }
+  return null;
+}
+
+/**
+ * Какие видео из базы пропали из профиля: их нет в списке, который площадка сама назвала
+ * законченным.
+ *
+ * Зачем (владелец, 2026-09-16): «если один раз заподозрил, что видео удалено, потому что его не
+ * нашлось, — пишет это в сообщении и в логе, а повторно на то же видео сообщение писаться не
+ * должно». Эта функция — только «заподозрил»; кого уже называли, решает `splitVanished`.
+ *
+ * 🔴 Правка владельца 2026-09-17: «если любое видео, по которому ранее приходила статистика,
+ * сейчас не вернуло статистику, оно должно считаться удалённым, без привязки к аккаунту». Прежде
+ * здесь стояли ещё две оговорки — пустой список (`empty`) и список короче числа в профиле
+ * (`short-of-profile`) — и `@orandocom.lis`, у которого пропали все видео, вместо одного письма
+ * на видео получал «список пуст» каждые сутки. Теперь решает только сам список: площадка сказала
+ * «кончился» — всё, чего в нём нет, удалено, сколько бы ни пришло и что бы ни говорил профиль.
+ * Ошибка дешёвая: видео вернётся в список — отметку снимут `returnedGone`/`forgetReturned`.
+ *
+ * `known` — видео креатора из базы `[{ id, publishedAt, url }]`; `seenIds` — id ВСЕГО, что пришло
+ * в списке (до отбора по глубине); `listEnded` — площадка сказала, что список кончился.
+ *
+ * Отдаёт `{ judged, why, gone }`:
+ *   • `judged: false`, `why: "not-ended"` — список не дочитан (глубина, потолок, «только наши»,
+ *     предел прокруток): видео не спрашивали, оно может просто лежать ниже;
+ *   • `judged: true` — `gone`: видео из базы, которых в законченном списке нет, новые сверху.
+ * Чистая функция: её проверяют тесты.
+ */
+export function vanishedVideos({ known = [], seenIds = [], listEnded = false } = {}) {
+  const seen = idSet(seenIds);
+  if (listEnded !== true) return { judged: false, why: "not-ended", gone: [] };
+  const at = (v) => {
+    const t = v?.publishedAt ? Date.parse(v.publishedAt) : NaN;
+    return Number.isFinite(t) ? t : -Infinity;
+  };
+  const gone = (known ?? [])
+    .filter((v) => v?.id !== null && v?.id !== undefined && !seen.has(String(v.id)))
+    .map((v) => ({ ...v, id: String(v.id) }))
+    .sort((a, b) => at(b) - at(a));
+  return { judged: true, why: null, gone };
+}
+
+/**
+ * Какие из помеченных удалёнными видео снова встретились в списке — с них отметка `gone_at`
+ * снимается (миграция v33). 🔴 Годится ЛЮБОЙ список, даже недочитанный: судить о пропаже по
+ * нему нельзя, а присутствие видно и в нём — то же правило, что у `forgetReturned`.
+ * `goneIds` — id видео с отметкой из базы; `seenIds` — id всего, что пришло в списке.
+ * Отдаёт массив id в порядке `goneIds`. Чистая функция: её проверяют тесты.
+ */
+export function returnedGone(goneIds, seenIds) {
+  const seen = idSet(seenIds);
+  const out = [];
+  for (const id of idSet(goneIds)) if (seen.has(id)) out.push(id);
   return out;
 }
 

@@ -105,10 +105,10 @@ export async function ensureRadminOff({ browserChoice = "", log } = {}) {
   const before = await readState();
   if (!radminActive(before)) return { was: false, off: true, online: null };
 
-  log?.(`Radmin включён (служба ${before.service ?? "—"}, адаптер ${before.adapter ?? "—"}) — выключаю перед обходом: с ним у браузера нет сети мимо VPN`);
+  log?.(`Radmin is on (service ${before.service ?? "—"}, adapter ${before.adapter ?? "—"}) — turning it off before the run: with it the browser has no network outside the VPN`);
   const started = await run("schtasks.exe", ["/Run", "/TN", RADMIN_TASK]);
   if (!started.ok) {
-    const text = `Radmin не выключен: задача «${RADMIN_TASK}» не запустилась (${first(started.out)})`;
+    const text = `Radmin not turned off: task "${RADMIN_TASK}" did not start (${first(started.out)})`;
     log?.(text);
     notice("browser", text);
     return { was: true, off: false, online: null };
@@ -122,7 +122,7 @@ export async function ensureRadminOff({ browserChoice = "", log } = {}) {
     if (!radminActive(state)) break;
   }
   if (radminActive(state)) {
-    const text = `Radmin не погас за ${OFF_WAIT_MS / 1000} с (служба ${state.service ?? "—"}, адаптер ${state.adapter ?? "—"}) — обход идёт как есть`;
+    const text = `Radmin did not shut down within ${OFF_WAIT_MS / 1000} s (service ${state.service ?? "—"}, adapter ${state.adapter ?? "—"}) — the run goes ahead as is`;
     log?.(text);
     notice("browser", text);
     return { was: true, off: false, online: null };
@@ -131,12 +131,12 @@ export async function ensureRadminOff({ browserChoice = "", log } = {}) {
   for (let i = 1; i <= NET_TRIES; i++) {
     const online = await browserOnline(browserChoice);
     if (online) {
-      log?.(`Radmin выключен, браузер вышел в сеть (${online}) — продолжаю обход`);
+      log?.(`Radmin is off, the browser is online (${online}) — continuing the run`);
       return { was: true, off: true, online };
     }
     if (i < NET_TRIES) await sleep(NET_PAUSE_MS);
   }
-  const text = `Radmin выключен, но браузер так и не вышел в сеть за ${NET_TRIES} попыток — обход идёт как есть`;
+  const text = `Radmin is off, but the browser never came online after ${NET_TRIES} tries — the run goes ahead as is`;
   log?.(text);
   notice("browser", text);
   return { was: true, off: true, online: null };

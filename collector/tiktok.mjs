@@ -53,7 +53,7 @@ async function attempt(handle, { browserChoice, log, since = null, until = null,
   // Потолок числа видео (v19): null — без потолка, как было всегда.
   const maxVideos = videoCap(scope?.maxVideos);
   const { ctx, cleanup, describe } = await launchFresh(browserChoice, { proxy, log });
-  log?.(`  браузер: ${describe}`);
+  log?.(`  browser: ${describe}`);
   try {
     const page = await ctx.newPage();
     const seen = new Map();
@@ -86,7 +86,7 @@ async function attempt(handle, { browserChoice, log, since = null, until = null,
     try {
       await page.goto(`https://www.tiktok.com/@${handle}`, { waitUntil: "domcontentloaded", timeout: PROFILE_TIMEOUT_MS });
     } catch (e) {
-      throw new Error(`страница профиля @${handle} не открылась: ${String(e?.message ?? e).split("\n")[0]}`);
+      throw new Error(`profile page @${handle} did not open: ${String(e?.message ?? e).split("\n")[0]}`);
     }
     await page.waitForTimeout(3500);
 
@@ -105,9 +105,9 @@ async function attempt(handle, { browserChoice, log, since = null, until = null,
       // дала, а прямой дал — значит профиль существует, и снимать его есть чем: идём дальше со
       // счётчиками прямого пути. ⚠️ Стоп-экран это не отменяет: он про список видео, а список
       // прямым не берётся вовсе.
-      if (stopScreen) notice("stop", `@${handle}: стоп-экран TikTok на странице профиля`);
-      if (stopScreen || !directProfile) throw new Error(stopScreen ? `стоп-экран TikTok на профиле @${handle}` : `профиль не найден: @${handle}`);
-      log?.("  профиль: страница браузера счётчиков не дала — беру их из прямого запроса");
+      if (stopScreen) notice("stop", `@${handle}: TikTok stop screen on the profile page`);
+      if (stopScreen || !directProfile) throw new Error(stopScreen ? `TikTok stop screen on profile @${handle}` : `profile not found: @${handle}`);
+      log?.("  profile: the browser page gave no counters — taking them from the direct request");
     }
 
     const s2 = info?.statsV2 ?? {}, s1 = info?.stats ?? {}, user = info?.user ?? {};
@@ -182,24 +182,30 @@ async function attempt(handle, { browserChoice, log, since = null, until = null,
     // листал), верхнюю — нет: период есть период.
     const videos = filterDepth(all, since, trackedIds, until, maxVideos);
 
-    log?.(`  ответов item_list ${responses} (пустых ${empty}), видео ${all.length}, hasMore=${hasMore}, стоп-экран=${stopAfter}`);
+    log?.(`  item_list responses ${responses} (empty ${empty}), videos ${all.length}, hasMore=${hasMore}, stop screen=${stopAfter}`);
     if (maxVideos !== null) {
-      log?.(`  потолок: не больше ${maxVideos} самых новых видео — взято ${videos.length} за ${pages} прокруток${stopReason === "max" ? " (прокрутка остановлена: потолок набран)" : ""}`);
+      log?.(`  cap: no more than ${maxVideos} newest videos — took ${videos.length} over ${pages} scrolls${stopReason === "max" ? " (scrolling stopped: cap reached)" : ""}`);
     }
     if (mode === "ours") {
       const missing = missingTracked(trackedIds, [...seen.keys()]);
-      log?.(`  охват: только наши — отслеживаемых видео ${trackedIds.length}, найдено ${trackedIds.length - missing.length} за ${pages} прокруток`);
+      log?.(`  scope: ours only — tracked videos ${trackedIds.length}, found ${trackedIds.length - missing.length} over ${pages} scrolls`);
       if (missing.length > 0) {
-        log?.(`  не найдено ${missing.length} наших/жёлтых видео за ${pages} прокруток`);
-        notice("list", `@${handle}: не найдено ${missing.length} наших/жёлтых видео за ${pages} прокруток (охват «только наши»)`);
+        log?.(`  ${missing.length} of our/yellow videos not found over ${pages} scrolls${hasMore ? "" : " — the list ended, the missing-video watchdog will handle them"}`);
+        // Список кончился — значит видео в профиле нет, и письмо о нём пишет сторож пропавших
+        // (`sync.mjs`) ОДИН раз на видео (владелец, 2026-09-16). Здесь говорим только о случае,
+        // когда недолистали: тогда это не «удалено», а «не дошли», и молчать нельзя.
+        if (hasMore) notice("list", `@${handle}: ${missing.length} of our/yellow videos not found over ${pages} scrolls (scope "ours only")`);
       }
     }
     if (since !== null || until !== null) {
-      log?.(`  за ${depthWord(depth)}: ${videos.length} из ${all.length} пришедших${reachedOld && mode !== "ours" ? " (прокрутка остановлена: пошли видео старше границы)" : ""}${mode === "ours" && until === null ? " (с отслеживаемыми, они остаются при любой давности)" : ""}${until !== null ? " (видео свежее верхней границы не берём — даже отслеживаемые)" : ""}`);
+      log?.(`  for ${depthWord(depth)}: ${videos.length} of ${all.length} received${reachedOld && mode !== "ours" ? " (scrolling stopped: videos older than the boundary started coming)" : ""}${mode === "ours" && until === null ? " (tracked included, they stay however old)" : ""}${until !== null ? " (videos newer than the upper boundary are skipped — even tracked ones)" : ""}`);
     }
     // `pages` — сколько прокруток успел сделать шаг. Наружу оно нужно одной калибровке
     // (`estimate.mjs`): без числа прокруток время шага не разложить на «запуск» и «страницу».
-    return { profile, videos, rawCount: all.length, stopScreen: stopAfter, pages };
+    // `seenIds` и `listEnded` — сторожу пропавших видео (`sync.mjs`): судить «видео удалено» можно
+    // только по списку, который площадка САМА назвала законченным. `hasMore` стартует с `true` и
+    // гасится одним ответом TikTok, так что недочитанный список законченным не притворится.
+    return { profile, videos, rawCount: all.length, seenIds: [...seen.keys()].map(String), listEnded: !hasMore, stopScreen: stopAfter, pages };
   } finally {
     await cleanup();
   }
@@ -226,7 +232,7 @@ async function attempt(handle, { browserChoice, log, since = null, until = null,
  */
 export async function collectTikTok(creator, { browserChoice = "", depth = "all", bounds = null, scope = null, pool = null, direct = false, onPage = null, log } = {}) {
   const handle = String(creator.handle || "").replace(/^@/, "");
-  if (!handle) throw new Error("у креатора пустой handle");
+  if (!handle) throw new Error("creator has an empty handle");
   const { since, until } = bounds ?? depthBounds(depth);
 
   // 🔴 Снимок профиля — сначала прямым запросом (`direct.mjs`), браузер откатом. Он берётся ОДИН
@@ -239,9 +245,9 @@ export async function collectTikTok(creator, { browserChoice = "", depth = "all"
     const got = await fetchProfile(handle);
     if (got.ok) {
       directProfile = { ...got.profile, nickname: got.profile.nickname || handle };
-      log?.(`  профиль прямым запросом: подписчиков ${directProfile.followers}, видео по профилю ${directProfile.videosCount ?? "?"} (${got.ms} мс)`);
+      log?.(`  profile by direct request: followers ${directProfile.followers}, videos on profile ${directProfile.videosCount ?? "?"} (${got.ms} ms)`);
     } else {
-      log?.(`  профиль прямым запросом не взялся (${got.why}) — беру со страницы браузера`);
+      log?.(`  profile by direct request failed (${got.why}) — taking it from the browser page`);
     }
   }
   // Пула нет — адрес один, домашний, и второго круга не будет: `exclude` его же и исключает.
@@ -254,7 +260,7 @@ export async function collectTikTok(creator, { browserChoice = "", depth = "all"
     // Годных адресов не осталось: на первом круге это отмена обхода, на втором — просто конец
     // попыток, и ниже сработает обычная ошибка «защита по адресу».
     if (!address) {
-      if (tried.length === 0) throw new Error(`обход @${handle} отменён: свободного адреса нет`);
+      if (tried.length === 0) throw new Error(`run for @${handle} cancelled: no free address`);
       break;
     }
     tried.push(address);
@@ -267,7 +273,7 @@ export async function collectTikTok(creator, { browserChoice = "", depth = "all"
       // Адрес не отозвался (прокси лежит, не пустил, оборвал) — это беда адреса, а не площадки:
       // в паузу его, чтобы следующий креатор не встал на те же грабли. Повтора здесь нет:
       // отличить «прокси лежит» от «интернета нет» мы не можем, и второй заход стоил бы запуска.
-      if (looksLikeProxyTrouble(text)) pool?.bad?.(address.id, `ошибка соединения: ${text}`);
+      if (looksLikeProxyTrouble(text)) pool?.bad?.(address.id, `connection error: ${text}`);
       throw e;
     }
     last = res;
@@ -276,24 +282,24 @@ export async function collectTikTok(creator, { browserChoice = "", depth = "all"
     // бывает у живого профиля, который просто молчал.
     if (res.rawCount > 0 || !res.profile.videosCount) {
       if (res.rawCount === 0 && res.stopScreen) {
-        notice("stop", `@${handle}: стоп-экран TikTok`);
-        throw new Error(`стоп-экран TikTok у @${handle}`);
+        notice("stop", `@${handle}: TikTok stop screen`);
+        throw new Error(`TikTok stop screen at @${handle}`);
       }
       pool?.good?.(address.id);
-      return { profile: res.profile, videos: res.videos, pages: res.pages };
+      return { profile: res.profile, videos: res.videos, pages: res.pages, rawCount: res.rawCount, seenIds: res.seenIds, listEnded: res.listEnded };
     }
     if (res.stopScreen) {
-      notice("stop", `@${handle}: стоп-экран TikTok`);
-      throw new Error(`стоп-экран TikTok у @${handle}`);
+      notice("stop", `@${handle}: TikTok stop screen`);
+      throw new Error(`TikTok stop screen at @${handle}`);
     }
     // Пустой список при непустом профиле — этот адрес придержан.
-    pool?.bad?.(address.id, "TikTok не отдал список");
+    pool?.bad?.(address.id, "TikTok returned no list");
   }
 
   // Адрес был один — текст ошибки прежний, слово в слово. Пробовали несколько — перечисляем их:
   // владельцу важно видеть, что пусто пришло не с одного адреса.
-  const where = tried.length > 1 ? `защита по адресу: ${tried.map((a) => a.label).join(", ")}` : "защита по адресу";
-  const text = `TikTok не отдал список (${where}; по профилю ${last?.profile?.videosCount ?? "?"} видео)`;
+  const where = tried.length > 1 ? `address throttling: ${tried.map((a) => a.label).join(", ")}` : "address throttling";
+  const text = `TikTok returned no list (${where}; profile says ${last?.profile?.videosCount ?? "?"} videos)`;
   notice("list", `@${handle}: ${text}`);
   throw new Error(`${text}: @${handle}`);
 }

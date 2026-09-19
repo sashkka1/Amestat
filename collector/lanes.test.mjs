@@ -5,12 +5,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { splitLanes, laneOf, pauseAfter, pickComments } from "./sync.mjs";
+import { splitLanes, laneOf, pauseAfter, pickComments, profileGone } from "./sync.mjs";
 import { groupRequests, covers } from "./requests.mjs";
 
 // --- деление на полосы --------------------------------------------------------------------
 
-test("креаторы делятся по площадке, порядок внутри полосы сохраняется", () => {
+test("creators are split by platform, the order inside a lane is kept", () => {
   const creators = [
     { handle: "toplombard_warszaw", platform: "tiktok" },
     { handle: "instagram", platform: "instagram" },
@@ -22,57 +22,65 @@ test("креаторы делятся по площадке, порядок вн
   assert.deepEqual(ig.map((c) => c.handle), ["instagram", "nasa"]);
 });
 
-test("площадка не указана — это TikTok; чужая площадка идёт туда же и падает своей ошибкой", () => {
+test("no platform given — it is TikTok; a foreign platform goes there too and fails with its own error", () => {
   assert.equal(laneOf({ handle: "x" }), "tt");
   assert.equal(laneOf({ handle: "x", platform: "youtube" }), "tt");
   assert.equal(laneOf({ handle: "x", platform: "instagram" }), "ig");
 });
 
-test("пустой список полос не ломает", () => {
+test("an empty list does not break the lanes", () => {
   assert.deepEqual(splitLanes([]), { tt: [], ig: [] });
   assert.deepEqual(splitLanes(undefined), { tt: [], ig: [] });
 });
 
 // --- паузы --------------------------------------------------------------------------------
 
-test("пауза только между креаторами TikTok", () => {
+test("a pause only between TikTok creators", () => {
   assert.equal(pauseAfter("tt"), true);
-  assert.equal(pauseAfter("ig"), false, "у Instagram браузер общий — ждать нечего");
+  assert.equal(pauseAfter("ig"), false, "Instagram shares one browser — there is nothing to wait for");
 });
 
-test("после «профиль не найден» паузы нет: страницы не было, очереди к TikTok тоже", () => {
-  assert.equal(pauseAfter("tt", "профиль не найден: @demo_tiktok"), false);
-  assert.equal(pauseAfter("tt", "стоп-экран TikTok у @khaby.lame"), true, "капча — как раз повод переждать");
-  assert.equal(pauseAfter("ig", "Instagram: профиль не найден: @demo"), false);
+test("after \"profile not found\" there is no pause: there was no page, and no queue to TikTok either", () => {
+  assert.equal(pauseAfter("tt", "profile not found: @demo_tiktok"), false);
+  assert.equal(pauseAfter("tt", "TikTok stop screen on profile @khaby.lame"), true, "a captcha is exactly the reason to wait it out");
+  assert.equal(pauseAfter("ig", "Instagram: profile not found: @demo"), false);
+});
+
+test("the \"profile gone\" mark (v33): TikTok and the Instagram browser — yes, the Graph API \"or not a business account\" — no", () => {
+  assert.equal(profileGone("profile not found: @demo_tiktok"), true);
+  assert.equal(profileGone("Instagram: profile not found: @demo"), true);
+  assert.equal(profileGone("Instagram: profile not found or not a business account: @demo"), false);
+  assert.equal(profileGone("TikTok stop screen on profile @demo"), false);
+  assert.equal(profileGone(null), false);
 });
 
 // --- склейка просьб -----------------------------------------------------------------------
 
 const req = (id, extra = {}) => ({ id, creator_id: null, depth: "all", requested_by: null, ...extra });
 
-test("две просьбы одного охвата и глубины — один обход, галочки складываются по «или»", () => {
+test("two requests of the same scope and depth — one run, the checkboxes add up by \"or\"", () => {
   const groups = groupRequests([
     req(1, { comments: false, replies: false }),
     req(2, { comments: true, replies: false }),
   ]);
   assert.equal(groups.length, 1);
   assert.deepEqual(groups[0].ids, [1, 2]);
-  assert.equal(groups[0].comments, true, "true поглощает false");
-  assert.equal(groups[0].replies, false, "веток не просил никто — и не раскрываем");
+  assert.equal(groups[0].comments, true, "true swallows false");
+  assert.equal(groups[0].replies, false, "nobody asked for branches — so we do not expand them");
 });
 
-test("обход всех забирает частную просьбу вместе с её галочками", () => {
+test("a run over everyone takes in a single-creator request together with its checkboxes", () => {
   const groups = groupRequests([
     req(1, { creator_id: "c1", depth: "all", comments: true, replies: true }),
     req(2, { creator_id: null, depth: "all", comments: false, replies: false }),
   ]);
-  assert.equal(groups.length, 1, "частная просьба покрыта обходом всех");
+  assert.equal(groups.length, 1, "the single-creator request is covered by the run over everyone");
   assert.deepEqual(groups[0].ids.sort(), [1, 2]);
-  assert.equal(groups[0].comments, true, "поглощённая просьба не теряет своих комментариев");
+  assert.equal(groups[0].comments, true, "the swallowed request does not lose its comments");
   assert.equal(groups[0].replies, true);
 });
 
-test("«все, неделя» не покрывает «этот креатор, всё» — обходов два, галочки у каждого свои", () => {
+test("\"everyone, week\" does not cover \"this creator, all\" — two runs, each with its own checkboxes", () => {
   const groups = groupRequests([
     req(1, { creator_id: null, depth: "week", comments: false, replies: false }),
     req(2, { creator_id: "c1", depth: "all", comments: true, replies: true }),
@@ -84,13 +92,13 @@ test("«все, неделя» не покрывает «этот креатор
   assert.equal(narrow.comments, true);
 });
 
-test("нет полей вовсе (старая просьба) — считаем «снимать», как было до галочек", () => {
+test("no fields at all (an old request) — we take it as \"collect\", as it was before the checkboxes", () => {
   const [group] = groupRequests([req(1)]);
   assert.equal(group.comments, true);
   assert.equal(group.replies, true);
 });
 
-test("покрытие: шире по охвату и не мельче по глубине", () => {
+test("coverage: wider in scope and not shallower in depth", () => {
   assert.equal(covers({ creatorId: null, depth: "all" }, { creatorId: "c1", depth: "week" }), true);
   assert.equal(covers({ creatorId: null, depth: "week" }, { creatorId: "c1", depth: "all" }), false);
   assert.equal(covers({ creatorId: "c1", depth: "all" }, { creatorId: "c2", depth: "all" }), false);
@@ -102,60 +110,60 @@ const RANGE = { from: "2026-09-01T00:00:00.000Z", to: "2026-09-09T00:00:00.000Z"
 const other = { from: "2026-08-01T00:00:00.000Z", to: "2026-08-09T00:00:00.000Z" };
 const grp = (depth, extra = {}) => ({ creatorId: null, depth, depthFrom: null, depthTo: null, ...extra });
 
-test("«месяц» покрывает «неделю» и себя, но не «всё»", () => {
-  assert.equal(covers(grp("month"), grp("week")), true, "30 дней включают 7");
+test("\"month\" covers \"week\" and itself, but not \"all\"", () => {
+  assert.equal(covers(grp("month"), grp("week")), true, "30 days include 7");
   assert.equal(covers(grp("month"), grp("month")), true);
   assert.equal(covers(grp("month"), grp("all")), false);
-  assert.equal(covers(grp("week"), grp("month")), false, "неделя мельче месяца");
+  assert.equal(covers(grp("week"), grp("month")), false, "a week is shallower than a month");
   assert.equal(covers(grp("all"), grp("month")), true);
 });
 
-test("«период» покрывает ТОЛЬКО ровно такой же период", () => {
+test("\"range\" covers ONLY exactly the same range", () => {
   const a = grp("range", { depthFrom: RANGE.from, depthTo: RANGE.to });
   const b = grp("range", { depthFrom: other.from, depthTo: other.to });
   assert.equal(covers(a, { ...a }), true);
-  assert.equal(covers(a, b), false, "у чужого периода своя верхняя граница");
-  assert.equal(covers(a, grp("week")), false, "период не глубже недели — у него свой верх");
+  assert.equal(covers(a, b), false, "another range has its own upper boundary");
+  assert.equal(covers(a, grp("week")), false, "a range is not deeper than a week — it has its own top");
   assert.equal(covers(grp("month"), a), false);
-  assert.equal(covers(grp("all"), a), true, "«всё» забирает и период: оно принесёт больше, чем просили");
+  assert.equal(covers(grp("all"), a), true, "\"all\" takes in a range too: it will bring more than was asked for");
 });
 
-test("два разных периода — два обхода, одинаковые — один", () => {
+test("two different ranges — two runs, identical ones — a single run", () => {
   const two = groupRequests([
     req(1, { depth: "range", depth_from: RANGE.from, depth_to: RANGE.to }),
     req(2, { depth: "range", depth_from: other.from, depth_to: other.to }),
   ]);
-  assert.equal(two.length, 2, "склеить «с 1 по 9» и «с 1 по 9 августа» нечем");
+  assert.equal(two.length, 2, "there is nothing to merge \"1 to 9\" and \"1 to 9 August\" with");
   const one = groupRequests([
     req(3, { depth: "range", depth_from: RANGE.from, depth_to: RANGE.to, comments: false }),
     req(4, { depth: "range", depth_from: RANGE.from, depth_to: RANGE.to, comments: true }),
   ]);
   assert.equal(one.length, 1);
   assert.deepEqual(one[0].ids, [3, 4]);
-  assert.equal(one[0].comments, true, "галочки складываются по «или» и внутри периода");
+  assert.equal(one[0].comments, true, "the checkboxes add up by \"or\" inside a range too");
   assert.equal(one[0].depthFrom, RANGE.from);
   assert.equal(one[0].depthTo, RANGE.to);
 });
 
-test("«период» без границ приезжает как «всё» — база такого не пустит, но просьба может быть старой", () => {
+test("\"range\" without boundaries arrives as \"all\" — the database would not allow it, but the request may be an old one", () => {
   const [group] = groupRequests([req(1, { depth: "range" })]);
   assert.equal(group.depth, "all");
   assert.equal(group.depthFrom, null);
   assert.equal(group.depthTo, null);
 });
 
-test("границы понимаются и в разобранном виде: резидент кладёт в очередь depthFrom", () => {
+test("boundaries are understood in the parsed form too: the resident puts depthFrom in the queue", () => {
   const [group] = groupRequests([req(1, { depth: "range", depthFrom: RANGE.from, depthTo: RANGE.to })]);
-  assert.equal(group.depth, "range", "период с сайта не должен теряться по дороге через резидент");
+  assert.equal(group.depth, "range", "a range from the site must not get lost on the way through the resident");
   assert.equal(group.depthFrom, RANGE.from);
 });
 
-test("обход «месяц» забирает просьбу «неделя», а не наоборот", () => {
+test("a \"month\" run takes in a \"week\" request, and not the other way round", () => {
   const groups = groupRequests([
     req(1, { creator_id: "c1", depth: "week" }),
     req(2, { creator_id: null, depth: "month" }),
   ]);
-  assert.equal(groups.length, 1, "месяц шире недели — частная просьба покрыта");
+  assert.equal(groups.length, 1, "a month is wider than a week — the single-creator request is covered");
   assert.deepEqual(groups[0].ids.sort(), [1, 2]);
   assert.equal(groups[0].depth, "month");
 });
@@ -171,15 +179,15 @@ const video = (id, comments, daysAgo) => ({
   publishedAt: new Date(NOW - daysAgo * DAY).toISOString(),
 });
 
-test("число комментариев то же, что при прошлом съёме — видео не открываем", () => {
+test("the comment count is the same as at the last collection — we do not open the video", () => {
   const videos = [video("a", 42, 1), video("b", 43, 1)];
   const known = new Map([["a", 42], ["b", 42]]);
   const { picked, unchanged } = pickComments(videos, known, SINCE);
-  assert.deepEqual(picked.map((v) => v.id), ["b"], "у b комментариев прибавилось — снимаем");
+  assert.deepEqual(picked.map((v) => v.id), ["b"], "b gained comments — we collect it");
   assert.deepEqual(unchanged.map((v) => v.id), ["a"]);
 });
 
-test("первый раз (в базе null или вовсе ничего) — снимаем всегда", () => {
+test("the first time (null in the database or nothing at all) — we always collect", () => {
   const videos = [video("a", 10, 1), video("b", 10, 1)];
   const known = new Map([["a", null]]);
   const { picked, unchanged } = pickComments(videos, known, SINCE);
@@ -187,34 +195,34 @@ test("первый раз (в базе null или вовсе ничего) — 
   assert.equal(unchanged.length, 0);
 });
 
-test("комментариев стало МЕНЬШЕ (удалили) — это тоже изменение, снимаем", () => {
+test("there are FEWER comments (some were deleted) — that is a change too, we collect", () => {
   const { picked } = pickComments([video("a", 8, 1)], new Map([["a", 12]]), SINCE);
   assert.deepEqual(picked.map((v) => v.id), ["a"]);
 });
 
-test("старое и пустое не берётся ни в снятые, ни в «без изменений»", () => {
+test("old and empty ones go neither into the collected nor into \"unchanged\"", () => {
   const videos = [video("old", 100, 30), video("empty", 0, 1), { id: "nodate", comments: 5, publishedAt: null }];
   const { picked, unchanged } = pickComments(videos, new Map(), SINCE);
   assert.equal(picked.length, 0);
-  assert.equal(unchanged.length, 0, "пропущенное по свежести в счёт «без изменений» не идёт");
+  assert.equal(unchanged.length, 0, "what is skipped by freshness does not count as \"unchanged\"");
 });
 
 // --- Окно шага = глубина обхода (владелец, 2026-09-09) --------------------------------------
 
-test("окно «месяц»: тридцатидневное видео берётся, а более старое — нет", () => {
+test("the \"month\" window: a thirty-day-old video is taken, an older one is not", () => {
   const videos = [video("m", 5, 20), video("older", 5, 40)];
   const { picked } = pickComments(videos, new Map(), NOW - 30 * DAY);
-  assert.deepEqual(picked.map((v) => v.id), ["m"], "месячный обход снимает комментарии за месяц");
+  assert.deepEqual(picked.map((v) => v.id), ["m"], "a month-deep run collects comments for a month");
 });
 
-test("окно «всё» (границ нет) — берутся все видео с комментариями, даже без даты", () => {
+test("the \"all\" window (no boundaries) — every video with comments is taken, even one without a date", () => {
   const videos = [video("old", 100, 300), video("empty", 0, 1), { id: "nodate", comments: 5, publishedAt: null }];
   const { picked, unchanged } = pickComments(videos, new Map(), null);
-  assert.deepEqual(picked.map((v) => v.id), ["old", "nodate"], "у глубины «всё» ограничения по дате нет");
+  assert.deepEqual(picked.map((v) => v.id), ["old", "nodate"], "depth \"all\" has no date limit");
   assert.equal(unchanged.length, 0);
 });
 
-test("окно «всё» не отменяет ни «без изменений», ни «только наши»", () => {
+test("the \"all\" window cancels neither \"unchanged\" nor \"ours only\"", () => {
   const known = new Map([
     ["same", { count: 7, ours: true }],
     ["alien", { count: null, ours: false }],
@@ -225,7 +233,7 @@ test("окно «всё» не отменяет ни «без изменений
   assert.deepEqual(foreign.map((v) => v.id), ["alien"]);
 });
 
-test("счётчик базы приезжает строкой — сравнение всё равно числовое", () => {
+test("the database counter arrives as a string — the comparison is numeric all the same", () => {
   const { picked, unchanged } = pickComments([video("a", 42, 1)], new Map([["a", "42"]]), SINCE);
   assert.equal(picked.length, 0);
   assert.equal(unchanged.length, 1);
@@ -233,7 +241,7 @@ test("счётчик базы приезжает строкой — сравне
 
 // --- Только наши видео (владелец, 2026-09-08: счётчики по всем, тексты — по нашим) ---
 
-test("не наше видео в тексты не берётся — уходит в foreign", () => {
+test("a video that is not ours is not taken for texts — it goes to foreign", () => {
   const videos = [video("ours", 10, 1), video("alien", 10, 1)];
   const known = new Map([["ours", { count: null, ours: true }], ["alien", { count: null, ours: false }]]);
   const { picked, unchanged, foreign } = pickComments(videos, known, SINCE);
@@ -242,7 +250,7 @@ test("не наше видео в тексты не берётся — уход�
   assert.equal(unchanged.length, 0);
 });
 
-test("просьба «и не наши видео» снимает у всех, но «без изменений» действует и на них", () => {
+test("the request \"videos that are not ours too\" collects from everyone, but \"unchanged\" applies to them as well", () => {
   const videos = [video("ours", 10, 1), video("alien", 10, 1), video("same", 5, 1)];
   const known = new Map([
     ["ours", { count: null, ours: true }],
@@ -255,61 +263,61 @@ test("просьба «и не наши видео» снимает у всех,
   assert.equal(foreign.length, 0);
 });
 
-test("о видео база не сказала (строки нет) — считается нашим и снимается", () => {
+test("the database said nothing about the video (no row) — it counts as ours and is collected", () => {
   const { picked, foreign } = pickComments([video("new", 3, 1)], new Map(), SINCE);
   assert.deepEqual(picked.map((v) => v.id), ["new"]);
   assert.equal(foreign.length, 0);
 });
 
-test("all_videos склеивается по «или», а без поля — false", () => {
+test("all_videos merges by \"or\", and without the field it is false", () => {
   const groups = groupRequests([
     req(1, { comments: true, replies: true }),
     req(2, { comments: true, replies: true, all_videos: true }),
   ]);
   assert.equal(groups.length, 1);
-  assert.equal(groups[0].allVideos, true, "одна просьба «и не наши» — обход снимает у всех");
+  assert.equal(groups[0].allVideos, true, "one request for \"not ours too\" — the run collects from everyone");
   const [plain] = groupRequests([req(3, { comments: true, replies: true })]);
-  assert.equal(plain.allVideos, false, "поля нет — только наши, как всегда");
+  assert.equal(plain.allVideos, false, "no field — ours only, as always");
 });
 
-test("all_videos понимается и в разобранном виде: резидент кладёт в очередь allVideos", () => {
+test("all_videos is understood in the parsed form too: the resident puts allVideos in the queue", () => {
   const [group] = groupRequests([req(1, { allVideos: true })]);
-  assert.equal(group.allVideos, true, "галочка с сайта не должна теряться по дороге через резидент");
+  assert.equal(group.allVideos, true, "a checkbox from the site must not get lost on the way through the resident");
 });
 
 // --- Охват видео: всё или только наши (владелец, 2026-09-09; миграция v17) ---
 
-test("охват склеивается по «или»: хоть одна просьба «всё» — обход по всему списку", () => {
+test("the scope merges by \"or\": a single request for \"all\" — the run goes over the whole list", () => {
   const groups = groupRequests([
     req(1, { videos: "ours" }),
     req(2, { videos: "all" }),
   ]);
   assert.equal(groups.length, 1);
-  assert.equal(groups[0].videos, "all", "просивший весь список не должен остаться без чужих видео");
+  assert.equal(groups[0].videos, "all", "whoever asked for the whole list must not be left without foreign videos");
 });
 
-test("«только наши» получается, лишь когда его просили все просьбы группы", () => {
+test("\"ours only\" happens only when every request in the group asked for it", () => {
   const [group] = groupRequests([req(1, { videos: "ours" }), req(2, { videos: "ours" })]);
   assert.equal(group.videos, "ours");
 });
 
-test("поля охвата нет вовсе (старая просьба) — считаем «всё»", () => {
+test("there is no scope field at all (an old request) — we take it as \"all\"", () => {
   const [group] = groupRequests([req(1)]);
   assert.equal(group.videos, "all");
 });
 
-test("поглощённая просьба приносит свой охват покрывающему обходу", () => {
+test("a swallowed request brings its scope to the covering run", () => {
   const groups = groupRequests([
     req(1, { creator_id: "c1", depth: "all", videos: "all" }),
     req(2, { creator_id: null, depth: "all", videos: "ours" }),
   ]);
-  assert.equal(groups.length, 1, "частная просьба покрыта обходом всех");
-  assert.equal(groups[0].videos, "all", "частная просила весь список — обход всех идёт по всему");
+  assert.equal(groups.length, 1, "the single-creator request is covered by the run over everyone");
+  assert.equal(groups[0].videos, "all", "the single-creator one asked for the whole list — the run over everyone goes over everything");
 });
 
 // --- Жёлтые видео: счётчики да, тексты нет ---
 
-test("жёлтое видео считается отдельно от чужого, но текстов не получает тоже", () => {
+test("a yellow video is counted apart from a foreign one, but gets no texts either", () => {
   const videos = [video("ours", 10, 1), video("yellow", 10, 1), video("alien", 10, 1)];
   const known = new Map([
     ["ours", { count: null, ours: true, watch: false }],
@@ -318,11 +326,11 @@ test("жёлтое видео считается отдельно от чужо�
   ]);
   const { picked, foreign, watched } = pickComments(videos, known, SINCE);
   assert.deepEqual(picked.map((v) => v.id), ["ours"]);
-  assert.deepEqual(watched.map((v) => v.id), ["yellow"], "«смотрим историю» — это счётчики, а не тексты");
+  assert.deepEqual(watched.map((v) => v.id), ["yellow"], "\"watching the history\" means counters, not texts");
   assert.deepEqual(foreign.map((v) => v.id), ["alien"]);
 });
 
-test("просьба «и не наши видео» снимает тексты и у жёлтых", () => {
+test("the request \"videos that are not ours too\" collects texts from yellow ones as well", () => {
   const known = new Map([["yellow", { count: null, ours: false, watch: true }]]);
   const { picked, watched, foreign } = pickComments([video("yellow", 4, 1)], known, SINCE, { allVideos: true });
   assert.deepEqual(picked.map((v) => v.id), ["yellow"]);
@@ -332,28 +340,28 @@ test("просьба «и не наши видео» снимает тексты
 
 // --- Комментарии при глубине «период» (миграция v18) ---
 
-test("при периоде тексты снимаются у видео ИЗ периода, а не у вчерашних", () => {
+test("with a range the texts are collected from videos IN the range, not from yesterday's", () => {
   const videos = [video("today", 5, 0), video("inRange", 5, 15), video("tooOld", 5, 40)];
   const since = NOW - 20 * DAY, until = NOW - 10 * DAY;
   const { picked } = pickComments(videos, new Map(), since, { untilMs: until });
-  assert.deepEqual(picked.map((v) => v.id), ["inRange"], "срез за прошлый месяц не про вчерашние обсуждения");
+  assert.deepEqual(picked.map((v) => v.id), ["inRange"], "a slice of last month is not about yesterday's discussions");
 });
 
-test("верхней границы нет — шаг работает как раньше, по свежим", () => {
+test("no upper boundary — the step works as before, over the fresh ones", () => {
   const videos = [video("today", 5, 0), video("old", 5, 30)];
   const { picked } = pickComments(videos, new Map(), SINCE, { untilMs: null });
   assert.deepEqual(picked.map((v) => v.id), ["today"]);
 });
 
-test("отсечённое верхней границей не идёт ни в «без изменений», ни в чужие", () => {
+test("what the upper boundary cuts off goes neither into \"unchanged\" nor into foreign", () => {
   const known = new Map([["today", { count: 5, ours: false }]]);
   const { picked, unchanged, foreign } = pickComments([video("today", 5, 0)], known, NOW - 20 * DAY, { untilMs: NOW - 10 * DAY });
   assert.equal(picked.length, 0);
   assert.equal(unchanged.length, 0);
-  assert.equal(foreign.length, 0, "видео вне периода шага не касается вовсе");
+  assert.equal(foreign.length, 0, "a video outside the range does not concern the step at all");
 });
 
-test("строки без поля watch (старый вид) считаются просто чужими", () => {
+test("rows without the watch field (the old shape) count simply as foreign", () => {
   const known = new Map([["alien", { count: null, ours: false }]]);
   const { watched, foreign } = pickComments([video("alien", 4, 1)], known, SINCE);
   assert.equal(watched.length, 0);

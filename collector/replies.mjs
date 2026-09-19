@@ -39,7 +39,7 @@ function markButton(page, selector, textSource, mark) {
       return { mark: id, how, text: String(el.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 60) };
     };
     for (const el of sel ? document.querySelectorAll(sel) : []) {
-      if (!seen(el) && el.getClientRects().length > 0) return take(el, "разметке");
+      if (!seen(el) && el.getClientRects().length > 0) return take(el, "markup");
     }
     // Подписи ищем только в мелких узлах: у большого текст — это весь список комментариев.
     for (const el of document.querySelectorAll("span, p, button, div[role='button']")) {
@@ -47,7 +47,7 @@ function markButton(page, selector, textSource, mark) {
       const text = String(el.textContent ?? "").replace(/\s+/g, " ").trim();
       if (!text || text.length > 40 || !re.test(text)) continue;
       if (el.getClientRects().length === 0) continue;
-      return take(el, "тексту");
+      return take(el, "text");
     }
     return null;
   }, [selector, textSource, mark, MARK_ATTR]);
@@ -61,14 +61,14 @@ function markRest(page, selector, textSource, mark) {
     let n = 0;
     for (const el of sel ? document.querySelectorAll(sel) : []) {
       if (seen(el)) continue;
-      el.setAttribute(attr, `${id}-мимо`);
+      el.setAttribute(attr, `${id}-skip`);
       n++;
     }
     for (const el of document.querySelectorAll("span, p, button, div[role='button']")) {
       if (seen(el)) continue;
       const text = String(el.textContent ?? "").replace(/\s+/g, " ").trim();
       if (!text || text.length > 40 || !re.test(text)) continue;
-      el.setAttribute(attr, `${id}-мимо`);
+      el.setAttribute(attr, `${id}-skip`);
       n++;
     }
     return n;
@@ -111,14 +111,14 @@ export async function expandBranches(page, state, { open, more, branches, replie
 
   while (opened < branches) {
     if (Date.now() > until) {
-      log?.(`    ветки: время вышло, раскрыто ${opened} из ${branches}`);
+      log?.(`    branches: out of time, opened ${opened} of ${branches}`);
       timedOut = true;
       break;
     }
     const button = await markButton(page, open.selector, open.text, ++mark);
     if (!button) break;
     if (first) {
-      log?.(`    ветки: первая кнопка нашлась по ${button.how} («${button.text}»)`);
+      log?.(`    branches: first button found by ${button.how} («${button.text}»)`);
       first = false;
     }
     const before = state.replies.size;

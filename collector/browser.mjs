@@ -83,7 +83,7 @@ function proxyOption(address) {
 
 /** Подпись адреса для лога: «домашний» или «прокси #2 host:port». Без учётных данных. */
 export function addressLabel(address) {
-  return address?.label ?? "домашний";
+  return address?.label ?? "home";
 }
 
 /** Самый свежий версионный opera.exe или null, если Opera не установлена. */
@@ -123,13 +123,13 @@ export function resolveBrowser(choice = "") {
   }
   if (want.toLowerCase() === "opera") {
     const opera = findOpera();
-    if (!opera) throw new Error("AMESTAT_BROWSER=opera, но Opera не найдена в %LOCALAPPDATA%\\Programs\\Opera");
+    if (!opera) throw new Error("AMESTAT_BROWSER=opera, but Opera was not found in %LOCALAPPDATA%\\Programs\\Opera");
     return { kind: "opera", executablePath: opera, describe: `Opera ${opera}` };
   }
   if (want.toLowerCase() === "chrome") {
     return { kind: "chrome", executablePath: null, describe: "Chrome (channel chrome)" };
   }
-  if (!existsSync(want)) throw new Error(`AMESTAT_BROWSER указывает на несуществующий файл: ${want}`);
+  if (!existsSync(want)) throw new Error(`AMESTAT_BROWSER points to a file that does not exist: ${want}`);
   return { kind: "custom", executablePath: want, describe: want };
 }
 
@@ -143,7 +143,7 @@ export function resolveBrowser(choice = "") {
  */
 export function ensureProfileCopy(to = PROFILE_TIKTOK, from = PROFILE_OPERA) {
   if (existsSync(to)) return { copied: false, from, to };
-  if (!existsSync(from)) throw new Error(`нет копии профиля Opera (${from}) — с неё нечего копировать`);
+  if (!existsSync(from)) throw new Error(`no Opera profile copy (${from}) — there is nothing to copy from`);
   const tmp = `${to}.tmp`;
   rmSync(tmp, { recursive: true, force: true });
   try {
@@ -151,7 +151,7 @@ export function ensureProfileCopy(to = PROFILE_TIKTOK, from = PROFILE_OPERA) {
     renameSync(tmp, to);
   } catch (e) {
     rmSync(tmp, { recursive: true, force: true });
-    throw new Error(`вторая копия профиля не завелась (${to}): ${String(e?.message ?? e).split("\n")[0]}`);
+    throw new Error(`the second profile copy could not be created (${to}): ${String(e?.message ?? e).split("\n")[0]}`);
   }
   return { copied: true, from, to };
 }
@@ -170,12 +170,12 @@ export function ensureProfileCopy(to = PROFILE_TIKTOK, from = PROFILE_OPERA) {
  */
 function forceOffscreenPlacement(dir) {
   const file = resolve(dir, "Default", "Preferences");
-  if (!existsSync(file)) return "в профиле нет Default/Preferences — расположение окна не поправить";
+  if (!existsSync(file)) return "the profile has no Default/Preferences — the window placement cannot be fixed";
   let json = null;
   try {
     json = JSON.parse(readFileSync(file, "utf8"));
   } catch (e) {
-    return `Default/Preferences не разобрался: ${String(e?.message ?? e).split("\n")[0]}`;
+    return `Default/Preferences could not be parsed: ${String(e?.message ?? e).split("\n")[0]}`;
   }
   try {
     json.browser = json.browser ?? {};
@@ -189,7 +189,7 @@ function forceOffscreenPlacement(dir) {
     json.browser.window_placement = { ...was, ...size, maximized: false, left: OFFSCREEN.left, top: OFFSCREEN.top };
     writeFileSync(file, JSON.stringify(json), "utf8");
   } catch (e) {
-    return `Default/Preferences не записался: ${String(e?.message ?? e).split("\n")[0]}`;
+    return `Default/Preferences could not be written: ${String(e?.message ?? e).split("\n")[0]}`;
   }
   return null;
 }
@@ -214,7 +214,7 @@ function forgetSession(dir) {
       json.profile = { ...(json.profile ?? {}), exit_type: "Normal", exited_cleanly: true };
       writeFileSync(prefs, JSON.stringify(json), "utf8");
     } catch (e) {
-      return `Default/Preferences не поправился: ${String(e?.message ?? e).split("\n")[0]}`;
+      return `Default/Preferences could not be updated: ${String(e?.message ?? e).split("\n")[0]}`;
     }
   }
   const sessions = resolve(dir, "Default", "Sessions");
@@ -222,7 +222,7 @@ function forgetSession(dir) {
     try {
       for (const name of readdirSync(sessions)) rmSync(join(sessions, name), { force: true });
     } catch (e) {
-      return `Default/Sessions не стёрлись: ${String(e?.message ?? e).split("\n")[0]}`;
+      return `Default/Sessions could not be cleared: ${String(e?.message ?? e).split("\n")[0]}`;
     }
   }
   return null;
@@ -248,10 +248,10 @@ function ensureWindowWatch() {
       ["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", script, "-Parent", String(process.pid)],
       { windowsHide: true },
     );
-    child.on("error", (e) => notice("browser", `сторож окон не поднялся: ${String(e?.message ?? e).split("\n")[0]}`));
+    child.on("error", (e) => notice("browser", `the window watcher did not start: ${String(e?.message ?? e).split("\n")[0]}`));
     child.unref();
   } catch (e) {
-    notice("browser", `сторож окон не поднялся: ${String(e?.message ?? e).split("\n")[0]}`);
+    notice("browser", `the window watcher did not start: ${String(e?.message ?? e).split("\n")[0]}`);
   }
 }
 
@@ -275,7 +275,7 @@ export async function hideWindow(ctx, page, { log } = {}) {
     hidden.add(windowId);
     await cdp.send("Browser.setWindowBounds", { windowId, bounds: { windowState: "normal", ...OFFSCREEN } });
     const { bounds } = await cdp.send("Browser.getWindowBounds", { windowId });
-    log?.(`    окно уведено: left=${bounds.left}, top=${bounds.top}, ${bounds.width}×${bounds.height}, state=${bounds.windowState}`);
+    log?.(`    window moved off-screen: left=${bounds.left}, top=${bounds.top}, ${bounds.width}×${bounds.height}, state=${bounds.windowState}`);
     return bounds;
   } catch {
     // Скрытый браузер или CDP не дался — на сбор это не влияет.
@@ -373,7 +373,7 @@ export async function trimTraffic(ctx, allow, { log } = {}) {
     passed++;
     route.continue().catch(() => {});
   });
-  log?.(`  лишнее в браузер не пускаем: только ${allow.join(", ")}, без видео и шрифтов`);
+  log?.(`  blocking extras in the browser: only ${allow.join(", ")}, no video or fonts`);
   return () => ({ aborted, passed });
 }
 
@@ -435,7 +435,7 @@ export async function launchFresh(choice = "", { headless = true, proxy = null, 
       // Браузер мог уже упасть сам — профиль всё равно надо убрать.
     }
     // Не ушёл сам — добиваем: иначе временный профиль не сотрётся, а процессы останутся висеть.
-    if (ctx && await killIfAlive(ctx)) notice("browser", "браузер не закрылся сам — пришлось добить (свежий профиль)");
+    if (ctx && await killIfAlive(ctx)) notice("browser", "the browser did not close by itself — had to kill it (fresh profile)");
     rmSync(profileDir, { recursive: true, force: true });
   };
   try {
@@ -450,10 +450,10 @@ export async function launchFresh(choice = "", { headless = true, proxy = null, 
   } catch (e) {
     rmSync(profileDir, { recursive: true, force: true });
     const text = String(e.message ?? e).split("\n")[0];
-    notice("browser", `свежий профиль не поднялся (адрес: ${addressLabel(proxy)}): ${text}`);
-    throw new Error(`браузер не запустился (${browser.describe}, адрес: ${addressLabel(proxy)}): ${text}`);
+    notice("browser", `the fresh profile did not start (address: ${addressLabel(proxy)}): ${text}`);
+    throw new Error(`the browser did not start (${browser.describe}, address: ${addressLabel(proxy)}): ${text}`);
   }
-  log?.(`  адрес: ${addressLabel(proxy)}`);
+  log?.(`  address: ${addressLabel(proxy)}`);
   return { ctx, cleanup, profileDir, describe: browser.describe, address: addressLabel(proxy) };
 }
 
@@ -482,19 +482,19 @@ export async function launchProfile(choice = "", { headless = true, profile = PR
   const browser = resolveBrowser(choice);
   const PROFILE_DIR = profile;
   if (!existsSync(PROFILE_DIR)) {
-    throw new Error(`нет копии профиля Opera (${PROFILE_DIR}) — сними её с входом фейковых аккаунтов`);
+    throw new Error(`no Opera profile copy (${PROFILE_DIR}) — make one with the fake accounts signed in`);
   }
   // Настоящее окно — только на шаге комментариев TikTok, и оно не должно мелькать у владельца:
   // сначала отучаем профиль разворачиваться, потом задаём место и размер ключами, а после
   // запуска окно ещё и уводится через CDP (`hideWindow`).
   if (!headless) {
     const bad = forceOffscreenPlacement(PROFILE_DIR);
-    if (bad) notice("browser", `окно может открыться поверх работы (${basename(PROFILE_DIR)}): ${bad}`);
+    if (bad) notice("browser", `the window may open on top of your work (${basename(PROFILE_DIR)}): ${bad}`);
     ensureWindowWatch();
   }
   // Хвост вкладок прошлых запусков не восстанавливать — ни в окне, ни в скрытом режиме.
   const stale = forgetSession(PROFILE_DIR);
-  if (stale) notice("browser", `профиль ${basename(PROFILE_DIR)} может восстановить старые вкладки: ${stale}`);
+  if (stale) notice("browser", `profile ${basename(PROFILE_DIR)} may restore old tabs: ${stale}`);
   const options = {
     ...(browser.executablePath ? { executablePath: browser.executablePath } : { channel: "chrome" }),
     ...proxyOption(proxy),
@@ -516,15 +516,15 @@ export async function launchProfile(choice = "", { headless = true, profile = PR
     } catch (e) {
       const text = String(e?.message ?? e).split("\n")[0];
       if (attempt === 2) {
-        notice("browser", `браузер не запустился дважды на ${basename(PROFILE_DIR)} (адрес: ${addressLabel(proxy)}): ${first}; потом ${text}`);
-        throw new Error(`браузер не запустился дважды (${browser.describe}, ${basename(PROFILE_DIR)}, адрес: ${addressLabel(proxy)}): ${first}; потом ${text}`);
+        notice("browser", `the browser failed to start twice on ${basename(PROFILE_DIR)} (address: ${addressLabel(proxy)}): ${first}; then ${text}`);
+        throw new Error(`the browser failed to start twice (${browser.describe}, ${basename(PROFILE_DIR)}, address: ${addressLabel(proxy)}): ${first}; then ${text}`);
       }
       first = text;
-      notice("browser", `браузер не встал с первого раза на ${basename(PROFILE_DIR)}, пробую ещё: ${text}`);
+      notice("browser", `the browser did not start on the first try on ${basename(PROFILE_DIR)}, retrying: ${text}`);
       await new Promise((r) => setTimeout(r, LAUNCH_RETRY_MS));
     }
   }
-  log?.(`  адрес: ${addressLabel(proxy)}`);
+  log?.(`  address: ${addressLabel(proxy)}`);
   // Если вкладки всё же восстановились (Opera не послушала Preferences) — закрываем всё,
   // кроме первой: каждая лишняя вкладка — свой renderer и своя память.
   const restored = ctx.pages().slice(1);
@@ -536,8 +536,8 @@ export async function launchProfile(choice = "", { headless = true, profile = PR
         // Уже закрыта.
       }
     }
-    log?.(`  закрыто восстановленных вкладок: ${restored.length}`);
-    notice("browser", `профиль ${basename(PROFILE_DIR)} восстановил ${restored.length} старых вкладок — закрыты`);
+    log?.(`  restored tabs closed: ${restored.length}`);
+    notice("browser", `profile ${basename(PROFILE_DIR)} restored ${restored.length} old tabs — they were closed`);
   }
   // Первая вкладка у постоянного профиля открывается сама — уводим окно сразу, не дожидаясь,
   // пока сборщик откроет свою.
@@ -562,7 +562,7 @@ export async function launchProfile(choice = "", { headless = true, profile = PR
     } catch {
       // Браузер мог упасть сам. ⚠️ Профиль НЕ стираем: в нём вход фейковых аккаунтов.
     }
-    if (await killIfAlive(ctx)) notice("browser", `браузер не закрылся сам — пришлось добить (${basename(PROFILE_DIR)})`);
+    if (await killIfAlive(ctx)) notice("browser", `the browser did not close by itself — had to kill it (${basename(PROFILE_DIR)})`);
   };
   return { ctx, cleanup, describe: browser.describe, profile: PROFILE_DIR };
 }

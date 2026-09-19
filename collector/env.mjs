@@ -38,14 +38,14 @@ let cached = null;
 export function loadEnv() {
   if (cached) return cached;
   if (!existsSync(envPath)) {
-    throw new Error(`нет файла ${envPath} — скопируй .env.local.example в .env.local и заполни`);
+    throw new Error(`no file ${envPath} — copy .env.local.example to .env.local and fill it in`);
   }
   const raw = parseEnvFile(envPath);
 
   const supabaseUrl = (raw.NEXT_PUBLIC_SUPABASE_URL || "").replace(/\/(rest\/v1\/?)?$/, "");
-  if (!supabaseUrl) throw new Error(`в ${envPath} пусто NEXT_PUBLIC_SUPABASE_URL — адрес проекта Supabase обязателен`);
+  if (!supabaseUrl) throw new Error(`NEXT_PUBLIC_SUPABASE_URL is empty in ${envPath} — the Supabase project address is required`);
   const serviceKey = raw.SUPABASE_SERVICE_ROLE_KEY || "";
-  if (!serviceKey) throw new Error(`в ${envPath} пусто SUPABASE_SERVICE_ROLE_KEY — сборщик пишет в базу только этим ключом`);
+  if (!serviceKey) throw new Error(`SUPABASE_SERVICE_ROLE_KEY is empty in ${envPath} — the collector writes to the database only with this key`);
 
   // Пауза между креаторами TikTok — между запусками чистых профилей: TikTok не любит очередь
   // запусков подряд. По умолчанию 8 с (было 20; владелец, 2026-09-08 — обход и без того длинный,
@@ -75,7 +75,7 @@ export function loadEnv() {
   const slotTzRaw = (raw.AMESTAT_SLOT_TZ || "").trim();
   const slotTz = zoneOf(slotTzRaw);
   const slotTzNote = slotTzRaw !== "" && slotTz === null
-    ? `неизвестная зона «${slotTzRaw}» — слоты идут по времени машины`
+    ? `unknown zone "${slotTzRaw}" — slots run on machine time`
     : null;
 
   // Глубина автоматического обхода: 'all' (по умолчанию) — весь список видео, 'week' — 7 дней,
@@ -98,8 +98,8 @@ export function loadEnv() {
   const slotDepthNote = slotDepthRaw === "" || slotDepthOk
     ? null
     : slotDepthRaw === "range"
-      ? "«период» расписанию не годится (он про конкретные числа) — слот, догон и повтор идут с «всё»"
-      : `неизвестная глубина «${slotDepthRaw}» — слот, догон и повтор идут с «всё»`;
+      ? "\"range\" does not suit the schedule (it is about specific dates) — slot, catch-up and retry run with \"all\""
+      : `unknown depth "${slotDepthRaw}" — slot, catch-up and retry run with "all"`;
 
   // Защита TikTok по адресу: сколько запусков ЧИСТОГО профиля разрешено за скользящее окно.
   // Пусто — 6 запусков за 15 минут. Счёт общий на все процессы (файл `logs/tiktok-launches.json`).

@@ -96,21 +96,22 @@
 //     закончит самая долгая. Колонок в базе нет (миграция не накачена) — обход идёт как прежде,
 //     просто без полосы прогресса.
 
-import { get, patch, insertMany, insertReturning, upsert } from "./db.mjs";
+import { count, get, patch, insertMany, insertReturning, upsert } from "./db.mjs";
 import { loadEnv } from "./env.mjs";
 import { collectTikTok } from "./tiktok.mjs";
 import { collectInstagramGraph } from "./instagram-graph.mjs";
 import { collectInstagramWeb } from "./instagram-web.mjs";
 import { collectTikTokComments } from "./comments-tiktok.mjs";
 import { collectInstagramComments } from "./comments-instagram.mjs";
+import { openIgAnchor, fetchIgComments, fetchIgReplies } from "./instagram-direct.mjs";
 import { launchProfile, trimTraffic, ensureProfileCopy, PROFILE_OPERA, PROFILE_TIKTOK } from "./browser.mjs";
 import { rehostImage, isOurs, avatarPath, coverPath } from "./images.mjs";
-import { notice, startRun, reportRun, takeSessionHints } from "./notices.mjs";
+import { notice, noteReturned, noteShort, noteVanished, startRun, reportRun, takeSessionHints } from "./notices.mjs";
 import { ensureRadminOff } from "./radmin.mjs";
 import { takeLaunchSlot } from "./tiktok-gate.mjs";
 import { labelOf, rememberBad, rememberGood } from "./proxies.mjs";
 import { startSyncLog, pushSyncLog, stopSyncLog } from "./synclog.mjs";
-import { depthBounds, depthLabel, normalizeDepth, videoCap } from "./scope.mjs";
+import { depthBounds, depthLabel, normalizeDepth, returnedGone, shortfall, vanishedVideos, videoCap } from "./scope.mjs";
 import {
   PACE_MIN_SAMPLES,
   calibrateComments,
@@ -188,7 +189,85 @@ export function splitLanes(creators) {
  */
 export function pauseAfter(lane, error = null) {
   if (lane !== "tt") return false;
-  return !(error && /профиль не найден/i.test(String(error)));
+  // Оба языка: строки ошибок переводятся на английский (17.09), пауза не должна вернуться на полпути.
+  return !(error && /profile not found/i.test(String(error)));
+}
+
+/**
+ * Ошибка креатора значит «профиль удалён» (миграция v33, владелец 2026-09-17: «креаторы тоже
+ * помечались как удалённые»). Так пишут TikTok («профиль не найден: @…») и Instagram через
+ * браузер («Instagram: профиль не найден: @…»). ⚠️ Graph API пишет «профиль не найден или не
+ * бизнес-аккаунт» — это не удаление, и двоеточие сразу после «найден» его отсекает.
+ * Чистая функция: её проверяют тесты.
+ */
+export function profileGone(error) {
+  // Оба языка: строки ошибок переводятся на английский (17.09), и отметка не имеет права
+  // молча погаснуть на полпути перевода.
+  return /profile not found: @/i.test(String(error ?? ""));
+}
+
+// Отметка «похоже удалено» (миграция v33) — на видео и на креаторе. Ставится один раз, датой
+// первого подозрения, и снимается, когда видео снова в списке или профиль снова собрался.
+// 🔴 Все три записи — своими запросами и в try/catch: отметка не имеет права свалить обход или
+// оставить креатора без снимка, если база отказала или колонки ещё нет.
+
+const ID_CHUNK = 100;   // id в одном `in.(…)` — чтобы адрес запроса не разросся
+
+/** `videos.gone_at` — поставить у пропавших, у кого её ещё нет (дата первого подозрения). */
+async function markVideosGone(creatorId, gone, takenAt, log) {
+  const ids = (gone ?? []).map((v) => String(v.id)).filter(Boolean);
+  if (ids.length === 0) return;
+  try {
+    for (let i = 0; i < ids.length; i += ID_CHUNK) {
+      const list = ids.slice(i, i + ID_CHUNK).map(encodeURIComponent).join(",");
+      await patch(`videos?creator_id=eq.${encodeURIComponent(creatorId)}&gone_at=is.null&id=in.(${list})`, { gone_at: takenAt });
+    }
+    log?.(`  "gone" mark set on ${ids.length} videos (where it was already there the date was not moved)`);
+  } catch (e) {
+    log?.(`  the "gone" mark on videos was not written: ${short(e)}`);
+    notice("db", `the "gone" mark on videos was not written: ${short(e)}`);
+  }
+}
+
+/** `videos.gone_at` — снять у тех, кто снова встретился в списке. Годится любой список. */
+async function clearVideosGone(creatorId, seenIds, log) {
+  if (!Array.isArray(seenIds) || seenIds.length === 0) return;
+  try {
+    const rows = await get(`videos?select=id&creator_id=eq.${encodeURIComponent(creatorId)}&gone_at=not.is.null&limit=${DB_PAGE}`);
+    const back = returnedGone(rows.map((r) => r.id), seenIds);
+    if (back.length === 0) return;
+    for (let i = 0; i < back.length; i += ID_CHUNK) {
+      const list = back.slice(i, i + ID_CHUNK).map(encodeURIComponent).join(",");
+      await patch(`videos?id=in.(${list})`, { gone_at: null });
+    }
+    log?.(`  "gone" mark cleared from ${back.length} videos — they are in the list again`);
+  } catch (e) {
+    log?.(`  the "gone" mark on videos was not cleared: ${short(e)}`);
+    notice("db", `the "gone" mark on videos was not cleared: ${short(e)}`);
+  }
+}
+
+/**
+ * `creators.gone_at` — поставить (`on`, только если пусто) или снять.
+ * Профиля нет — нет и его видео (владелец, 2026-09-17: «в топе висит пара видео, которые
+ * удалены, но этого не видно»): вместе с креатором отметку получают все его видео без неё.
+ * Список у такого креатора не приходит, и сторож пропавших сам бы их не пометил никогда.
+ * Снятие — только с креатора: видео снимает `clearVideosGone` по списку, когда профиль вернётся.
+ */
+async function setCreatorGone(creator, on, log) {
+  try {
+    if (on) {
+      const at = new Date().toISOString();
+      await patch(`creators?id=eq.${creator.id}&gone_at=is.null`, { gone_at: at });
+      await patch(`videos?creator_id=eq.${encodeURIComponent(creator.id)}&gone_at=is.null`, { gone_at: at });
+      log?.("  \"profile gone\" mark set on the creator and their videos (where it was already there the date was not moved)");
+    } else {
+      await patch(`creators?id=eq.${creator.id}&gone_at=not.is.null`, { gone_at: null });
+    }
+  } catch (e) {
+    log?.(`  the "profile gone" mark was not written: ${short(e)}`);
+    notice("db", `@${creator.handle}: the "profile gone" mark was not written — ${short(e)}`);
+  }
 }
 
 /**
@@ -225,9 +304,9 @@ function pickCollector(creator, env, depth, bounds, ctx, scope, pool, onPage = n
       return (log) => collectInstagramGraph(creator, { token: env.igToken, userId: env.igUserId, depth, bounds, log });
     }
     // Браузер полосы уже поднят и уже с перехватом: свой модуль не заводит.
-    return (log) => collectInstagramWeb(creator, { browserChoice: env.browser, depth, bounds, ctx, scope, proxy: laneProxy(env), onPage, log });
+    return (log) => collectInstagramWeb(creator, { browserChoice: env.browser, depth, bounds, ctx, scope, proxy: laneProxy(env), onPage, direct: env.direct === true, directPauseMs: env.directPauseMs, log });
   }
-  throw new Error(`неизвестная площадка: ${platform}`);
+  throw new Error(`unknown platform: ${platform}`);
 }
 
 /**
@@ -241,8 +320,48 @@ async function trackedVideos(creatorId, log) {
     const rows = await get(`videos?select=id,published_at&creator_id=eq.${encodeURIComponent(creatorId)}&or=(ours.eq.true,watch.eq.true)`);
     return rows.map((r) => ({ id: String(r.id), publishedAt: r.published_at ?? null }));
   } catch (e) {
-    log?.(`  отслеживаемые видео не спросились: ${short(e)}`);
-    notice("db", `отслеживаемые видео не спросились: ${short(e)}`);
+    log?.(`  the tracked videos could not be read: ${short(e)}`);
+    notice("db", `the tracked videos could not be read: ${short(e)}`);
+    return null;
+  }
+}
+
+/**
+ * Сколько видео этого креатора УЖЕ лежит в базе. Нужно сторожу пустого списка (`shortfall`):
+ * без этого «пришло 0 видео» неотличимо от «их и не было».
+ * База не ответила — `null`, и сторож тогда не судит вовсе: слепой сторож хуже отсутствующего.
+ */
+async function videosInDbCount(creatorId, log) {
+  try {
+    return await count(`videos?creator_id=eq.${encodeURIComponent(creatorId)}`);
+  } catch (e) {
+    log?.(`  the previous videos could not be counted: ${short(e)}`);
+    notice("db", `the previous videos could not be counted: ${short(e)}`);
+    return null;
+  }
+}
+
+const DB_PAGE = 1000;   // потолок ответа PostgREST: больше строк за раз база не отдаёт
+
+/**
+ * Видео креатора из базы поимённо — сторожу пропавших (`vanishedVideos`).
+ * 🔴 Страницами по тысяче со вторым ключом сортировки: одним запросом у креатора с тысячей видео
+ * «остальные» молча не приехали бы — и оказались бы «пропавшими», то есть записанными в
+ * удалённые навсегда. Ровно те грабли, что уже были 09.09 и 11.09.
+ * База не ответила — `null`: сторож не судит.
+ */
+async function videosInDbList(creatorId, log) {
+  const out = [];
+  try {
+    for (let offset = 0; ; offset += DB_PAGE) {
+      const rows = await get(`videos?select=id,published_at,url&creator_id=eq.${encodeURIComponent(creatorId)}&order=published_at.desc.nullslast,id.asc&limit=${DB_PAGE}&offset=${offset}`);
+      for (const r of rows) out.push({ id: String(r.id), publishedAt: r.published_at ?? null, url: r.url ?? null });
+      if (rows.length < DB_PAGE) break;
+    }
+    return out;
+  } catch (e) {
+    log?.(`  the previous videos could not be read: ${short(e)}`);
+    notice("db", `the previous videos could not be read — the vanished ones were not checked: ${short(e)}`);
     return null;
   }
 }
@@ -319,7 +438,7 @@ async function estimateWork(creators, env, depth, bounds, flags, timing) {
     comments: flags.comments,
     replies: flags.replies,
     allVideos: flags.allVideos,
-    // Прямой путь включён — шаг комментариев TikTok считается по дешёвым единицам (`*.direct`):
+    // Прямой путь включён — шаг комментариев обеих площадок считается по дешёвым единицам (`*.direct`):
     // иначе оценка обещала бы часы там, где обход укладывается в минуты.
     direct: env.direct === true,
     commentsMax: env.commentsMax,
@@ -346,7 +465,7 @@ function laneBrowser(kind, env) {
         if (kind === "tt") {
           // Вторая копия профиля под эту полосу: одна папка — один процесс браузера.
           const { copied, from, to } = ensureProfileCopy(cfg.profile, PROFILE_OPERA);
-          if (copied) log(`  заведена вторая копия профиля: ${to} (из ${from}, без кэшей и сессий вкладок)`);
+          if (copied) log(`  a second profile copy was created: ${to} (from ${from}, without caches and tab sessions)`);
         }
         const browser = await launchProfile(env.browser, { headless: cfg.headless, profile: cfg.profile, proxy: laneProxy(env), log });
         let traffic = null;
@@ -355,10 +474,10 @@ function laneBrowser(kind, env) {
         try {
           traffic = await trimTraffic(browser.ctx, cfg.hosts, { log });
         } catch (e) {
-          log(`  лишнее отсечь не вышло: ${short(e)}`);
+          log(`  the extra requests could not be trimmed: ${short(e)}`);
         }
         started = { ...browser, traffic };
-        log(`  браузер полосы: ${browser.describe}, профиль ${basename(cfg.profile)}${cfg.headless ? "" : ", окно настоящее — скрытому TikTok комментарии не отдаёт"}`);
+        log(`  lane browser: ${browser.describe}, profile ${basename(cfg.profile)}${cfg.headless ? "" : ", the window is a real one — TikTok gives no comments to a hidden one"}`);
         return started.ctx;
       } catch (e) {
         broken = short(e);
@@ -372,12 +491,12 @@ function laneBrowser(kind, env) {
     async close(log) {
       if (!started) return;
       const seen = started.traffic?.() ?? null;
-      if (seen) log(`лишних запросов отсечено ${seen.aborted}, пропущено ${seen.passed}`);
+      if (seen) log(`extra requests trimmed ${seen.aborted}, let through ${seen.passed}`);
       try {
         await started.cleanup();
       } catch (e) {
         // Браузер мог упасть сам — на итог обхода это не влияет, но сказать стоит.
-        log(`браузер полосы не закрылся: ${short(e)}`);
+        log(`the lane browser did not close: ${short(e)}`);
       }
       started = null;
     },
@@ -401,8 +520,8 @@ async function coversInDb(ids, log) {
     }
   } catch (e) {
     const text = String(e?.message ?? e).split("\n")[0];
-    log?.(`  прежние обложки не спросились: ${text}`);
-    notice("db", `прежние обложки не спросились: ${text}`);
+    log?.(`  the previous covers could not be read: ${text}`);
+    notice("db", `the previous covers could not be read: ${text}`);
   }
   return out;
 }
@@ -417,12 +536,12 @@ async function rehostInstagram(creator, profile, videos, log) {
   // Аватар перекладывается каждый обход: путь в бакете один и тот же, `x-upsert` кладёт
   // поверх — значит сменившаяся картинка профиля обновится на сайте сама.
   let avatarUrl = null;
-  let avatarNote = "нет";
+  let avatarNote = "none";
   if (creator.avatar_custom !== false) {
-    avatarNote = "свой";  // владелец загрузил картинку — аватар площадки её не перебивает
+    avatarNote = "own";  // владелец загрузил картинку — аватар площадки её не перебивает
   } else if (profile.avatar) {
     avatarUrl = await rehostImage(profile.avatar, avatarPath(creator.id), { log });
-    avatarNote = avatarUrl ? "ок" : "не вышло";
+    avatarNote = avatarUrl ? "ok" : "failed";
   }
 
   const covers = new Map();
@@ -448,7 +567,7 @@ async function rehostInstagram(creator, profile, videos, log) {
       if (i + COVERS_PARALLEL < todo.length) await sleep(COVERS_PAUSE_MS);
     }
   }
-  log?.(`  картинки: аватар ${avatarNote}, обложек переложено ${done}, не вышло ${failed}`);
+  log?.(`  images: avatar ${avatarNote}, covers rehosted ${done}, failed ${failed}`);
   return { avatarUrl, covers };
 }
 
@@ -468,8 +587,8 @@ async function syncedCounts(ids, log) {
       }
     }
   } catch (e) {
-    log?.(`  прежние числа комментариев не спросились: ${short(e)}`);
-    notice("db", `прежние числа комментариев не спросились: ${short(e)}`);
+    log?.(`  the previous comment counts could not be read: ${short(e)}`);
+    notice("db", `the previous comment counts could not be read: ${short(e)}`);
   }
   return out;
 }
@@ -529,24 +648,27 @@ export function pickComments(videos, known, sinceMs = null, { allVideos = false,
 }
 
 /**
- * Комментарии одного видео TikTok ПРЯМЫМ запросом — без браузера (`direct.mjs`).
+ * Комментарии одного видео ПРЯМЫМ запросом — у TikTok без браузера (`direct.mjs`), у Instagram
+ * из вкладки-якоря под сессией (`instagram-direct.mjs`).
+ * `via` — откуда брать: `{ comments(opts), replies(rootId, opts) }`. Всё остальное — даровые
+ * ответы, запросы веток, потолки, отбор — у площадок одинаково и живёт здесь одним местом
+ * (владелец, 2026-09-16: «как и в случае с TikTok»).
  * Отдаёт `{ ok, list, why, ms, headMs, branches }`; `ok: false` значит «прямой не дал» — и тогда
  * то же видео берёт браузерный путь, слово в слово прежний. `headMs` — сколько из `ms` ушло на
  * корневые: остальное — ветки. Порознь их меряет оценка (`comments.page.direct` и
  * `replies.branch.direct`).
  *
- * Ветки: ответы, которые TikTok положил в корневой даром, уже приехали вместе с ним и не стоили
- * ничего; за остальными идёт отдельный запрос — по одному на ветку, и только если `replies > 0`
- * и даровых меньше потолка. `expandReplies: false` (просьба «без веток») отменяет ровно эти
- * запросы, как отменяла клики.
+ * Ветки: ответы, которые площадка положила в корневой даром, уже приехали вместе с ним и не
+ * стоили ничего; за остальными идёт отдельный запрос — по одному на ветку, и только если
+ * `replies > 0` и даровых меньше потолка. `expandReplies: false` (просьба «без веток») отменяет
+ * ровно эти запросы, как отменяла клики.
  * ⚠️ Ни одна упавшая ветка видео не роняет: беда считается, но строки корневых уже собраны.
  * На браузер видео уходит только если не отработала НИ ОДНА ветка — тогда прямому пути на этом
  * видео веры нет.
  */
-async function directComments(video, creator, env, flags, log) {
+async function directComments(video, creator, env, flags, log, via) {
   const started = Date.now();
-  const handle = creator.handle;
-  const head = await fetchComments(video.id, handle, {
+  const head = await via.comments({
     max: env.commentsMax,
     expected: video.comments ?? null,
     pauseMs: env.directPauseMs,
@@ -568,15 +690,15 @@ async function directComments(video, creator, env, flags, log) {
       // Ветка уже целиком приехала даром — запрос за ней был бы платой ни за что.
       if (countOf(root.id) >= want) continue;
       asked++;
-      const branch = await fetchReplies(video.id, root.id, handle, { max: env.repliesMax, pauseMs: env.directPauseMs });
+      const branch = await via.replies(root.id, { max: env.repliesMax, pauseMs: env.directPauseMs });
       if (!branch.ok) { failedBranches++; continue; }
       gotBranches++;
       for (const r of branch.replies) if (!replies.has(r.id)) replies.set(r.id, r);
     }
     if (asked > 0 && gotBranches === 0) {
-      return { ok: false, list: [], why: `ветки не отдались (${failedBranches} из ${asked})`, ms: Date.now() - started, headMs: head.ms, branches: asked };
+      return { ok: false, list: [], why: `branches did not return (${failedBranches} of ${asked})`, ms: Date.now() - started, headMs: head.ms, branches: asked };
     }
-    if (failedBranches > 0) log?.(`    прямой запрос: не отдались ${failedBranches} веток из ${asked} — остальное собрано`);
+    if (failedBranches > 0) log?.(`    direct request: ${failedBranches} of ${asked} branches did not return — the rest was collected`);
   }
 
   // Потолок ответов на ветку и отбор «только под собранными корневыми» — та же чистая функция,
@@ -592,8 +714,10 @@ async function directComments(video, creator, env, flags, log) {
  *
  * Правила шага:
  *   • кого берём — решает `pickComments` (свежесть, наличие комментариев, «число не менялось»);
- *   • ⚠️ у TikTok каждое видео СНАЧАЛА пробуется прямым запросом (`directComments`), и только
- *     не давшее уходит браузеру. У Instagram прямого пути нет вовсе — там всё как было;
+ *   • ⚠️ каждое видео СНАЧАЛА пробуется прямым запросом (`directComments`), и только не давшее
+ *     уходит браузеру. У TikTok прямой идёт из Node без браузера; у Instagram — из вкладки-якоря
+ *     под сессией фейка (`openIgAnchor`), одной на браузер полосы: из Node Instagram не отвечает
+ *     (владелец, 2026-09-16: «комбинированный обход, как и в случае с TikTok»);
  *   • браузер ОДИН НА ПОЛОСУ и поднимается ЛЕНИВО — первым видео, которому он понадобился:
  *     профиль постоянный, и второй процесс на этой папке не встанет. Все видео сняты прямым —
  *     окно не открывается вовсе. TikTok водится с настоящим окном (в скрытом он отдаёт пустые
@@ -636,25 +760,25 @@ async function collectComments(creator, videos, env, lane, flags, depth, bounds,
   const windowLabel = depthLabel(depth, since, until);
   const known = await syncedCounts(videos.map((v) => v.id), log);
   const { picked, unchanged, foreign, watched } = pickComments(videos, known, since, { allVideos: flags.allVideos, untilMs: until });
-  const same = unchanged.length > 0 ? `, без изменений: ${unchanged.length} видео` : "";
+  const same = unchanged.length > 0 ? `, unchanged: ${unchanged.length} videos` : "";
   // Чужие и жёлтые считаются порознь: у обоих текстов нет, но жёлтое мы смотрим намеренно.
   const skipped = [
-    foreign.length > 0 ? `не наших: ${foreign.length}` : null,
-    watched.length > 0 ? `жёлтых: ${watched.length}` : null,
+    foreign.length > 0 ? `not ours: ${foreign.length}` : null,
+    watched.length > 0 ? `yellow: ${watched.length}` : null,
   ].filter(Boolean).join(", ");
   const alien = skipped ? `, ${skipped}` : "";
-  log?.(`  комментарии: окно — ${windowLabel}`);
+  log?.(`  comments: window — ${windowLabel}`);
   // 🔴 Точное число видео шага известно только здесь: до `syncedCounts` неизвестно, у кого
   // счётчик не изменился. Оценка пересчитывается на него — по каждому креатору, а не по первому,
   // и в том числе на ноль: шага у этого креатора не будет вовсе.
   work?.revise?.({ commentVideos: picked.length, counts: picked.map((v) => v.comments ?? null) });
   if (picked.length === 0) {
-    log?.(`  комментарии: видео 0, собрано 0, не вышло 0 (видео с новыми комментариями нет в окне «${windowLabel}»${same}${alien})`);
+    log?.(`  comments: videos 0, collected 0, failed 0 (no videos with new comments in the window "${windowLabel}"${same}${alien})`);
     return nothing();
   }
-  if (unchanged.length > 0) log?.(`  комментарии: без изменений: ${unchanged.length} видео — их не открываем`);
-  if (skipped) log?.(`  комментарии: ${skipped} — тексты не снимаем (нужны — просьба «и не наши видео»)`);
-  if (flags.allVideos) log?.(`  комментарии: просьба «и не наши видео» — снимаем у всех видео окна`);
+  if (unchanged.length > 0) log?.(`  comments: unchanged: ${unchanged.length} videos — we do not open them`);
+  if (skipped) log?.(`  comments: ${skipped} — texts are not collected (if needed, ask with "videos that are not ours too")`);
+  if (flags.allVideos) log?.(`  comments: request "videos that are not ours too" — collecting from every video in the window`);
 
   // 🔴 Браузер полосы поднимается ЛЕНИВО — первым видео, которому он понадобился. Все видео
   // сняты прямым запросом — окно не открывается вовсе (владелец, 2026-09-10). Беда подъёма
@@ -668,14 +792,53 @@ async function collectComments(creator, videos, env, lane, flags, depth, bounds,
       return ctx;
     } catch (e) {
       ctxBroken = short(e);
-      notice("comments", `@${creator.handle}: браузер для комментариев не поднялся — ${ctxBroken}`);
+      notice("comments", `@${creator.handle}: the browser for comments did not start — ${ctxBroken}`);
       throw new Error(ctxBroken);
     }
   };
 
-  // Прямой путь есть только у TikTok: у Instagram `direct.mjs` не при чём вовсе.
-  const useDirect = env.direct && platform === "tiktok";
-  if (!useDirect && platform === "tiktok") log?.("  комментарии: прямые запросы выключены (AMESTAT_DIRECT=off) — идём браузером");
+  // Прямой путь есть у обеих площадок; `AMESTAT_DIRECT=off` возвращает на браузер обе разом.
+  const useDirect = env.direct === true;
+  if (!useDirect) log?.("  comments: direct requests are off (AMESTAT_DIRECT=off) — going by browser");
+
+  // 🔴 Якорь Instagram — одна вкладка на браузер полосы, общая со списком и другими креаторами
+  // (`openIgAnchor` отдаёт живую повторно); здесь берётся ЛЕНИВО первым видео и не закрывается —
+  // закроется с браузером полосы. Не открылся (или попал на вход) — беда запоминается, и все
+  // видео шага идут браузером без второй попытки: так же, как с подъёмом самого браузера выше.
+  let anchor = null, anchorBroken = null;
+  const getAnchor = async () => {
+    if (anchor) return anchor;
+    if (anchorBroken) return null;
+    let opened = null;
+    try {
+      opened = await openIgAnchor(await getCtx(), { log });
+    } catch (e) {
+      opened = { ok: false, why: short(e) };
+    }
+    if (!opened.ok) {
+      anchorBroken = opened.why;
+      log?.(`  comments: the Instagram anchor is no good (${anchorBroken}) — every video by browser`);
+      return null;
+    }
+    anchor = opened;
+    return anchor;
+  };
+  // Откуда прямой путь берёт комментарии этого видео — у площадок разные адреса, логика одна.
+  const viaFor = (video) => (platform === "instagram"
+    ? {
+      comments: async (opts) => {
+        const a = await getAnchor();
+        return a ? fetchIgComments(a, video.id, opts) : { ok: false, why: `anchor: ${anchorBroken}`, comments: [], pages: 0, ms: 0, total: null };
+      },
+      replies: async (rootId, opts) => {
+        const a = await getAnchor();
+        return a ? fetchIgReplies(a, video.id, rootId, opts) : { ok: false, why: `anchor: ${anchorBroken}`, replies: [], pages: 0, ms: 0 };
+      },
+    }
+    : {
+      comments: (opts) => fetchComments(video.id, creator.handle, opts),
+      replies: (rootId, opts) => fetchReplies(video.id, rootId, creator.handle, opts),
+    });
 
   // Время меряется от ПЕРВОГО видео: подъём браузера полосы стоит своих секунд, и они уже
   // сосчитаны в шаге списка — второй раз в цену видео они попадать не должны.
@@ -699,7 +862,7 @@ async function collectComments(creator, videos, env, lane, flags, depth, bounds,
       let list = null;
       // --- прямой запрос ----------------------------------------------------------------
       if (useDirect) {
-        const one = await directComments(video, creator, env, flags, log);
+        const one = await directComments(video, creator, env, flags, log, viaFor(video));
         if (one.ok) {
           list = one.list;
           directVideos++;
@@ -718,7 +881,7 @@ async function collectComments(creator, videos, env, lane, flags, depth, bounds,
         } else {
           fellBack++;
           firstWhy = firstWhy ?? one.why;
-          log?.(`    видео ${video.id}: прямой не дал (${one.why}) — иду браузером`);
+          log?.(`    video ${video.id}: the direct request gave nothing (${one.why}) — going by browser`);
         }
       }
       // --- откат: браузер, слово в слово прежний ------------------------------------------
@@ -762,8 +925,8 @@ async function collectComments(creator, videos, env, lane, flags, depth, bounds,
       answers += list.filter((c) => c.parentId).length;
     } catch (e) {
       failed++;
-      log?.(`    видео ${video.id}: ${short(e)}`);
-      notice("comments", `@${creator.handle} видео ${video.id}: ${short(e)}`);
+      log?.(`    video ${video.id}: ${short(e)}`);
+      notice("comments", `@${creator.handle} video ${video.id}: ${short(e)}`);
     }
     // Видео пройдено — двигаем полосу прогресса, чем бы оно ни кончилось: работа потрачена
     // и на упавшем. Вместе с ним уходит замер: сколько это видео стоило, каким путём и в каких
@@ -782,10 +945,13 @@ async function collectComments(creator, videos, env, lane, flags, depth, bounds,
   }
   const secs = (ms) => Math.round(ms / 1000);
   if (useDirect) {
-    log?.(`  комментарии: прямым запросом ${directVideos} видео (${secs(directMs)} с), браузером ${browserVideos}${fellBack > 0 ? ` (прямой не дал: ${firstWhy})` : ""}${browserVideos > 0 ? ` (${secs(browserMs)} с)` : ""}${browserVideos === 0 ? " — браузер не понадобился" : ""}`);
-    if (fellBack > 0) notice("direct", `@${creator.handle}: прямой запрос не дал на ${fellBack} видео из ${picked.length} — ${firstWhy}`);
+    // У Instagram вкладка-якорь открывается всегда — «браузер не понадобился» было бы неправдой;
+    // не понадобились страницы публикаций с прокруткой.
+    const spared = platform === "instagram" ? " — no post pages were opened" : " — the browser was not needed";
+    log?.(`  comments: by direct request ${directVideos} videos (${secs(directMs)} s), by browser ${browserVideos}${fellBack > 0 ? ` (the direct request gave nothing: ${firstWhy})` : ""}${browserVideos > 0 ? ` (${secs(browserMs)} s)` : ""}${browserVideos === 0 ? spared : ""}`);
+    if (fellBack > 0) notice("direct", `@${creator.handle}: the direct request gave nothing on ${fellBack} of ${picked.length} videos — ${firstWhy}`);
   }
-  log?.(`  комментарии: видео ${picked.length}, собрано ${rows} (ответов ${answers}${flags.replies ? "" : ", ветки не раскрывались"}), не вышло ${failed}${same}`);
+  log?.(`  comments: videos ${picked.length}, collected ${rows} (replies ${answers}${flags.replies ? "" : ", branches were not expanded"}), failed ${failed}${same}`);
   return {
     videos: picked.length,
     ms: Date.now() - startedVideos,
@@ -817,20 +983,20 @@ async function collectOne(creator, env, depth, bounds, lane, flags, log, pool = 
   if (flags.videos === "ours") {
     const tracked = await trackedVideos(creator.id, log);
     if (tracked === null) {
-      log?.("  охват: только наши — список отслеживаемых не спросился, идём по всему списку");
+      log?.("  scope: ours only — the tracked list could not be read, going over the whole list");
     } else {
       scope.videos = "ours";
       scope.trackedIds = tracked.map((t) => t.id);
       const dates = tracked.map((t) => t.publishedAt).filter(Boolean).sort();
-      const oldest = dates.length > 0 ? `, самое старое от ${String(dates[0]).slice(0, 10)}` : "";
-      log?.(`  охват: только наши — отслеживаемых видео ${scope.trackedIds.length}${oldest}${scope.trackedIds.length === 0 ? " (берём только первую страницу списка)" : ""}`);
+      const oldest = dates.length > 0 ? `, the oldest from ${String(dates[0]).slice(0, 10)}` : "";
+      log?.(`  scope: ours only — tracked videos ${scope.trackedIds.length}${oldest}${scope.trackedIds.length === 0 ? " (taking only the first page of the list)" : ""}`);
     }
   }
 
   const collect = pickCollector(creator, env, depth, bounds, ctx, scope, pool, work?.scroll ? () => work.scroll() : null);
   const startedList = Date.now();
   work?.listStart?.();
-  const { profile, videos, pages } = await collect(log);
+  const { profile, videos, pages, rawCount = null, seenIds = null, listEnded = false } = await collect(log);
   const listMs = Date.now() - startedList;
   // 🔴 Список собран — предположения об этом креаторе кончились: сколько шаг стоил, известно
   // точно, и сколько у него видео — тоже. Оценка пересчитывается здесь (владелец, 2026-09-10:
@@ -839,6 +1005,58 @@ async function collectOne(creator, env, depth, bounds, lane, flags, log, pool = 
   // Кандидаты на комментарии считаются ТЕМ ЖЕ правилом, что и сам шаг (`pickComments`), только
   // без «без изменений»: прежние счётчики спросятся уже внутри шага, и там оценка уточнится ещё
   // раз. Оценка сверху лучше, чем полоса, доезжающая до конца и стоящая.
+  // 🔴 Сторож недобора (владелец, 2026-09-16): список пришёл — сверяем его с тем, что мы уже
+  // знаем. Креатора сторож НЕ роняет: снимок профиля уже стоит записать, а то, что видео не
+  // обновились, владелец прочтёт в письме и в логе.
+  // Судим по тому, что площадка ОТДАЛА (`rawCount`, `seenIds`), а не по оставшемуся после
+  // глубины и потолка. Источник без этих полей (Graph API) — берём отобранное и не судим о
+  // пропавших вовсе: `listEnded` у него ложь.
+  const raw = Number.isFinite(Number(rawCount)) ? Number(rawCount) : videos.length;
+  const knownTotal = await videosInDbCount(creator.id, log);
+  // Законченный список судит каждое видео поимённо — пустой тоже (владелец, 2026-09-17: «любое
+  // видео, которое не вернуло статистику, — удалено, без привязки к аккаунту»).
+  const judgeVanished = listEnded === true && Array.isArray(seenIds);
+  if (knownTotal !== null) {
+    const gap = shortfall({ rawCount: raw, knownTotal, profileCount: profile.videosCount ?? null, listEnded });
+    // Пустой законченный список при непустой базе — это пропажа всех видео, и о ней скажет сторож
+    // пропавших: одно письмо на видео навсегда. «Список пуст» поверх него приходил бы каждые сутки
+    // о том же самом (@orandocom.lis, 17.09). Незаконченный пустой список — беда списка, письмо остаётся.
+    if (gap && gap.kind === "empty" && judgeVanished && knownTotal > 0) {
+      log?.(`  shortfall: ${gap.text} — every video is judged by name below, no separate notice`);
+    } else if (gap) {
+      log?.(`  ⚠ shortfall: ${gap.text}`);
+      // «Короче профиля» — одно письмо, пока расхождение не пройдёт (владелец, 2026-09-17: «если
+      // один раз пришло, то второй не нужно»). Лог — каждый обход.
+      if (gap.kind !== "short" || noteShort(creator.id, { short: true })) notice("missing", `@${creator.handle}: ${gap.text}`);
+      else log?.("  already reported for this creator — no repeat until the list catches up with the profile");
+    }
+  }
+  // Законченный список догнал профиль — эпизод «короче профиля» кончился, следующий снова даст письмо.
+  const byProfile = profile.videosCount === null || profile.videosCount === undefined ? NaN : Number(profile.videosCount);
+  if (listEnded === true && Number.isFinite(byProfile) && raw >= byProfile) noteShort(creator.id, { healed: true });
+  // Вернувшиеся — по ЛЮБОМУ списку: присутствие видно и в недочитанном. Стираются из памяти
+  // пропавших, чтобы вторая пропажа снова дала письмо (владелец, 2026-09-16). Источник без
+  // `seenIds` (Graph API) — берём отобранное: оно тоже точно есть в профиле.
+  const present = Array.isArray(seenIds) ? seenIds : videos.map((v) => v.id);
+  noteReturned(creator.handle, present, { log });
+  // Отметка в базе снимается тем же правилом (миграция v33): видео снова в списке — не удалено.
+  await clearVideosGone(creator.id, present, log);
+  // Пропавшие поимённо — только у законченного списка: иначе «не нашлось» значит «не долистали».
+  // Одно письмо на видео, дальше только лог (`noteVanished`, владелец, 2026-09-16).
+  if (judgeVanished) {
+    const known = knownTotal === 0 ? [] : await videosInDbList(creator.id, log);
+    if (known !== null) {
+      const verdict = vanishedVideos({ known, seenIds, listEnded });
+      if (verdict.judged && verdict.gone.length > 0) {
+        noteVanished(creator.handle, verdict.gone, { log });
+        // Тот же вердикт — в базу (миграция v33): сайт покажет видео затемнённым со значком.
+        await markVideosGone(creator.id, verdict.gone, new Date().toISOString(), log);
+      }
+    }
+  } else if (knownTotal !== null && knownTotal > 0) {
+    log?.("  not looking for vanished ones: the list was not read to the end (depth, cap or scope)");
+  }
+
   const win = commentsWindow({ bounds });
   const roughPick = flags.comments
     ? pickComments(videos, new Map(), win.since, { allVideos: flags.allVideos, untilMs: win.until }).picked
@@ -886,7 +1104,7 @@ async function collectOne(creator, env, depth, bounds, lane, flags, log, pool = 
     // ссылаются на `videos`, значит upsert выше должен пройти первым.
     // ⚠️ `comments: false` пропускает шаг целиком — вместе с запросом прежних чисел.
     if (flags.comments) commentsRun = await collectComments(creator, videos, env, lane, flags, depth, bounds, log, work);
-    else log?.("  комментарии: пропущены (просьба без комментариев)");
+    else log?.("  comments: skipped (the request came without comments)");
   }
 
   // Своя картинка владельца сильнее аватара площадки.
@@ -903,6 +1121,8 @@ async function collectOne(creator, env, depth, bounds, lane, flags, log, pool = 
     sync_error: null,
     ...avatar,
   });
+  // Профиль собрался — значит, он на месте: отметка «удалён» снимается (миграция v33).
+  await setCreatorGone(creator, false, log);
 
   return {
     videos: videos.length,
@@ -973,14 +1193,14 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
     // База недоступна с первого шага — обхода не будет, но исключением никого не роняем:
     // и CLI, и резидент должны увидеть внятную строку, а не стек.
     const text = String(e?.message ?? e).split("\n")[0];
-    log(`обход не начался: ${text}`);
-    notice("run", `обход не начался: ${text}`);
+    log(`the run did not start: ${text}`);
+    notice("run", `the run did not start: ${text}`);
     // Строки в базе нет, но сказать владельцу надо тем более: сайт тоже читает из базы.
     await reportRun({ runId: null, trigger, depth, depthFrom, depthTo, done: 0, failed: 0, slotLabel, log });
     return { runId: null, ok: false, done: 0, failed: 0, error: text, failures, depth, log: lines.join("\n") };
   }
-  const who = failedOnly ? "только неудавшиеся" : creatorId ? `креатор ${creatorId}` : "все";
-  log(`обход #${runId} (${trigger}, ${who}, глубина ${label}, комментарии ${comments ? "да" : "нет"}, ветки ${replies ? "да" : "нет"}${allVideos ? ", и не наши видео" : ""}${videos === "ours" ? " · только наши" : ""}${maxVideos !== null ? ` · до ${maxVideos} видео` : ""}${env.direct ? "" : " · прямые запросы выключены"})`);
+  const who = failedOnly ? "only those with an error" : creatorId ? `creator ${creatorId}` : "all";
+  log(`run #${runId} (${trigger}, ${who}, depth ${label}, comments ${comments ? "yes" : "no"}, replies ${replies ? "yes" : "no"}${allVideos ? ", including videos that are not ours" : ""}${videos === "ours" ? " · ours only" : ""}${maxVideos !== null ? ` · up to ${maxVideos} videos` : ""}${env.direct ? "" : " · direct requests are off"})`);
 
   // Просьбы забраны этим обходом — сайт перестаёт показывать «в очереди».
   if (requestIds?.length && runId) {
@@ -989,8 +1209,8 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
     } catch (e) {
       // Не пометилась просьба — обход всё равно идёт; кнопка на сайте просто задержится.
       const text = String(e?.message ?? e).split("\n")[0];
-      log(`просьбы не помечены: ${text}`);
-      notice("db", `просьбы не помечены взятыми: ${text}`);
+      log(`the requests were not marked: ${text}`);
+      notice("db", `the requests were not marked as taken: ${text}`);
     }
   }
 
@@ -1010,7 +1230,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
     const where = `${creatorId ? `&id=eq.${creatorId}` : ""}${failedOnly ? "&sync_error=not.is.null" : ""}${skip}`;
     const creators = await get(`creators?select=${CREATOR_FIELDS}${where}&order=sort_order.asc,added_at.asc`);
     if (creators.length === 0) {
-      log(failedOnly ? "ни у кого нет ошибки — повторять нечего" : creatorId ? "креатор не найден, в архиве или помечен «не обновлять»" : "в базе нет ни одного креатора, которого нужно обходить");
+      log(failedOnly ? "nobody has an error — there is nothing to retry" : creatorId ? "the creator is not found, archived or marked \"do not update\"" : "there is not a single creator in the database to go over");
     }
 
     // Полосы известны заранее: по ним считается и оценка, и остаток каждой в прогнозе.
@@ -1060,7 +1280,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
         const e = estOf.get(String(c.id));
         if (!e) continue;
         const plat = platformOf(c.platform);
-        sum += remainingOf(e, pricesFor(kind, plat), { platform: plat, direct: env.direct === true && plat === "tiktok", replies: flags.replies });
+        sum += remainingOf(e, pricesFor(kind, plat), { platform: plat, direct: env.direct === true, replies: flags.replies });
       }
       return Math.round(sum * 10) / 10;
     };
@@ -1079,11 +1299,11 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
         // нет вовсе. Уточнится объём на шаге списка каждого из них.
         const guessed = estimate.byCreator
           .filter((e) => e.rough)
-          .map((e) => `@${e.handle} (${e.assumedFrom === "profile" ? "по профилю" : "по медиане площадки"} ${e.assumedVideos} видео)`);
-        const rough = guessed.length > 0 ? ` — ПРЕДВАРИТЕЛЬНАЯ: в базе нет видео у ${guessed.join(", ")}; уточнится по ходу` : "";
-        log(`оценка объёма: ~${mins(estimate.total)} мин (список ~${mins(listSum)}, комментарии ~${mins(commSum)}); полосы: TikTok ~${mins(laneWork.tt.total)}, Instagram ~${mins(laneWork.ig.total)}${rough}`);
+          .map((e) => `@${e.handle} (${e.assumedFrom === "profile" ? "from the profile" : "from the platform median"} ${e.assumedVideos} videos)`);
+        const rough = guessed.length > 0 ? ` — PRELIMINARY: the database has no videos for ${guessed.join(", ")}; it will be refined along the way` : "";
+        log(`estimated volume: ~${mins(estimate.total)} min (list ~${mins(listSum)}, comments ~${mins(commSum)}); lanes: TikTok ~${mins(laneWork.tt.total)}, Instagram ~${mins(laneWork.ig.total)}${rough}`);
       } catch (e) {
-        log(`объём обхода не оценился: ${short(e)} — идём без полосы прогресса`);
+        log(`the run volume was not estimated: ${short(e)} — going without a progress bar`);
       }
     }
     /** Похожа ли беда патча на «колонок v24 в базе ещё нет». */
@@ -1156,12 +1376,12 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
         // счётчики креаторов сайту нужны в любом случае.
         if (estimate && estimateColumns && noColumns(e)) {
           estimateColumns = false;
-          log(`оценка объёма в базу не пошла (${short(e)}) — миграции v24 ещё нет, обход идёт без полосы прогресса`);
+          log(`the volume estimate did not go to the database (${short(e)}) — migration v24 is not there yet, the run goes without a progress bar`);
           await progress();
           return;
         }
         // Одна строка в лог на первый сбой, дальше молчим: база и так уже под вопросом.
-        if (progressFailed++ === 0) log(`ход обхода не записался: ${short(e)}`);
+        if (progressFailed++ === 0) log(`the run progress was not written: ${short(e)}`);
       }
     }
     await progress();
@@ -1182,7 +1402,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
       // Отсчёт скорости полосы — отсюда: до первого креатора она ничего не делала.
       laneWork[kind].startedAt = startedLane;
       let laneDone = 0;
-      say(`полоса ${cfg.name}: креаторов ${list.length}`);
+      say(`lane ${cfg.name}: creators ${list.length}`);
       try {
         for (let i = 0; i < list.length; i++) {
           const creator = list[i];
@@ -1205,14 +1425,14 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
                 exclude,
                 onWait: (until, waitMs, info) => {
                   const why = info?.addresses > 1
-                    ? "все адреса заняты"
-                    : `${env.ttLaunchLimit} запусков за ${Math.round(env.ttWindowMs / 60_000)} мин`;
-                  say(`ждём паузу TikTok до ${hhmm(until)} (${why})`);
-                  current.set(kind, `пауза TikTok до ${hhmm(until)}`);
+                    ? "every address is busy"
+                    : `${env.ttLaunchLimit} launches per ${Math.round(env.ttWindowMs / 60_000)} min`;
+                  say(`waiting out the TikTok pause until ${hhmm(until)} (${why})`);
+                  current.set(kind, `TikTok pause until ${hhmm(until)}`);
                   void progress();
                 },
                 onFree: (waited, address) => {
-                  say(`пауза TikTok кончилась, ждали ${Math.round(waited / 60_000)} мин, адрес: ${address.label}`);
+                  say(`the TikTok pause is over, waited ${Math.round(waited / 60_000)} min, address: ${address.label}`);
                   current.set(kind, `@${creator.handle}`);
                   void progress();
                 },
@@ -1225,7 +1445,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
               // «с одним адресом — поведение как сейчас».
               if ((env.proxyAddresses?.length ?? 1) < 2) return;
               const until = rememberBad(id, env.proxyCooldownMs);
-              say(`  ${labelOf(env.proxyAddresses, id)} в паузе до ${hhmm(new Date(until))}: ${why}`);
+              say(`  ${labelOf(env.proxyAddresses, id)} paused until ${hhmm(new Date(until))}: ${why}`);
             },
             good(id) {
               rememberGood(id);
@@ -1247,7 +1467,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
           // Какими единицами считается шаг комментариев у ЭТОГО креатора. Оценка считала теми
           // же (`estimateCreator`), иначе полоса прогресса разъехалась бы с собственной оценкой.
           const plat = platformOf(creator.platform);
-          const useDirect = env.direct === true && plat === "tiktok";
+          const useDirect = env.direct === true;
           /**
            * Цены единиц прямо сейчас: медиана замеров этого обхода, где их набралось, и
            * калибровка из файла везде остальном (`livePrices`). Считаются заново на каждом
@@ -1311,9 +1531,9 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
               }
               if (mins(was) !== mins(estimate.total)) {
                 const what = listSeconds === null
-                  ? `видео на комментарии ${commentVideos}`
-                  : `у @${creator.handle} видео ${videos ?? "?"}${pages === null ? "" : `, прокруток ${pages}`}, на комментарии ${commentVideos}`;
-                say(`  оценка уточнена: было ~${mins(was)} мин, стало ~${mins(estimate.total)} мин (${what})`);
+                  ? `videos for comments ${commentVideos}`
+                  : `@${creator.handle} has videos ${videos ?? "?"}${pages === null ? "" : `, scrolls ${pages}`}, for comments ${commentVideos}`;
+                say(`  estimate refined: was ~${mins(was)} min, now ~${mins(estimate.total)} min (${what})`);
               }
               void progress();
             },
@@ -1346,7 +1566,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
             const res = await collectOne(creator, env, depth, bounds, lane, flags, say, pool, work);
             done++;
             laneDone++;
-            say(`  готово: видео ${res.videos}, подписчиков ${res.followers ?? "?"}`);
+            say(`  done: videos ${res.videos}, followers ${res.followers ?? "?"}`);
             // Калибровка по факту (миграция v24): шаг списка раскладывается на «запуск» и
             // «прокрутку», шаг комментариев — на цену страницы, цену ветки и долю веток.
             // Площадка не сказала числа прокруток (Graph API их не делает) — шаг списка в
@@ -1364,25 +1584,28 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
               timing = calibrateComments(timing, res.browserUnits, { direct: false, replies: flags.replies });
             }
             const bad = writeTiming(timing);
-            if (bad) say(`  калибровка не записалась: ${bad}`);
+            if (bad) say(`  the calibration was not written: ${bad}`);
             const paths = [
-              res.directVideos > 0 ? `прямых ${res.directVideos} за ${Math.round(res.directMs / 1000)} с` : null,
-              res.browserVideos > 0 ? `браузером ${res.browserVideos} за ${Math.round(res.browserMs / 1000)} с` : null,
+              res.directVideos > 0 ? `direct ${res.directVideos} in ${Math.round(res.directMs / 1000)} s` : null,
+              res.browserVideos > 0 ? `by browser ${res.browserVideos} in ${Math.round(res.browserMs / 1000)} s` : null,
             ].filter(Boolean).join(", ");
-            say(`  время: список ${Math.round(res.listMs / 1000)} с${res.pages === null ? "" : ` (${res.pages} прокруток)`}${res.commentVideos > 0 ? `, комментарии ${Math.round(res.commentsMs / 1000)} с на ${res.commentVideos} видео${paths ? ` (${paths})` : ""}` : ""}`);
+            say(`  time: list ${Math.round(res.listMs / 1000)} s${res.pages === null ? "" : ` (${res.pages} scrolls)`}${res.commentVideos > 0 ? `, comments ${Math.round(res.commentsMs / 1000)} s on ${res.commentVideos} videos${paths ? ` (${paths})` : ""}` : ""}`);
           } catch (e) {
             failed++;
             error = short(e);
             failures.push({ handle: creator.handle, error });
             firstError = firstError ?? `@${creator.handle}: ${error}`;
-            say(`  ошибка: ${error}`);
+            say(`  error: ${error}`);
             notice("creator", `@${creator.handle}: ${error}`);
             try {
               await patch(`creators?id=eq.${creator.id}`, { sync_error: error });
             } catch (e2) {
-              say(`  не записалась и ошибка креатора: ${short(e2)}`);
-              notice("db", `@${creator.handle}: не записалась и ошибка креатора — ${short(e2)}`);
+              say(`  the creator error was not written either: ${short(e2)}`);
+              notice("db", `@${creator.handle}: the creator error was not written either — ${short(e2)}`);
             }
+            // «Профиль не найден» — отметка «удалён» в базе (миграция v33), сайт покажет её
+            // затемнением и значком. Снимет её первый удачный обход этого креатора.
+            if (profileGone(error)) await setCreatorGone(creator, true, say);
           }
           current.delete(kind);
           who = null;
@@ -1400,10 +1623,10 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
           }
           await progress();
           const spent = Date.now() - started;
-          if (spent > SLOW_CREATOR_MS) notice("slow", `@${creator.handle}: собирался ${Math.round(spent / 60_000)} мин`);
+          if (spent > SLOW_CREATOR_MS) notice("slow", `@${creator.handle}: took ${Math.round(spent / 60_000)} min to collect`);
           // Пауза только между чистыми профилями TikTok — см. `pauseAfter`.
           if (i < list.length - 1 && env.pauseMs > 0 && pauseAfter(kind, error)) {
-            say(`  пауза ${Math.round(env.pauseMs / 1000)} с`);
+            say(`  pause ${Math.round(env.pauseMs / 1000)} s`);
             await sleep(env.pauseMs);
           }
         }
@@ -1413,7 +1636,7 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
         await lane.close(say);
       }
       const spent = Date.now() - startedLane;
-      say(`полоса ${cfg.name} закончена: собрано ${laneDone} из ${list.length} за ${Math.round(spent / 1000)} с`);
+      say(`lane ${cfg.name} finished: collected ${laneDone} of ${list.length} in ${Math.round(spent / 1000)} s`);
       return { kind, spent, done: laneDone };
     }
 
@@ -1422,14 +1645,14 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
     await Promise.all([runLane("tt", lanes.tt), runLane("ig", lanes.ig)]);
     // Мягкие признаки истёкшей сессии — одной строкой на площадку и только в лог.
     for (const hint of takeSessionHints()) {
-      log(`[session] ${hint.where}: признаки истёкшей сессии в ${hint.count} местах, но собралось всё — ${hint.text}`);
+      log(`[session] ${hint.where}: signs of an expired session in ${hint.count} places, but everything was collected — ${hint.text}`);
     }
     return { runId, ok: failed === 0, done, failed, error: firstError, failures, depth, log: lines.join("\n") };
   } catch (e) {
     // Сюда попадает только беда всего обхода (например, база недоступна).
     const text = String(e?.message ?? e).split("\n")[0];
-    log(`обход прерван: ${text}`);
-    notice("run", `обход прерван: ${text}`);
+    log(`the run was interrupted: ${text}`);
+    notice("run", `the run was interrupted: ${text}`);
     firstError = firstError ?? text;
     return { runId, ok: false, done, failed, error: firstError, failures, depth, log: lines.join("\n") };
   } finally {
@@ -1450,9 +1673,9 @@ async function doSync({ trigger, creatorId, failedOnly, depth, depthFrom, depthT
         });
       } catch (e) {
         const text = String(e?.message ?? e).split("\n")[0];
-        onLog?.(`итог обхода не записался: ${text}`);
+        onLog?.(`the run result was not written: ${text}`);
         // Сообщение обхода уже ушло — это замечание уедет резидентским, своим чередом.
-        notice("db", `итог обхода #${runId} не записался: ${text}`);
+        notice("db", `the result of run #${runId} was not written: ${text}`);
       }
     }
     // Живой журнал закрывается последним и всегда: остаток строк должен лечь в `sync_log`,
@@ -1490,7 +1713,7 @@ export function runSync({ trigger = "manual", creatorId = null, failedOnly = fal
   // Глубина приводится к одному из четырёх видов ЗДЕСЬ и один раз: дальше по обходу ходит уже
   // разобранная пара «глубина + границы», и в базу ложится ровно она.
   const norm = normalizeDepth(depth, depthFrom, depthTo);
-  if (norm.note) onLog?.(`глубина: ${norm.note}`);
+  if (norm.note) onLog?.(`depth: ${norm.note}`);
   const args = {
     trigger, creatorId, failedOnly,
     depth: norm.depth,

@@ -33,7 +33,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 export const PROXY_STATE_FILE = resolve(HERE, "logs", "proxies-state.json");
 
 /** Домашний адрес: тот, с которого сборщик ходил всегда. Прокси у него нет вовсе. */
-export const HOME = { id: 0, label: "домашний", server: null, username: "", password: "" };
+export const HOME = { id: 0, label: "home", server: null, username: "", password: "" };
 
 // Что умеет Chromium через Playwright. `socks5h` и `socks4` пишут в строке подключения, но
 // Chromium знает `socks5` и `socks4`; `socks5h` приводим к `socks5` — разница только в том,
@@ -83,7 +83,7 @@ export function addressList(proxies, { home = true } = {}) {
   (proxies ?? []).forEach((p, i) => {
     list.push({
       id: i + 1,
-      label: `прокси #${i + 1} ${p.host}`,
+      label: `proxy #${i + 1} ${p.host}`,
       server: p.server,
       username: p.username ?? "",
       password: p.password ?? "",
@@ -94,7 +94,7 @@ export function addressList(proxies, { home = true } = {}) {
 
 /** Имя адреса по номеру — для логов и текстов ошибок. Не нашёлся — так и говорим. */
 export function labelOf(addresses, id) {
-  return (addresses ?? []).find((a) => a.id === Number(id))?.label ?? `адрес #${id}`;
+  return (addresses ?? []).find((a) => a.id === Number(id))?.label ?? `address #${id}`;
 }
 
 /** Пустое состояние пула. */

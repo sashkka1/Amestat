@@ -492,8 +492,8 @@ export function estimateCreator({
   const cPages = !comments ? 0 : commentPages !== null ? Math.max(0, Number(commentPages) || 0) : videos * unknown.pages;
   const cRoots = !comments ? 0 : commentRoots !== null ? Math.max(0, Number(commentRoots) || 0) : videos * unknown.roots;
   const list = t[`list.${plat}`] + pages * t[`page.${plat}`];
-  // Прямой путь есть только у TikTok: у Instagram комментарии по-прежнему целиком браузерные.
-  const secs = commentSeconds({ pages: cPages, roots: cRoots }, t, { direct: direct === true && plat === "tiktok", replies });
+  // Прямой путь есть у обеих площадок (Instagram — из вкладки-якоря, с 2026-09-16).
+  const secs = commentSeconds({ pages: cPages, roots: cRoots }, t, { direct: direct === true, replies });
   const round = (n) => Math.round(n * 10) / 10;
   return {
     handle,
@@ -592,8 +592,8 @@ export function reviseAfterList(prev, {
       units = { videos, pages: videos * one.pages, roots: videos * one.roots };
     }
   }
-  // Прямой путь есть только у TikTok — та же развилка, что в `estimateCreator`.
-  const secs = commentSeconds(units, t, { direct: direct === true && plat === "tiktok", replies });
+  // Прямой путь есть у обеих площадок — та же развилка, что в `estimateCreator`.
+  const secs = commentSeconds(units, t, { direct: direct === true, replies });
   const round = (n) => Math.round(n * 10) / 10;
   return {
     ...prev,
@@ -617,7 +617,7 @@ export function reviseAfterList(prev, {
  * `counts`   — Map «id видео → число комментариев последнего снимка» (нет строки — нет счёта);
  * `opts`     — `{ depth, bounds, videos: 'all'|'ours', maxVideos, comments, replies, allVideos,
  *                 direct, commentsMax, profileVideos }` (`direct` — включён ли прямой путь: тогда
- *                 шаг комментариев TikTok считается по единицам `*.direct`; `commentsMax` —
+ *                 шаг комментариев обеих площадок считается по единицам `*.direct`; `commentsMax` —
  *                 `AMESTAT_COMMENTS_MAX`; `profileVideos` — Map «id креатора → число видео по
  *                 профилю площадки», для тех, о ком база не знает ничего)
  *                (окно шага комментариев — те же `bounds`, своего у него нет);
@@ -644,7 +644,7 @@ export function estimateRun(creators, videos, counts, opts = {}, timing = DEFAUL
   const withComments = opts.comments !== false;
   const withReplies = opts.replies !== false;
   const allVideos = opts.allVideos === true;
-  // Прямой путь включён — шаг комментариев TikTok считается по дешёвым единицам (`commentKeys`).
+  // Прямой путь включён — шаг комментариев обеих площадок считается по дешёвым единицам (`commentKeys`).
   const direct = opts.direct === true;
   const commentsMax = num(opts.commentsMax) ?? DEFAULT_COMMENTS_MAX;
   const countOf = (id) => counts?.get?.(String(id)) ?? counts?.[String(id)];
@@ -794,7 +794,7 @@ export function remainingOf(est, timing = DEFAULT_TIMING, { platform = "tiktok",
   const secs = commentSeconds(
     { pages: left(est.commentPages, est.commentPagesDone), roots: left(est.commentRoots, est.commentRootsDone) },
     t,
-    { direct: direct === true && plat === "tiktok", replies },
+    { direct: direct === true, replies },
   );
   return Math.round((listLeft + secs.comments + secs.replies) * 10) / 10;
 }

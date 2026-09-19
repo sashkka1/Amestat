@@ -17,7 +17,7 @@ const listBody = {
   comments: [
     {
       cid: "7680720399881093909",
-      text: "первый корневой",
+      text: "first root",
       digg_count: 4,
       reply_comment_total: 2,
       create_time: 1788307101,
@@ -26,15 +26,15 @@ const listBody = {
       user: { unique_id: "learnwithbr7", nickname: "Learnwithbr" },
       // Даровые ответы: TikTok кладёт их внутрь корневого, и они не стоят ни клика, ни запроса.
       reply_comment: [
-        { cid: "7680675238183633672", text: "даровой ответ", digg_count: 0, create_time: 1788307200, reply_id: "7680720399881093909", user: { unique_id: "natalia", nickname: "Natalia" } },
+        { cid: "7680675238183633672", text: "free reply", digg_count: 0, create_time: 1788307200, reply_id: "7680720399881093909", user: { unique_id: "natalia", nickname: "Natalia" } },
       ],
     },
-    { cid: "7680683680687670023", text: "второй корневой", digg_count: 0, reply_comment_total: 0, create_time: 1788307000, reply_id: "0", user: { unique_id: "someone", nickname: "Кто-то" } },
-    { text: "без cid — такую строку не записать: ключ таблицы (video_id, id)", user: { unique_id: "nobody" } },
+    { cid: "7680683680687670023", text: "second root", digg_count: 0, reply_comment_total: 0, create_time: 1788307000, reply_id: "0", user: { unique_id: "someone", nickname: "Someone" } },
+    { text: "no cid — such a row cannot be written: the table key is (video_id, id)", user: { unique_id: "nobody" } },
   ],
 };
 
-test("parseComments: корневые, даровые ответы и конец списка", () => {
+test("parseComments: roots, free replies and the end of the list", () => {
   const got = parseComments(JSON.stringify(listBody));
   assert.equal(got.ok, true);
   assert.equal(got.comments.length, 2);          // третья строка без cid отброшена
@@ -52,42 +52,42 @@ test("parseComments: корневые, даровые ответы и конец
   assert.equal(got.total, 62);
 });
 
-test("parseComments: последняя страница — has_more 0", () => {
+test("parseComments: the last page — has_more 0", () => {
   const got = parseComments(JSON.stringify({ ...listBody, has_more: 0, cursor: 40 }));
   assert.equal(got.ok, true);
   assert.equal(got.hasMore, false);
   assert.equal(got.cursor, 40);
 });
 
-test("parseComments: пустое тело — «прямой не дал», а не исключение", () => {
+test("parseComments: empty body — «direct path failed», not an exception", () => {
   for (const body of ["", "   "]) {
     const got = parseComments(body);
     assert.equal(got.ok, false);
-    assert.match(got.why, /пустое тело/);
+    assert.match(got.why, /empty body/);
     assert.deepEqual(got.comments, []);
   }
 });
 
-test("parseComments: не-JSON — признак отказа", () => {
-  const got = parseComments("<!doctype html><html>капча</html>");
+test("parseComments: non-JSON — a refusal marker", () => {
+  const got = parseComments("<!doctype html><html>captcha</html>");
   assert.equal(got.ok, false);
-  assert.match(got.why, /не JSON/);
+  assert.match(got.why, /not JSON/);
 });
 
-test("parseComments: status_code != 0 — признак отказа с текстом площадки", () => {
-  const got = parseComments(JSON.stringify({ status_code: 10000, status_msg: "нельзя", comments: [] }));
+test("parseComments: status_code != 0 — a refusal marker carrying the platform text", () => {
+  const got = parseComments(JSON.stringify({ status_code: 10000, status_msg: "not allowed", comments: [] }));
   assert.equal(got.ok, false);
   assert.match(got.why, /status_code 10000/);
-  assert.match(got.why, /нельзя/);
+  assert.match(got.why, /not allowed/);
 });
 
-test("parseComments: ответ без comments[] — отказ", () => {
+test("parseComments: a response without comments[] — a refusal", () => {
   const got = parseComments(JSON.stringify({ status_code: 0, total: 5 }));
   assert.equal(got.ok, false);
   assert.match(got.why, /comments/);
 });
 
-test("parseComments: ноль комментариев при status_code 0 — это НЕ отказ разбора", () => {
+test("parseComments: zero comments with status_code 0 — that is NOT a parsing refusal", () => {
   // Решение «прямой не дал» принимает `fetchComments` по счётчику площадки, а не разбор:
   // у видео и правда бывает ноль комментариев.
   const got = parseComments(JSON.stringify({ status_code: 0, comments: [], total: 0, has_more: 0, cursor: 20 }));
@@ -104,11 +104,11 @@ const replyBody = {
   has_more: 0,
   cursor: 20,
   comments: [
-    { cid: "7680675238183633672", text: "ответ ветки", digg_count: 1, create_time: 1788307200, reply_id: "7680674945520911112", reply_to_reply_id: "0", user: { unique_id: "natalia", nickname: "Natalia" } },
+    { cid: "7680675238183633672", text: "branch reply", digg_count: 1, create_time: 1788307200, reply_id: "7680674945520911112", reply_to_reply_id: "0", user: { unique_id: "natalia", nickname: "Natalia" } },
   ],
 };
 
-test("parseReplies: родитель берётся из reply_id ответа", () => {
+test("parseReplies: the parent is taken from the reply_id of the reply", () => {
   const got = parseReplies(JSON.stringify(replyBody), "7680674945520911112");
   assert.equal(got.ok, true);
   assert.equal(got.replies.length, 1);
@@ -118,7 +118,7 @@ test("parseReplies: родитель берётся из reply_id ответа",
   assert.equal(got.hasMore, false);
 });
 
-test("parseReplies: ответ, забывший назвать родителя, подписывается веткой, которую просили", () => {
+test("parseReplies: a reply that forgot to name its parent is signed with the branch that was asked for", () => {
   const nameless = { ...replyBody, comments: [{ ...replyBody.comments[0], reply_id: "0" }] };
   const got = parseReplies(JSON.stringify(nameless), "7680674945520911112");
   assert.equal(got.ok, true);
@@ -126,16 +126,16 @@ test("parseReplies: ответ, забывший назвать родителя
   assert.equal(got.replies[0].parentId, "7680674945520911112");
 });
 
-test("parseReplies: без имени ветки безродный ответ выбрасывается, а не ложится корневым", () => {
+test("parseReplies: without a branch name a parentless reply is dropped, not stored as a root", () => {
   const nameless = { ...replyBody, comments: [{ ...replyBody.comments[0], reply_id: "0" }] };
   const got = parseReplies(JSON.stringify(nameless), null);
   assert.equal(got.ok, true);
   assert.deepEqual(got.replies, []);
 });
 
-test("parseReplies: пустое тело и не-JSON — тот же признак отказа", () => {
+test("parseReplies: empty body and non-JSON — the same refusal marker", () => {
   assert.equal(parseReplies("").ok, false);
-  assert.equal(parseReplies("не json").ok, false);
+  assert.equal(parseReplies("not json").ok, false);
   assert.deepEqual(parseReplies("").replies, []);
 });
 
@@ -147,9 +147,9 @@ const profileHtml = (userInfo) => `<!doctype html><html><head></head><body>
   __DEFAULT_SCOPE__: { "webapp.user-detail": { userInfo } },
 })}</script></body></html>`;
 
-test("parseProfileHtml: счётчики, аватар и secUid", () => {
+test("parseProfileHtml: counters, avatar and secUid", () => {
   const got = parseProfileHtml(profileHtml({
-    user: { nickname: "Аурея", signature: "подпись", avatarLarger: "https://p16/large.jpeg", secUid: "MS4wLjABAAAAzMv10WWI" },
+    user: { nickname: "Aurea", signature: "bio", avatarLarger: "https://p16/large.jpeg", secUid: "MS4wLjABAAAAzMv10WWI" },
     statsV2: { followerCount: "9", followingCount: "48", heartCount: "275", videoCount: "7" },
     stats: { followerCount: 9, heartCount: -12, videoCount: 7 },
   }));
@@ -163,40 +163,40 @@ test("parseProfileHtml: счётчики, аватар и secUid", () => {
   assert.equal(got.profile.secUid, "MS4wLjABAAAAzMv10WWI");
 });
 
-test("parseProfileHtml: statsV2 нет — счётчики берутся из старого stats", () => {
-  const got = parseProfileHtml(profileHtml({ user: { nickname: "Кто-то" }, stats: { followerCount: 64, followingCount: 39, heartCount: 614, videoCount: 8 } }));
+test("parseProfileHtml: no statsV2 — the counters are taken from the old stats", () => {
+  const got = parseProfileHtml(profileHtml({ user: { nickname: "Someone" }, stats: { followerCount: 64, followingCount: 39, heartCount: 614, videoCount: 8 } }));
   assert.equal(got.ok, true);
   assert.equal(got.profile.followers, 64);
   assert.equal(got.profile.likesTotal, 614);
   assert.equal(got.profile.avatar, null);
 });
 
-test("parseProfileHtml: пусто, без скрипта, без userInfo и без счётчиков — признак отказа", () => {
-  assert.match(parseProfileHtml("").why, /пустой HTML/);
-  assert.match(parseProfileHtml("<html>капча</html>").why, /UNIVERSAL_DATA/);
+test("parseProfileHtml: empty, no script, no userInfo and no counters — a refusal marker", () => {
+  assert.match(parseProfileHtml("").why, /empty HTML/);
+  assert.match(parseProfileHtml("<html>captcha</html>").why, /UNIVERSAL_DATA/);
   assert.match(parseProfileHtml(profileHtml(null)).why, /userInfo/);
-  assert.match(parseProfileHtml(profileHtml({ user: { nickname: "x" } })).why, /счётчик/);
+  assert.match(parseProfileHtml(profileHtml({ user: { nickname: "x" } })).why, /counters/);
   for (const html of ["", "<html></html>", profileHtml(null)]) assert.equal(parseProfileHtml(html).ok, false);
 });
 
-test("parseProfileHtml: испорченный JSON внутри скрипта — отказ, а не исключение", () => {
-  const got = parseProfileHtml('<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__">{ не json </script>');
+test("parseProfileHtml: broken JSON inside the script — a refusal, not an exception", () => {
+  const got = parseProfileHtml('<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__">{ not json </script>');
   assert.equal(got.ok, false);
-  assert.match(got.why, /не разобрались/);
+  assert.match(got.why, /did not parse/);
 });
 
 // --- Единицы калибровки прямого пути (`estimate.mjs`) --------------------------------------
 
-test("commentKeys: у каждого пути своя пара единиц — страница и ветка", () => {
+test("commentKeys: each path has its own pair of units — page and branch", () => {
   assert.deepEqual(commentKeys(true), { page: "comments.page.direct", branch: "replies.branch.direct" });
   assert.deepEqual(commentKeys(false), { page: "comments.page.browser", branch: "replies.branch.browser" });
 });
 
-test("страница оценки — те же 20 комментариев, что прямой путь просит у TikTok", () => {
+test("the estimate page — the same 20 comments the direct path asks TikTok for", () => {
   assert.equal(COMMENTS_PAGE, DIRECT_PAGE);
 });
 
-test("умолчания прямого пути — по журналу обхода #107: 0,8 с страница, 0,9 с ветка, доля 0,3", () => {
+test("direct path defaults — from the run #107 log: 0.8 s page, 0.9 s branch, share 0.3", () => {
   assert.equal(DEFAULT_TIMING["comments.page.direct"], 0.8);
   assert.equal(DEFAULT_TIMING["replies.branch.direct"], 0.9);
   assert.equal(DEFAULT_TIMING["replies.share"], 0.3);
@@ -208,7 +208,7 @@ test("умолчания прямого пути — по журналу обх�
   assert.equal("comments.video" in old, false);
 });
 
-test("оценка выбирает дешёвые единицы, когда прямой путь включён", () => {
+test("the estimate picks the cheap units when the direct path is on", () => {
   const base = { handle: "a", platform: "tiktok", scrolls: 1, commentVideos: 10, commentPages: 50, commentRoots: 1000 };
   const withDirect = estimateCreator({ ...base, direct: true });
   const withBrowser = estimateCreator({ ...base, direct: false });
@@ -218,12 +218,14 @@ test("оценка выбирает дешёвые единицы, когда п
   assert.ok(withDirect.total < withBrowser.total);
 });
 
-test("у Instagram прямого пути нет: оценка считает браузерными единицами даже при direct", () => {
+test("Instagram has a direct path too (anchor tab, 2026-09-16): the estimate counts it with the cheap units", () => {
   const one = estimateCreator({ handle: "a", platform: "instagram", scrolls: 1, commentVideos: 4, commentPages: 4, commentRoots: 8, direct: true });
-  assert.equal(one.comments, 4 * DEFAULT_TIMING["comments.page.browser"]);
+  assert.equal(one.comments, 4 * DEFAULT_TIMING["comments.page.direct"]);
+  const off = estimateCreator({ handle: "a", platform: "instagram", scrolls: 1, commentVideos: 4, commentPages: 4, commentRoots: 8, direct: false });
+  assert.equal(off.comments, 4 * DEFAULT_TIMING["comments.page.browser"], "AMESTAT_DIRECT=off brings back the browser prices");
 });
 
-test("калибровка путей порознь: замер прямого не двигает цену браузерного", () => {
+test("the paths are calibrated separately: a direct measurement does not move the browser price", () => {
   const before = normalizeTiming({});
   // Пять страниц за 7,5 с (1,5 с на страницу оценки) и 30 веток за 27 с.
   const after = calibrateComments(before, { pages: 5, roots: 100, pageSeconds: 7.5, branchSeconds: 27, branches: 30 }, { direct: true });
@@ -239,10 +241,10 @@ test("калибровка путей порознь: замер прямого 
   assert.equal(browser["comments.page.direct"], before["comments.page.direct"]);
 });
 
-test("калибровка прямого пути без веток трогает только цену страницы", () => {
+test("calibrating the direct path without branches touches only the page price", () => {
   const before = normalizeTiming({});
   const after = calibrateComments(before, { pages: 5, roots: 5, pageSeconds: 2, branchSeconds: 0, branches: 0 }, { direct: true, replies: false });
   assert.notEqual(after["comments.page.direct"], before["comments.page.direct"]);
   assert.equal(after["replies.branch.direct"], before["replies.branch.direct"]);
-  assert.equal(after["replies.share"], before["replies.share"], "ветки не раскрывались — доля неизвестна");
+  assert.equal(after["replies.share"], before["replies.share"], "branches were not opened — the share is unknown");
 });

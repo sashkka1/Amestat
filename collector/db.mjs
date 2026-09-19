@@ -44,6 +44,27 @@ export async function get(path) {
   return (await call("GET", path, undefined, undefined)) ?? [];
 }
 
+/**
+ * Сколько строк подходит под условие — БЕЗ самих строк: `Prefer: count=exact`, число приезжает
+ * заголовком `Content-Range` («0-24/1234» или «* /0»).
+ * 🔴 Считать строками нельзя: PostgREST режет ответ на 1000 строках, и у креатора с тысячей
+ * видео «сколько их» молча превратилось бы в «тысяча». На эти грабли проект уже наступал
+ * дважды — 2026-09-09 (видео на дашборде без счётчиков) и 2026-09-11 (ряд за 5 лет).
+ * Отдаёт число или `null`, если база его не назвала.
+ */
+export async function count(path) {
+  const { supabaseUrl } = loadEnv();
+  const join = path.includes("?") ? "&" : "?";
+  const res = await fetch(`${supabaseUrl}/rest/v1/${path}${join}select=id&limit=1`, {
+    method: "HEAD",
+    headers: headers("count=exact"),
+  });
+  if (!res.ok) throw new Error(`HEAD ${path.split("?")[0]} → HTTP ${res.status}`);
+  const total = String(res.headers.get("content-range") ?? "").split("/")[1];
+  const n = Number(total);
+  return Number.isFinite(n) ? n : null;
+}
+
 /** POST одной строки с возвратом её самой (нужен id) → объект. */
 export async function insertReturning(table, row) {
   const rows = await call("POST", table, row, "return=representation");

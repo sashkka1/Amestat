@@ -1,10 +1,17 @@
-// Сбор одного креатора Instagram браузером: страница профиля открывается в копии профиля
-// Opera, где вошёл ФЕЙКОВЫЙ аккаунт, а данные снимаются с ответов `POST /graphql/query`,
-// которые страница просит сама при прокрутке.
+// Сбор одного креатора Instagram: копия профиля Opera, где вошёл ФЕЙКОВЫЙ аккаунт, данные — ответы
+// `POST /graphql/query` (лента, Reels) и `GET /api/v1/users/<uid>/info/` (профиль).
 //
-// Почему так, а не запросом к API: гостю Instagram показывает стену входа, а прямой
-// `fetch('/api/v1/users/web_profile_info/…')` из страницы отвечает 429 с HTML даже под
-// сессией (проба 2026-09-08). Поэтому мы ничего не просим сами — только слушаем.
+// 🔴 С 2026-09-16 — комбинированно (владелец: «все моменты, которые можно перевести на прямые
+// запросы, — заранее»). Первый креатор обхода идёт страницей профиля: с неё ловятся шаблоны
+// запросов ленты и Reels (`instagram-direct.mjs`), а следующие страницы берутся ПОВТОРОМ шаблона с
+// курсором, а не прокруткой. Следующие креаторы — прямыми запросами из вкладки-якоря вовсе без
+// своей страницы (`listDirect`). Любой отказ прямого пути — креатор идёт страницей, как раньше;
+// отказ повтора на странице — прокрутка, как раньше. `AMESTAT_DIRECT=off` — всё прежнее.
+//
+// Почему не простым `fetch` к API: гостю Instagram показывает стену входа; `web_profile_info`
+// отвечает 429 даже под сессией (пробы 2026-09-08 и 2026-09-16); REST ленты под веб-сессией
+// перенаправляет на главную, а `POST clips/user/` отвечает `feedback_required` — это сигнал
+// блокировки действия, адрес не трогать. Работают только запросы страницы — их и повторяем.
 //
 // ⚠️ Профиль браузера здесь ПОСТОЯННЫЙ (`collector/profile-opera`), в отличие от TikTok:
 // в нём живут cookies сессии, и стереть его — значит потерять вход. Отсюда же ограничение:
@@ -48,8 +55,12 @@
 // 2026-09-08: браузер на профиле поднимается один раз за обход, а не на каждого креатора).
 // Свой браузер модуль поднимает только когда его зовут в одиночку (разовая проверка, тест).
 import { launchProfile, PROFILE_OPERA, trimTraffic } from "./browser.mjs";
-import { notice, sessionHint } from "./notices.mjs";
+import { notice, noteSessionCookie, sessionHint } from "./notices.mjs";
 import { listStop, listRounds, missingTracked, filterDepth, depthBounds, depthWord, videoCap } from "./scope.mjs";
+import {
+  openIgAnchor, templatesFor, watchTemplates, postTemplate, feedVariables, reelsVariables,
+  feedConnectionOf, clipsConnectionOf, playsFromClips, profileFromInfo, uidFromSearch,
+} from "./instagram-direct.mjs";
 
 // Куда странице профиля вообще можно ходить. Всё остальное отсекается (`trimTraffic`), плюс
 // независимо от хоста — видео (`media`) и шрифты.
@@ -76,8 +87,8 @@ const PRIVATE_TEXT = /This account is private|Аккаунт закрыт|зак
 
 // Те же слова, что в `comments-instagram.mjs`: беда одна и та же, и владелец должен читать
 // одинаковый текст, откуда бы он ни пришёл. ⚠️ Дубль намеренный — правишь здесь, правь и там.
-const ERR_SESSION = "Instagram: сессия фейкового аккаунта истекла — войди в Opera заново и сними копию профиля";
-const ERR_LIMIT = "Instagram: площадка ограничила запросы, попробуй позже";
+const ERR_SESSION = "Instagram: the fake account session has expired — log in again in Opera and take a fresh profile copy";
+const ERR_LIMIT = "Instagram: the platform rate-limited the requests, try later";
 
 const num = (x) => (x === null || x === undefined || x === "" ? null : Number(x));
 /** Момент публикации в мс — для сортировки от новых к старым; без даты уходит в конец. */
@@ -179,14 +190,14 @@ function readHead(page) {
 /** Счётчики профиля: точное число из title сильнее текста шапки, текст шапки — meta-описания. */
 function pickStats(head) {
   const sources = [
-    ["title в шапке", head.exact ?? {}],
-    ["шапка", statsFromText(head.headText)],
-    ["meta-описание", statsFromLabels(head.ogDescription || head.description)],
-    ["meta-описание", statsFromText(head.ogDescription || head.description)],
+    ["title in the header", head.exact ?? {}],
+    ["header", statsFromText(head.headText)],
+    ["meta description", statsFromLabels(head.ogDescription || head.description)],
+    ["meta description", statsFromText(head.ogDescription || head.description)],
   ];
   const out = {};
   for (const field of ["posts", "followers", "following"]) {
-    out[field] = { value: null, from: "не нашлось", approx: false };
+    out[field] = { value: null, from: "not found", approx: false };
     for (const [from, stats] of sources) {
       const raw = keepNumeric(stats?.[field]);
       if (raw === null) continue;
@@ -229,6 +240,306 @@ async function scrollRound(page) {
   await page.waitForTimeout(1200);
 }
 
+// ------------------------------------------------------------------ состояние списка
+// Всё, что копится по ходу сбора ленты и Reels. Одно на креатора; его наполняют и ответы, которые
+// страница просит сама (`attachListListener`), и повторы запросов (`takeFeedPage`/`takeClipsPage`).
+// ⚠️ Ответ повтора, сделанного ИЗ страницы профиля, слушатель видит тоже — разбор идемпотентен
+// (Map/Set и флаги «конец»), так что двойной разбор одной пачки ничего не портит.
+export function newListState() {
+  return {
+    posts: new Map(),     // pk → узел ленты
+    plays: new Map(),     // code и pk → play_count из Reels
+    pinned: new Set(),    // pk закреплённых: они не участвуют в проверке недели
+    hasNext: true, reachedOld: false, limited: false, lostSession: false, reelsSeen: 0,
+    feedCursor: null,     // курсор следующей страницы ленты — для повтора запроса вместо прокрутки
+    reelsCursor: null, reelsEnded: false,
+  };
+}
+
+/**
+ * Одна пачка ленты — в состояние. Чужие публикации (владелец не тот) не берутся.
+ * Отдаёт, сколько публикаций креатора пачка добавила. Проверяется тестами.
+ */
+export function takeFeedPage(feed, st, { handle, since = null }) {
+  const was = st.posts.size;
+  for (const edge of feed?.edges ?? []) {
+    const node = edge?.node;
+    if (!node?.pk) continue;
+    const owner = node.user?.username;
+    if (owner && owner.toLowerCase() !== String(handle).toLowerCase()) continue;
+    st.posts.set(String(node.pk), node);
+  }
+  if (feed?.page_info?.has_next_page === false) st.hasNext = false;
+  if (feed?.page_info?.end_cursor) st.feedCursor = String(feed.page_info.end_cursor);
+  // Нижняя граница глубины: самая старая незакреплённая публикация пачки старше неё —
+  // дальше не листаем. Закреплённые считаются отдельно и остановку не вызывают.
+  if (since !== null && (feed?.edges?.length ?? 0) > 0) {
+    const oldest = oldestUnpinned(feed.edges, st.pinned);
+    if (oldest !== null && oldest < since) st.reachedOld = true;
+  }
+  return st.posts.size - was;
+}
+
+/** Одна пачка Reels — просмотры в состояние (по `code` и по `pk`), курсор и конец списка. */
+export function takeClipsPage(clips, st) {
+  for (const one of playsFromClips(clips)) {
+    st.reelsSeen++;
+    if (one.code) st.plays.set(one.code, one.plays);
+    if (one.pk) st.plays.set(one.pk, one.plays);
+  }
+  st.reelsCursor = clips?.page_info?.end_cursor ? String(clips.page_info.end_cursor) : null;
+  if (clips?.page_info?.has_next_page === false) st.reelsEnded = true;
+}
+
+/** Слушать ответы страницы: лента, Reels, признаки ограничения и потерянного входа. */
+function attachListListener(page, st, { handle, since }) {
+  page.on("response", async (r) => {
+    const url = r.url();
+    if (!url.includes("instagram.com")) return;
+    if (r.status() === 429) { st.limited = true; return; }
+    if (!url.includes("/graphql/query")) return;
+    let text = "";
+    try {
+      text = await r.text();
+    } catch {
+      // Ответ мог не дойти (страница ушла) — круг просто не даст прироста.
+    }
+    if (!text) return;
+    if (RATE_JSON.test(text)) st.limited = true;
+    if (/"login_required"/.test(text)) st.lostSession = true;
+    let json = null;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      return;
+    }
+    const feed = feedConnectionOf(json);
+    if (feed) takeFeedPage(feed, st, { handle, since });
+    const clips = clipsConnectionOf(json);
+    if (clips) takeClipsPage(clips, st);
+  });
+}
+
+/** Id креатора по его же публикациям: у узла ленты владелец лежит с `pk`. */
+function uidOfPosts(st) {
+  for (const node of st.posts.values()) {
+    const pk = node?.user?.pk ?? node?.owner?.pk ?? node?.user?.id ?? null;
+    if (pk) return String(pk);
+  }
+  return null;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ------------------------------------------------------------------ прямой путь списка
+/**
+ * Лента и профиль креатора ПРЯМЫМИ запросами из вкладки-якоря — без его страницы (владелец,
+ * 2026-09-16: «все моменты, которые можно перевести на прямые запросы, — заранее»).
+ * Годится, когда шаблон ленты уже пойман на странице кого-то раньше в этом обходе.
+ * Правило остановки ленты — ТО ЖЕ, что у прокрутки (`listStop`, потолки, пустые круги).
+ * Отдаёт `{ ok, why, st, feedPages, stopReason, profile, uid }` — исключений не бросает: любой
+ * отказ значит «открывай страницу профиля», и там уже скажут про вход, закрытость и отсутствие.
+ */
+async function listDirect(ctx, cache, { handle, since, until, mode, trackedIds, feedRounds, maxVideos, pauseMs, onPage, log }) {
+  const no = (why) => ({ ok: false, why });
+  const anchor = await openIgAnchor(ctx, { log });
+  if (!anchor.ok) return no(anchor.why);
+  const st = newListState();
+  const feedPage = async (after) => {
+    const res = await anchor.post(cache.feed, feedVariables(cache.feed.body.variables, { username: handle, after }));
+    if (!res.ok) return { ok: false, why: `feed: ${res.why}` };
+    const feed = feedConnectionOf(res.json);
+    if (!feed) return { ok: false, why: "feed: the response has no feed" };
+    return { ok: true, feed, added: takeFeedPage(feed, st, { handle, since }) };
+  };
+
+  const first = await feedPage(null);
+  if (!first.ok) return no(first.why);
+  // Пачка пришла, а своих в ней нет — шаблон не переключился на этого креатора. Верить нельзя.
+  if ((first.feed.edges?.length ?? 0) > 0 && first.added === 0) return no("feed: the response holds someone else's posts");
+
+  const inDepth = () => (maxVideos === null ? 0
+    : filterDepth([...st.posts.values()].map((n) => ({ id: String(n.pk), publishedAt: n.taken_at ? new Date(Number(n.taken_at) * 1000).toISOString() : null })), since, trackedIds, until).length);
+  let stale = 0, feedPages = 0, stopReason = null;
+  for (; feedPages < feedRounds; feedPages++) {
+    const step = listStop({ mode, trackedIds, seenIds: [...st.posts.keys()], reachedOld: st.reachedOld, hasMore: st.hasNext, maxVideos, inDepth: inDepth() });
+    if (step.stop) { stopReason = step.reason; break; }
+    if (stale >= STALE_ROUNDS || st.posts.size >= MAX_POSTS || !st.feedCursor) break;
+    const before = st.posts.size;
+    if (pauseMs > 0) await sleep(pauseMs);
+    const next = await feedPage(st.feedCursor);
+    if (!next.ok) return no(`${next.why} (page ${feedPages + 2})`);
+    stale = st.posts.size === before ? stale + 1 : 0;
+    try {
+      onPage?.(feedPages + 1, st.posts.size);
+    } catch {
+      // Считать прогресс — дело вызывающего; его беда сбору ленты не мешает.
+    }
+  }
+
+  // Профиль — по id: из своих публикаций, а без них поиском. `web_profile_info` не трогаем: 429.
+  let uid = uidOfPosts(st);
+  if (!uid) {
+    const found = await anchor.get(`/web/search/topsearch/?context=blended&query=${encodeURIComponent(handle)}&include_reel=false`);
+    uid = found.ok ? uidFromSearch(found.json, handle) : null;
+    if (!uid) return no(`profile: id not found${found.ok ? "" : ` (${found.why})`}`);
+  }
+  if (pauseMs > 0) await sleep(pauseMs);
+  const info = await anchor.get(`/api/v1/users/${encodeURIComponent(uid)}/info/`);
+  if (!info.ok) return no(`profile: ${info.why}`);
+  const profile = profileFromInfo(info.json);
+  if (!profile) return no("profile: the response has no user");
+  if (profile.username.toLowerCase() !== handle.toLowerCase()) return no(`profile: id ${uid} returned @${profile.username}`);
+  // Пустая лента при непустом профиле — закрытый, ограниченный или сломанный шаблон. Судить об
+  // этом должна страница: у неё есть экран и слова для владельца.
+  if (st.posts.size === 0 && (profile.videosCount ?? 0) > 0) return no(`the feed is empty while the profile lists ${profile.videosCount} posts`);
+  return { ok: true, why: null, st, feedPages, stopReason, profile, uid };
+}
+
+/**
+ * Просмотры Reels прямыми запросами из якоря — по шаблону, пойманному раньше в этом обходе.
+ * `need()` — клипы, которым просмотры ещё нужны. Отдаёт `{ ok, why, rounds }`.
+ */
+async function reelsDirect(ctx, cache, st, uid, need, { pauseMs, onRound, log }) {
+  if (!cache.reels) return { ok: false, why: "there is no Reels template yet", rounds: 0 };
+  const anchor = await openIgAnchor(ctx, { log });
+  if (!anchor.ok) return { ok: false, why: anchor.why, rounds: 0 };
+  const page = async (after) => {
+    const res = await anchor.post(cache.reels, reelsVariables(cache.reels.body.variables, { uid, after }));
+    const clips = res.ok ? clipsConnectionOf(res.json) : null;
+    if (!clips) return res.ok ? "the response has no Reels" : res.why;
+    takeClipsPage(clips, st);
+    return null;
+  };
+  const firstWhy = await page(null);
+  if (firstWhy) return { ok: false, why: firstWhy, rounds: 0 };
+  let rounds = 0;
+  for (; rounds < REELS_ROUNDS && need().length > 0 && !st.reelsEnded && st.reelsCursor; rounds++) {
+    if (pauseMs > 0) await sleep(pauseMs);
+    const why = await page(st.reelsCursor);
+    if (why) return { ok: false, why, rounds };
+    onRound(rounds + 1);
+  }
+  return { ok: true, why: null, rounds };
+}
+
+/**
+ * Просмотры Reels страницей вкладки: первая пачка приходит сама, дальше — повтор пойманного
+ * шаблона с курсором (при `direct`), а не дал он — прокрутка, как было всегда.
+ * Отдаёт `{ rounds, replayed }`; вкладка не открылась — строка в лог и замечание, без исключения.
+ */
+async function reelsOnPage(page, cache, st, uid, need, { handle, direct, pauseMs, onRound, log }) {
+  let rounds = 0, replayed = 0;
+  try {
+    await page.goto(`https://www.instagram.com/${handle}/reels/`, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
+    await page.waitForTimeout(SETTLE_MS);
+    let replay = direct === true && uid !== null;
+    for (; rounds < REELS_ROUNDS && need().length > 0 && !st.reelsEnded; rounds++) {
+      let done = false;
+      if (replay && cache.reels && st.reelsCursor) {
+        if (pauseMs > 0) await sleep(pauseMs);
+        const res = await postTemplate(page, cache.reels, reelsVariables(cache.reels.body.variables, { uid, after: st.reelsCursor }));
+        const clips = res.ok ? clipsConnectionOf(res.json) : null;
+        if (clips) {
+          takeClipsPage(clips, st);
+          done = true;
+          replayed++;
+        } else {
+          replay = false;
+          log?.(`  Reels: replaying the request gave nothing (${res.ok ? "no Reels in the response" : res.why}) — falling back to scrolling`);
+        }
+      }
+      if (!done) await scrollRound(page);
+      onRound(rounds + 1);
+    }
+  } catch (e) {
+    // Вкладка не открылась — публикации и счётчики уже собраны, теряем только просмотры.
+    const text = String(e?.message ?? e).split("\n")[0];
+    log?.(`  the Reels tab did not open: ${text}`);
+    notice("list", `@${handle}: the Reels tab did not open — there will be no view counts (${text})`);
+  }
+  return { rounds, replayed };
+}
+
+/**
+ * Хвост сбора — общий для прямого пути и страницы: публикации в форму сборщика, глубина, потолок,
+ * «только наши», просмотры Reels, итоговые строки лога. `loadReels(need)` добирает просмотры и
+ * отдаёт `{ rounds, how }`; как именно — решает вызывающий.
+ */
+async function finishList(st, { handle, depth, since, until, mode, trackedIds, tracked, maxVideos, feedPages, stopReason, profile, loadReels, log }) {
+  const all = [...st.posts.values()]
+    .map((n) => ({
+      id: String(n.pk),
+      code: n.code ?? null,
+      productType: n.product_type ?? null,
+      publishedAt: n.taken_at ? new Date(Number(n.taken_at) * 1000).toISOString() : null,
+      caption: n.caption?.text || "",
+      coverUrl: n.image_versions2?.candidates?.[0]?.url ?? null,
+      // `videos.url` в базе NOT NULL: без `code` (бывает у скрытых) ставим профиль.
+      url: n.code ? `https://www.instagram.com/p/${n.code}/` : `https://www.instagram.com/${handle}/`,
+      durationS: num(n.video_duration),     // в ленте длительности нет — обычно останется null
+      views: null,
+      likes: num(n.like_count),
+      comments: num(n.comment_count),
+      shares: num(n.media_repost_count),
+      saves: null,
+    }))
+    .sort((a, b) => at(b) - at(a))
+    .slice(0, MAX_POSTS);
+
+  // Глубина: в базу идёт только попавшее в границы, но «пришедшими» считаем всё, что отдал
+  // Instagram. ⚠️ Нижнюю границу отслеживаемые публикации переживают (за старыми нашими охват
+  // и листал), верхнюю — нет: период есть период.
+  const picked = filterDepth(all, since, trackedIds, until, maxVideos);
+  log?.(`  posts received ${all.length}${st.hasNext ? "" : " (the list ended)"}${st.reachedOld && mode !== "ours" ? " (scrolling stopped: posts older than the boundary started coming)" : ""}`);
+  if (maxVideos !== null) {
+    log?.(`  cap: no more than ${maxVideos} newest videos — took ${picked.length} over ${feedPages} scrolls${stopReason === "max" ? " (scrolling stopped: cap reached)" : ""}`);
+  }
+  if (mode === "ours") {
+    const missing = missingTracked(trackedIds, [...st.posts.keys()]);
+    log?.(`  scope: ours only — tracked videos ${trackedIds.length}, found ${trackedIds.length - missing.length} over ${feedPages} scrolls`);
+    if (missing.length > 0) {
+      log?.(`  ${missing.length} of our/yellow videos not found over ${feedPages} scrolls${st.hasNext ? "" : " — the feed ended, the missing-video watchdog will handle them"}`);
+      // Лента кончилась — письмо пишет сторож пропавших ОДИН раз на видео (владелец, 2026-09-16).
+      // Недолистали — это «не дошли», а не «удалено», и об этом говорим здесь, как раньше.
+      if (st.hasNext) notice("list", `@${handle}: ${missing.length} of our/yellow videos not found over ${feedPages} scrolls (scope "ours only")`);
+    }
+  }
+  if (since !== null || until !== null) {
+    log?.(`  for ${depthWord(depth)}: ${picked.length} of ${all.length} received${mode === "ours" && until === null ? " (tracked included, they stay however old)" : ""}${until !== null ? " (posts newer than the upper boundary are skipped — even tracked ones)" : ""}`);
+    log?.(`  pinned posts skipped: ${st.pinned.size}`);
+  }
+
+  // Просмотры живут только на вкладке Reels — и только у клипов.
+  // ⚠️ При охвате «только наши» просмотры спрашиваются ТОЛЬКО у отслеживаемых клипов: вкладка
+  // Reels — самый долгий шаг Instagram, и открывать её ради чужих видео незачем. Нет своих
+  // клипов среди отслеживаемых — вкладка не открывается вовсе.
+  const wanted = (v) => mode !== "ours" || tracked.has(String(v.id));
+  const need = () => picked.filter((v) => v.productType === "clips" && wanted(v) && st.plays.get(v.code) === undefined && st.plays.get(v.id) === undefined);
+  const clips = need().length;
+  if (mode === "ours") log?.(`  Reels: with scope "ours only" there are ${clips} tracked clips${clips === 0 ? " — the tab is not opened" : ""}`);
+  let rounds = 0, how = "";
+  if (clips > 0) ({ rounds, how } = await loadReels(need));
+  // Просмотры кладём всем, у кого они нашлись: вкладка Reels отдаёт целую страницу клипов
+  // разом, и чужие `play_count` приезжают даром. А вот СЧИТАЕМ найденное по тем же, по кому
+  // считали нужное, — иначе при охвате «только наши» выходит «нашлись у 5 из 1 клипов».
+  for (const v of picked) v.views = st.plays.get(v.code) ?? st.plays.get(v.id) ?? null;
+  const withViews = picked.filter((v) => v.views !== null && wanted(v)).length;
+  log?.(`  Reels: view counts found for ${withViews} of ${clips} clips (rounds ${rounds}, clips on the tab ${st.reelsSeen}${how ? `, ${how}` : ""})`);
+
+  if (picked.length === 0 && since === null && (profile.videosCount ?? 0) > 0) {
+    throw new Error(`Instagram: the feed is empty while the profile lists ${profile.videosCount} posts: @${handle}`);
+  }
+  // Служебные поля наружу не отдаём: форма ответа общая для всех площадок.
+  const videos = picked.map(({ code, productType, ...v }) => v);
+  // `pages` — сколько прокруток (или повторов) стоил шаг: лента и Reels вместе. Наружу оно нужно
+  // одной калибровке (`estimate.mjs`): без числа прокруток время шага не разложить на «запуск» и
+  // «страницу».
+  // `seenIds`, `rawCount`, `listEnded` — сторожу пропавших видео (`sync.mjs`), тот же смысл, что у
+  // TikTok: судим только по ленте, которую Instagram сам назвал законченной (`has_next_page`).
+  return { profile, videos, pages: feedPages + rounds, rawCount: st.posts.size, seenIds: [...st.posts.keys()].map(String), listEnded: !st.hasNext };
+}
+
 /**
  * Сбор креатора Instagram через браузер.
  * `creator` — строка из `creators` (нужен `handle`).
@@ -240,9 +551,9 @@ async function scrollRound(page) {
  * (null — без потолка) обрывает прокрутку ленты, как только набрано столько публикаций.
  * Отдаёт ту же форму, что и TikTok: `{ profile, videos }`; при беде — Error с русским текстом.
  */
-export async function collectInstagramWeb(creator, { depth = "all", bounds = null, browserChoice = "", ctx: shared = null, scope = null, proxy = null, onPage = null, log } = {}) {
+export async function collectInstagramWeb(creator, { depth = "all", bounds = null, browserChoice = "", ctx: shared = null, scope = null, proxy = null, onPage = null, direct = false, directPauseMs = 500, log } = {}) {
   const handle = String(creator?.handle ?? "").replace(/^@/, "");
-  if (!handle) throw new Error("у креатора пустой handle");
+  if (!handle) throw new Error("creator has an empty handle");
   const { since, until } = bounds ?? depthBounds(depth);
   const mode = scope?.videos === "ours" ? "ours" : "all";
   const trackedIds = mode === "ours" ? scope?.trackedIds ?? [] : [];
@@ -270,7 +581,7 @@ export async function collectInstagramWeb(creator, { depth = "all", bounds = nul
   let page = null;
   try {
     if (browser) {
-      log?.(`  браузер: ${browser.describe}, профиль ${browser.profile}`);
+      log?.(`  browser: ${browser.describe}, profile ${browser.profile}`);
       // Чужие хосты, видео и шрифты в этот браузер не пускаем: лента и Reels тянут за собой
       // десятки чужих кадров. Не поставился перехват — шаг всё равно идёт, просто прожорливее.
       // ⚠️ У общего браузера полосы перехват ставится ОДИН РАЗ, снаружи (`sync.mjs`): второй
@@ -278,69 +589,88 @@ export async function collectInstagramWeb(creator, { depth = "all", bounds = nul
       try {
         traffic = await trimTraffic(ctx, HOSTS_INSTAGRAM, { log });
       } catch (e) {
-        log?.(`  лишнее отсечь не вышло: ${String(e?.message ?? e).split("\n")[0]}`);
+        log?.(`  could not set up request trimming: ${String(e?.message ?? e).split("\n")[0]}`);
       }
     }
     // Отсутствие cookie `sessionid` — признак истёкшей сессии, но НЕ приговор сам по себе:
     // приговор выносится ниже, разом со всеми признаками и только на пустых руках.
-    const noSession = !(await ctx.cookies("https://www.instagram.com")).some((c) => c.name === "sessionid");
+    const cookies = await ctx.cookies("https://www.instagram.com");
+    const session = cookies.find((c) => c.name === "sessionid") ?? null;
+    const noSession = session === null;
+    // 🔴 А вот СРОК этой cookie — сигнал, которому верить можно: Instagram продлевает её каждым
+    // удачным заходом. Перестала двигаться — сторож скажет об этом раньше, чем пропадут данные
+    // (владелец, 2026-09-16). `expires` Playwright отдаёт в секундах, `-1` — сессионная.
+    try {
+      const expires = Number(session?.expires);
+      noteSessionCookie("instagram (profile-opera)", Number.isFinite(expires) && expires > 0 ? expires * 1000 : null, { log });
+    } catch (e) {
+      // Сторож сессии не имеет права свалить сбор: это предупреждение, а не работа.
+      log?.(`  the session watchdog did not run: ${String(e?.message ?? e).split("\n")[0]}`);
+    }
 
+    const cache = templatesFor(ctx, { log });
+    const pauseMs = Math.max(0, Number(directPauseMs) || 0);
+    const common = { handle, depth, since, until, mode, trackedIds, tracked, feedRounds, maxVideos, pauseMs, onPage, log };
+
+    // --- прямой путь: шаблон ленты уже пойман на ком-то раньше в этом обходе ------------------
+    // 🔴 Страница профиля не открывается вовсе: лента повтором запроса, профиль по id, просмотры
+    // — шаблоном Reels (владелец, 2026-09-16: «все моменты — на прямые запросы, заранее»). Любой
+    // отказ — креатор идёт страницей ниже, слово в слово прежней, только листает она повтором.
+    if (direct === true && cache.feed) {
+      const got = await listDirect(ctx, cache, common);
+      if (got.ok) {
+        const p = got.profile;
+        log?.(`  via direct requests: feed ${got.feedPages + 1} pages, profile by id — the profile page was never opened`);
+        log?.(`  profile counters: followers ${p.followers ?? "?"} (direct request), following ${p.following ?? "?"} (direct request), posts ${p.videosCount ?? "?"} (direct request)`);
+        const onRound = (n) => {
+          try {
+            onPage?.(got.feedPages + n, got.st.posts.size);
+          } catch {
+            // Беда счётчика прогресса Reels не роняет.
+          }
+        };
+        return await finishList(got.st, {
+          ...common,
+          feedPages: got.feedPages,
+          stopReason: got.stopReason,
+          profile: { followers: p.followers, following: p.following, likesTotal: null, videosCount: p.videosCount, nickname: p.nickname || handle, signature: p.signature, avatar: p.avatar },
+          loadReels: async (need) => {
+            const fast = await reelsDirect(ctx, cache, got.st, got.uid, need, { pauseMs, onRound, log });
+            if (fast.ok) return { rounds: fast.rounds, how: "via direct requests" };
+            // Шаблона Reels ещё нет или он не дал — вкладка своей страницей (с неё шаблон и поймается).
+            log?.(`  Reels: the direct path gave nothing (${fast.why}) — opening the tab`);
+            const reelsPage = await ctx.newPage();
+            try {
+              watchTemplates(reelsPage, cache);
+              attachListListener(reelsPage, got.st, { handle, since });
+              const r = await reelsOnPage(reelsPage, cache, got.st, got.uid, need, { handle, direct: true, pauseMs, onRound, log });
+              return { rounds: r.rounds, how: r.replayed > 0 ? `via the tab, ${r.replayed} replays` : "via the tab" };
+            } finally {
+              try {
+                await reelsPage.close();
+              } catch {
+                // Вкладка могла закрыться сама вместе с браузером.
+              }
+            }
+          },
+        });
+      }
+      log?.(`  the direct path gave nothing (${got.why}) — opening the profile page`);
+      notice("direct", `@${handle}: the Instagram list via direct request gave nothing — ${got.why}`);
+    }
+
+    // --- страница профиля: прежний путь; с неё ловятся шаблоны, а листает она повтором ----------
     page = await ctx.newPage();
-    const posts = new Map();   // pk → узел ленты
-    const plays = new Map();   // code и pk → play_count из Reels
-    const pinned = new Set();  // pk закреплённых: они не участвуют в проверке недели
-    let hasNext = true, reachedOld = false, limited = false, lostSession = false, reelsSeen = 0;
-
-    page.on("response", async (r) => {
-      const url = r.url();
-      if (!url.includes("instagram.com")) return;
-      if (r.status() === 429) { limited = true; return; }
-      if (!url.includes("/graphql/query")) return;
-      let text = "";
-      try {
-        text = await r.text();
-      } catch {
-        // Ответ мог не дойти (страница ушла) — круг просто не даст прироста.
-      }
-      if (!text) return;
-      if (RATE_JSON.test(text)) limited = true;
-      if (/"login_required"/.test(text)) lostSession = true;
-      let json = null;
-      try {
-        json = JSON.parse(text);
-      } catch {
-        return;
-      }
-      const feed = json?.data?.xdt_api__v1__feed__user_timeline_graphql_connection;
-      for (const edge of feed?.edges ?? []) {
-        const node = edge?.node;
-        if (!node?.pk) continue;
-        const owner = node.user?.username;
-        if (owner && owner.toLowerCase() !== handle.toLowerCase()) continue;
-        posts.set(String(node.pk), node);
-      }
-      if (feed?.page_info?.has_next_page === false) hasNext = false;
-      // Нижняя граница глубины: самая старая незакреплённая публикация пачки старше неё —
-      // дальше не листаем. Закреплённые считаются отдельно и остановку не вызывают.
-      if (since !== null && (feed?.edges?.length ?? 0) > 0) {
-        const oldest = oldestUnpinned(feed.edges, pinned);
-        if (oldest !== null && oldest < since) reachedOld = true;
-      }
-      for (const edge of json?.data?.fetch__XDTUserDict?.clips_connection?.edges ?? []) {
-        const media = edge?.node?.media;
-        if (!media || media.play_count === null || media.play_count === undefined) continue;
-        reelsSeen++;
-        if (media.code) plays.set(String(media.code), Number(media.play_count));
-        if (media.pk) plays.set(String(media.pk), Number(media.play_count));
-      }
-    });
+    if (direct === true) watchTemplates(page, cache);
+    const st = newListState();
+    attachListListener(page, st, { handle, since });
 
     let status = null;
     try {
       const res = await page.goto(`https://www.instagram.com/${handle}/`, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
       status = res?.status() ?? null;
     } catch (e) {
-      throw new Error(`Instagram: страница профиля @${handle} не открылась: ${String(e?.message ?? e).split("\n")[0]}`);
+      throw new Error(`Instagram: profile page @${handle} did not open: ${String(e?.message ?? e).split("\n")[0]}`);
     }
     if (status === 429) throw new Error(ERR_LIMIT);
     await page.waitForTimeout(SETTLE_MS);
@@ -348,37 +678,37 @@ export async function collectInstagramWeb(creator, { depth = "all", bounds = nul
     const head = await readHead(page);
     const stats = pickStats(head);
     // Собрать хоть что-нибудь — значит прочесть счётчики профиля или получить публикации.
-    const gotSomething = () => posts.size > 0 || stats.followers.value !== null || stats.posts.value !== null;
+    const gotSomething = () => st.posts.size > 0 || stats.followers.value !== null || stats.posts.value !== null;
 
     // ⚠️ Ни форма входа, ни пометка `login_required`, ни отсутствие cookie `sessionid` сами по
     // себе не означают потерянную сессию: форму Instagram держит на странице и у вошедшего, а
     // `login_required` приезжает в отдельных ответах при живой сессии (проба 2026-09-08 — та же
     // ложная тревога, что уже вылечена в `comments-instagram.mjs`). Приговором это становится,
     // только когда собрать не удалось ничего — ни профиля, ни публикаций.
-    if ((noSession || lostSession || head.loginWall) && !gotSomething()) {
-      log?.(`  вход не подтвердился: адрес ${head.url}, стена входа=${head.loginWall}, login_required=${lostSession}, cookie sessionid=${noSession ? "нет" : "есть"}, публикаций ${posts.size}`);
-      notice("session", `@${handle}: вход не подтвердился (стена входа=${head.loginWall}, login_required=${lostSession}, cookie sessionid=${noSession ? "нет" : "есть"})`);
+    if ((noSession || st.lostSession || head.loginWall) && !gotSomething()) {
+      log?.(`  login not confirmed: url ${head.url}, login wall=${head.loginWall}, login_required=${st.lostSession}, cookie sessionid=${noSession ? "no" : "yes"}, posts ${st.posts.size}`);
+      notice("session", `@${handle}: login not confirmed (login wall=${head.loginWall}, login_required=${st.lostSession}, cookie sessionid=${noSession ? "no" : "yes"})`);
       throw new Error(ERR_SESSION);
     }
     // Признаки истёкшей сессии стоит знать и тогда, когда собрать всё-таки удалось: сегодня
     // прошло, завтра встанет. ⚠️ Но это НЕ письмо: копится и уходит одной строкой в лог на
     // обход и площадку (владелец, 2026-09-08: не письмо на каждую публикацию).
-    if (noSession || lostSession || head.loginWall) {
-      sessionHint("instagram (profile-opera)", `@${handle}: cookie sessionid=${noSession ? "нет" : "есть"}, login_required=${lostSession}, стена входа=${head.loginWall}`);
+    if (noSession || st.lostSession || head.loginWall) {
+      sessionHint("instagram (profile-opera)", `@${handle}: cookie sessionid=${noSession ? "no" : "yes"}, login_required=${st.lostSession}, login wall=${head.loginWall}`);
     }
     // Ограничение объявляем, только когда оно и правда помешало: одинокая пометка в чужом
     // ответе при пришедшей первой пачке — не повод объявить обход неудачным.
-    if ((limited || RATE_TEXT.test(head.bodyText)) && posts.size === 0) {
-      notice("limit", `@${handle}: Instagram ограничил запросы`);
+    if ((st.limited || RATE_TEXT.test(head.bodyText)) && st.posts.size === 0) {
+      notice("limit", `@${handle}: Instagram rate-limited the requests`);
       throw new Error(ERR_LIMIT);
     }
     // Те же слова могут стоять и в биографии живого профиля, поэтому текст экрана считается
     // приговором только когда лента пуста: у закрытого и несуществующего публикаций не бывает.
-    if (status === 404 || (MISSING_TEXT.test(head.bodyText) && posts.size === 0)) throw new Error(`Instagram: профиль не найден: @${handle}`);
-    if (PRIVATE_TEXT.test(head.bodyText) && posts.size === 0) throw new Error(`Instagram: закрытый профиль: @${handle}`);
+    if (status === 404 || (MISSING_TEXT.test(head.bodyText) && st.posts.size === 0)) throw new Error(`Instagram: profile not found: @${handle}`);
+    if (PRIVATE_TEXT.test(head.bodyText) && st.posts.size === 0) throw new Error(`Instagram: private profile: @${handle}`);
 
-    if (!gotSomething()) throw new Error(`Instagram: профиль не найден: @${handle}`);
-    log?.(`  счётчики профиля: подписчики ${stats.followers.value ?? "?"} (${stats.followers.from}${stats.followers.approx ? ", ПРИБЛИЗИТЕЛЬНО" : ""}), подписки ${stats.following.value ?? "?"} (${stats.following.from}), публикаций ${stats.posts.value ?? "?"} (${stats.posts.from})`);
+    if (!gotSomething()) throw new Error(`Instagram: profile not found: @${handle}`);
+    log?.(`  profile counters: followers ${stats.followers.value ?? "?"} (${stats.followers.from}${stats.followers.approx ? ", APPROXIMATE" : ""}), following ${stats.following.value ?? "?"} (${stats.following.from}), posts ${stats.posts.value ?? "?"} (${stats.posts.from})`);
 
     // Лента: листаем до конца, до потолка или до первой публикации старше недели; при охвате
     // «только наши» — пока не встретились все отслеживаемые (`listStop` в `scope.mjs`).
@@ -386,36 +716,54 @@ export async function collectInstagramWeb(creator, { depth = "all", bounds = nul
     // Сколько публикаций в пределах глубины уже набрано — считает та же `filterDepth`, что решает,
     // кто уйдёт в базу (как в `tiktok.mjs`). Потолка нет — не считаем вовсе.
     const inDepth = () => (maxVideos === null ? 0
-      : filterDepth([...posts.values()].map((n) => ({ id: String(n.pk), publishedAt: n.taken_at ? new Date(Number(n.taken_at) * 1000).toISOString() : null })), since, trackedIds, until).length);
+      : filterDepth([...st.posts.values()].map((n) => ({ id: String(n.pk), publishedAt: n.taken_at ? new Date(Number(n.taken_at) * 1000).toISOString() : null })), since, trackedIds, until).length);
 
-    let stale = 0, feedPages = 0, stopReason = null;
+    // 🔴 Следующая страница — повтором запроса ленты, пойманного с этой же страницы, с курсором
+    // площадки; не дал он — прокруткой, как было всегда (владелец, 2026-09-16).
+    let replayFeed = direct === true;
+    let stale = 0, feedPages = 0, stopReason = null, feedReplays = 0;
     for (; feedPages < feedRounds; feedPages++) {
-      const step = listStop({ mode, trackedIds, seenIds: [...posts.keys()], reachedOld, hasMore: hasNext, maxVideos, inDepth: inDepth() });
+      const step = listStop({ mode, trackedIds, seenIds: [...st.posts.keys()], reachedOld: st.reachedOld, hasMore: st.hasNext, maxVideos, inDepth: inDepth() });
       if (step.stop) { stopReason = step.reason; break; }
-      if (stale >= STALE_ROUNDS || posts.size >= MAX_POSTS) break;
-      const before = posts.size;
-      await scrollRound(page);
-      stale = posts.size === before ? stale + 1 : 0;
-      // Прокрутка сделана — двигаем полосу прогресса обхода (`sync.mjs`, миграция v24): у
+      if (stale >= STALE_ROUNDS || st.posts.size >= MAX_POSTS) break;
+      const before = st.posts.size;
+      let replayed = false;
+      if (replayFeed && cache.feed && st.feedCursor) {
+        if (pauseMs > 0) await sleep(pauseMs);
+        const res = await postTemplate(page, cache.feed, feedVariables(cache.feed.body.variables, { username: handle, after: st.feedCursor }));
+        const feed = res.ok ? feedConnectionOf(res.json) : null;
+        if (feed) {
+          takeFeedPage(feed, st, { handle, since });
+          replayed = true;
+          feedReplays++;
+        } else {
+          replayFeed = false;
+          log?.(`  feed: the request replay gave nothing (${res.ok ? "the response has no feed" : res.why}) — scrolling from here on`);
+        }
+      }
+      if (!replayed) await scrollRound(page);
+      stale = st.posts.size === before ? stale + 1 : 0;
+      // Страница взята — двигаем полосу прогресса обхода (`sync.mjs`, миграция v24): у
       // крупного аккаунта одна лента идёт минутами, и полоса не должна стоять всё это время.
       // Своих исключений хук не бросает — лента из-за него не встаёт.
       try {
-        onPage?.(feedPages + 1, posts.size);
+        onPage?.(feedPages + 1, st.posts.size);
       } catch {
         // Считать прогресс — дело вызывающего; его беда сбору ленты не мешает.
       }
     }
+    if (feedReplays > 0) log?.(`  feed: ${feedReplays} of ${feedPages} pages via request replay`);
     // Тот же порядок, что и до прокрутки: пометка в ответе — приговор только на пустых руках.
-    if ((noSession || lostSession) && !gotSomething()) {
-      notice("session", `@${handle}: после прокрутки не собралось ничего, вход не подтверждён`);
+    if ((noSession || st.lostSession) && !gotSomething()) {
+      notice("session", `@${handle}: nothing collected after scrolling, login not confirmed`);
       throw new Error(ERR_SESSION);
     }
-    if (limited && posts.size === 0) {
-      notice("limit", `@${handle}: Instagram ограничил запросы (лента пуста)`);
+    if (st.limited && st.posts.size === 0) {
+      notice("limit", `@${handle}: Instagram rate-limited the requests (the feed is empty)`);
       throw new Error(ERR_LIMIT);
     }
 
-    const owner = [...posts.values()].find((n) => n.user?.username?.toLowerCase() === handle.toLowerCase())?.user ?? null;
+    const owner = [...st.posts.values()].find((n) => n.user?.username?.toLowerCase() === handle.toLowerCase())?.user ?? null;
     const profile = {
       followers: stats.followers.value,
       following: stats.following.value,
@@ -425,93 +773,33 @@ export async function collectInstagramWeb(creator, { depth = "all", bounds = nul
       signature: bioFromDescription(head.description || head.ogDescription),
       avatar: owner?.hd_profile_pic_url_info?.url || owner?.profile_pic_url || head.ogImage || null,
     };
-
-    const all = [...posts.values()]
-      .map((n) => ({
-        id: String(n.pk),
-        code: n.code ?? null,
-        productType: n.product_type ?? null,
-        publishedAt: n.taken_at ? new Date(Number(n.taken_at) * 1000).toISOString() : null,
-        caption: n.caption?.text || "",
-        coverUrl: n.image_versions2?.candidates?.[0]?.url ?? null,
-        // `videos.url` в базе NOT NULL: без `code` (бывает у скрытых) ставим профиль.
-        url: n.code ? `https://www.instagram.com/p/${n.code}/` : `https://www.instagram.com/${handle}/`,
-        durationS: num(n.video_duration),     // в ленте длительности нет — обычно останется null
-        views: null,
-        likes: num(n.like_count),
-        comments: num(n.comment_count),
-        shares: num(n.media_repost_count),
-        saves: null,
-      }))
-      .sort((a, b) => at(b) - at(a))
-      .slice(0, MAX_POSTS);
-
-    // Глубина: в базу идёт только попавшее в границы, но «пришедшими» считаем всё, что отдал
-    // Instagram. ⚠️ Нижнюю границу отслеживаемые публикации переживают (за старыми нашими охват
-    // и листал), верхнюю — нет: период есть период.
-    const picked = filterDepth(all, since, trackedIds, until, maxVideos);
-    log?.(`  публикаций пришло ${all.length}${hasNext ? "" : " (список кончился)"}${reachedOld && mode !== "ours" ? " (прокрутка остановлена: пошли публикации старше границы)" : ""}`);
-    if (maxVideos !== null) {
-      log?.(`  потолок: не больше ${maxVideos} самых новых видео — взято ${picked.length} за ${feedPages} прокруток${stopReason === "max" ? " (прокрутка остановлена: потолок набран)" : ""}`);
-    }
-    if (mode === "ours") {
-      const missing = missingTracked(trackedIds, [...posts.keys()]);
-      log?.(`  охват: только наши — отслеживаемых видео ${trackedIds.length}, найдено ${trackedIds.length - missing.length} за ${feedPages} прокруток`);
-      if (missing.length > 0) {
-        log?.(`  не найдено ${missing.length} наших/жёлтых видео за ${feedPages} прокруток`);
-        notice("list", `@${handle}: не найдено ${missing.length} наших/жёлтых видео за ${feedPages} прокруток (охват «только наши»)`);
-      }
-    }
-    if (since !== null || until !== null) {
-      log?.(`  за ${depthWord(depth)}: ${picked.length} из ${all.length} пришедших${mode === "ours" && until === null ? " (с отслеживаемыми, они остаются при любой давности)" : ""}${until !== null ? " (публикации свежее верхней границы не берём — даже отслеживаемые)" : ""}`);
-      log?.(`  закреплённых пропущено: ${pinned.size}`);
-    }
-
-    // Просмотры живут только на вкладке Reels — и только у клипов.
-    // ⚠️ При охвате «только наши» просмотры спрашиваются ТОЛЬКО у отслеживаемых клипов: вкладка
-    // Reels — самый долгий шаг Instagram, и открывать её ради чужих видео незачем. Нет своих
-    // клипов среди отслеживаемых — вкладка не открывается вовсе.
-    const wanted = (v) => mode !== "ours" || tracked.has(String(v.id));
-    const need = () => picked.filter((v) => v.productType === "clips" && wanted(v) && plays.get(v.code) === undefined && plays.get(v.id) === undefined);
-    const clips = need().length;
-    if (mode === "ours") log?.(`  Reels: при охвате «только наши» отслеживаемых клипов ${clips}${clips === 0 ? " — вкладку не открываем" : ""}`);
-    let rounds = 0;
-    if (clips > 0) {
+    const onRound = (n) => {
       try {
-        await page.goto(`https://www.instagram.com/${handle}/reels/`, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
-        await page.waitForTimeout(SETTLE_MS);
-        for (; rounds < REELS_ROUNDS && need().length > 0; rounds++) {
-          await scrollRound(page);
-          // Круги вкладки Reels считаются прокрутками наравне с лентой — в `pages` они и уходят.
-          try {
-            onPage?.(feedPages + rounds + 1, posts.size);
-          } catch {
-            // Беда счётчика прогресса вкладку Reels не роняет.
+        // Круги вкладки Reels считаются прокрутками наравне с лентой — в `pages` они и уходят.
+        onPage?.(feedPages + n, st.posts.size);
+      } catch {
+        // Беда счётчика прогресса вкладку Reels не роняет.
+      }
+    };
+    return await finishList(st, {
+      ...common,
+      feedPages,
+      stopReason,
+      profile,
+      loadReels: async (need) => {
+        // Шаблон Reels уже есть (пойман раньше в обходе) — просмотры прямыми запросами, без вкладки.
+        if (direct === true && cache.reels) {
+          const uid = uidOfPosts(st);
+          if (uid) {
+            const fast = await reelsDirect(ctx, cache, st, uid, need, { pauseMs, onRound, log });
+            if (fast.ok) return { rounds: fast.rounds, how: "via direct requests" };
+            log?.(`  Reels: the direct path gave nothing (${fast.why}) — opening the tab`);
           }
         }
-      } catch (e) {
-        // Вкладка не открылась — публикации и счётчики уже собраны, теряем только просмотры.
-        const text = String(e?.message ?? e).split("\n")[0];
-        log?.(`  вкладка Reels не открылась: ${text}`);
-        notice("list", `@${handle}: вкладка Reels не открылась — просмотров не будет (${text})`);
-      }
-    }
-    // Просмотры кладём всем, у кого они нашлись: вкладка Reels отдаёт целую страницу клипов
-    // разом, и чужие `play_count` приезжают даром. А вот СЧИТАЕМ найденное по тем же, по кому
-    // считали нужное, — иначе при охвате «только наши» выходит «нашлись у 5 из 1 клипов».
-    for (const v of picked) v.views = plays.get(v.code) ?? plays.get(v.id) ?? null;
-    const withViews = picked.filter((v) => v.views !== null && wanted(v)).length;
-    log?.(`  Reels: просмотры нашлись у ${withViews} из ${clips} клипов (кругов ${rounds}, роликов на вкладке ${reelsSeen})`);
-
-    if (picked.length === 0 && since === null && (profile.videosCount ?? 0) > 0) {
-      throw new Error(`Instagram: лента пуста при ${profile.videosCount} публикациях по профилю: @${handle}`);
-    }
-    // Служебные поля наружу не отдаём: форма ответа общая для всех площадок.
-    const videos = picked.map(({ code, productType, ...v }) => v);
-    // `pages` — сколько прокруток стоил шаг: круги ленты и круги вкладки Reels вместе. Наружу
-    // оно нужно одной калибровке (`estimate.mjs`): без числа прокруток время шага не разложить
-    // на «запуск» и «страницу».
-    return { profile, videos, pages: feedPages + rounds };
+        const r = await reelsOnPage(page, cache, st, uidOfPosts(st), need, { handle, direct, pauseMs, onRound, log });
+        return { rounds: r.rounds, how: r.replayed > 0 ? `via the tab, ${r.replayed} replays` : "" };
+      },
+    });
   } finally {
     // Вкладку закрываем всегда и сами: браузер полосы живёт дальше, а незакрытая вкладка —
     // это свой renderer, своя память и хвост, всплывающий при следующем запуске профиля.
@@ -526,7 +814,7 @@ export async function collectInstagramWeb(creator, { depth = "all", bounds = nul
       // Счёт перехвата пишем при любом исходе: на неудачном обходе он нужнее всего.
       if (traffic) {
         const { aborted, passed } = traffic();
-        log?.(`  лишних запросов отсечено ${aborted}, пропущено ${passed}`);
+        log?.(`  extra requests aborted ${aborted}, passed ${passed}`);
       }
       // ⚠️ Профиль НЕ стирается: в нём вход фейкового аккаунта. Про это помнит сам `cleanup()`.
       await browser.cleanup();

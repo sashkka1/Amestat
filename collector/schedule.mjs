@@ -297,7 +297,7 @@ export function firstRunAt(now, minutes = 5) {
 // AMESTAT_MANUAL_RETRY_MIN минут защита обычно отпускает, и повтор идёт сам.
 
 /** Как выглядит ошибка «TikTok не отдал список из-за защиты по адресу» — здесь и в `tiktok.mjs`. */
-export const ADDRESS_ERROR_RE = /защита по адресу/i;
+export const ADDRESS_ERROR_RE = /address throttling/i;
 
 /**
  * Кого из неудавшихся креаторов свалила защита по адресу.

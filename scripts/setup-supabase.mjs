@@ -27,7 +27,7 @@ function fail(text) {
 }
 
 function readEnv(path) {
-  if (!existsSync(path)) fail(`нет ${path} — скопируй .env.local.example и заполни`);
+  if (!existsSync(path)) fail(`no ${path} — copy .env.local.example and fill it in`);
   const out = {};
   for (const raw of readFileSync(path, "utf8").split(/\r?\n/)) {
     const line = raw.trim();
@@ -42,7 +42,7 @@ function readEnv(path) {
 const env = readEnv(envPath);
 const need = (name) => {
   const v = env[name];
-  if (!v) fail(`в .env.local пусто ${name} — это обязательное`);
+  if (!v) fail(`${name} is empty in .env.local — it is required`);
   return v;
 };
 const maybe = (name) => env[name] || "";
@@ -57,8 +57,8 @@ const loginPassword = maybe("AMESTAT_LOGIN_PASSWORD");
 const siteUrl = maybe("AMESTAT_SITE_URL").replace(/\/?$/, "/");
 
 const ref = new URL(url).hostname.split(".")[0];
-if (!/^[a-z]{20}$/.test(ref)) fail(`не похоже на адрес проекта Supabase: ${url}`);
-console.log(`проект ${ref}`);
+if (!/^[a-z]{20}$/.test(ref)) fail(`does not look like a Supabase project URL: ${url}`);
+console.log(`project ${ref}`);
 
 // ---------------------------------------------------------------------------- CLI
 function cli(args) {
@@ -69,7 +69,7 @@ function cli(args) {
     stdio: "inherit",
     env: accessToken ? { ...process.env, SUPABASE_ACCESS_TOKEN: accessToken } : process.env,
   });
-  if (res.status !== 0) fail(`supabase ${args[0]} ${args[1] ?? ""} завершился с кодом ${res.status}`);
+  if (res.status !== 0) fail(`supabase ${args[0]} ${args[1] ?? ""} exited with code ${res.status}`);
 }
 
 // 1. Миграции.
@@ -87,10 +87,10 @@ if (accessToken && dbPassword) {
   const dbUrl = pooler
     ? `postgresql://postgres.${ref}:${encodeURIComponent(dbPassword)}@${pooler}:5432/postgres`
     : `postgresql://postgres:${encodeURIComponent(dbPassword)}@db.${ref}.supabase.co:5432/postgres`;
-  console.log(`→ supabase db push (по паролю базы, ${pooler ? "через пул " + pooler : "напрямую"})`);
+  console.log(`→ supabase db push (by database password, ${pooler ? "through the pooler " + pooler : "directly"})`);
   cli(["db", "push", "--db-url", dbUrl, "--yes"]);
 } else {
-  manual.push("Миграции: SQL Editor → выполнить по очереди supabase/migrations/*.sql (или дай SUPABASE_DB_PASSWORD — накачу сам)");
+  manual.push("Migrations: SQL Editor → run supabase/migrations/*.sql one by one (or provide SUPABASE_DB_PASSWORD and the script will push them itself)");
 }
 
 // ---------------------------------------------------------------------------- HTTP
@@ -117,12 +117,12 @@ let schemaReady = false;
 {
   const probe = await call("GET", `${url}/rest/v1/owners?select=user_id&limit=1`, undefined, adminHeaders);
   schemaReady = probe.status === 200;
-  console.log(schemaReady ? "→ схема в базе есть" : `→ схемы в базе ещё нет (HTTP ${probe.status})`);
+  console.log(schemaReady ? "→ the schema is in the database" : `→ the schema is not in the database yet (HTTP ${probe.status})`);
 }
 
 // 2. Пользователь сайта и замок owners.
 if (loginEmail && loginPassword) {
-  console.log("→ пользователь сайта");
+  console.log("→ site user");
   let userId = null;
   const created = await call("POST", `${url}/auth/v1/admin/users`, {
     email: loginEmail,
@@ -131,14 +131,14 @@ if (loginEmail && loginPassword) {
   }, adminHeaders);
   if (created.status === 200 || created.status === 201) {
     userId = created.json?.id ?? null;
-    console.log("  заведён");
+    console.log("  created");
   } else {
     // Уже есть — найдём. Пароль при этом не меняем: это решение владельца, а не скрипта.
     const list = await call("GET", `${url}/auth/v1/admin/users?page=1&per_page=1000`, undefined, adminHeaders);
     const found = (list.json?.users ?? []).find((u) => (u.email ?? "").toLowerCase() === loginEmail.toLowerCase());
-    if (!found) fail(`пользователь не создался (HTTP ${created.status}: ${created.text.slice(0, 200)}) и не найден`);
+    if (!found) fail(`the user was not created (HTTP ${created.status}: ${created.text.slice(0, 200)}) and was not found`);
     userId = found.id;
-    console.log("  уже был — оставлен как есть");
+    console.log("  already existed — left as is");
   }
   if (schemaReady) {
     const res = await call("POST", `${url}/rest/v1/owners?on_conflict=user_id`, { user_id: userId }, {
@@ -146,17 +146,17 @@ if (loginEmail && loginPassword) {
       Prefer: "resolution=ignore-duplicates,return=minimal",
     });
     if (res.status < 200 || res.status >= 300) fail(`owners: HTTP ${res.status}: ${res.text.slice(0, 200)}`);
-    console.log("  вписан в owners");
+    console.log("  written into owners");
   } else {
-    manual.push(`Замок: после миграций — SQL Editor: insert into public.owners (user_id) select id from auth.users where email = '${loginEmail}';`);
+    manual.push(`Lock: after the migrations — SQL Editor: insert into public.owners (user_id) select id from auth.users where email = '${loginEmail}';`);
   }
 } else {
-  manual.push("Пользователь: Authentication → Users → Add user (Auto confirm); затем SQL: insert into public.owners (user_id) select id from auth.users where email = '…'; (или дай AMESTAT_LOGIN_EMAIL и AMESTAT_LOGIN_PASSWORD)");
+  manual.push("User: Authentication → Users → Add user (Auto confirm); then SQL: insert into public.owners (user_id) select id from auth.users where email = '…'; (or provide AMESTAT_LOGIN_EMAIL and AMESTAT_LOGIN_PASSWORD)");
 }
 
 // 3. Регистрация и адреса сайта — только с токеном.
 if (accessToken) {
-  console.log("→ настройки Auth");
+  console.log("→ Auth settings");
   const body = { disable_signup: true };
   if (siteUrl) {
     body.site_url = siteUrl;
@@ -166,12 +166,12 @@ if (accessToken) {
     Authorization: `Bearer ${accessToken}`,
   });
   if (res.status < 200 || res.status >= 300) {
-    manual.push(`Регистрация: не выключилась (HTTP ${res.status}) — Authentication → Sign In / Providers → Email → выключить Allow new users to sign up`);
+    manual.push(`Sign-up: did not get disabled (HTTP ${res.status}) — Authentication → Sign In / Providers → Email → turn off Allow new users to sign up`);
   } else {
-    console.log("  регистрация выключена" + (siteUrl ? `, Site URL ${siteUrl}` : ""));
+    console.log("  sign-up disabled" + (siteUrl ? `, Site URL ${siteUrl}` : ""));
   }
 } else {
-  manual.push("Регистрация: Authentication → Sign In / Providers → Email → выключить Allow new users to sign up; URL Configuration → Site URL и Redirect URLs = " + (siteUrl || "адрес сайта"));
+  manual.push("Sign-up: Authentication → Sign In / Providers → Email → turn off Allow new users to sign up; URL Configuration → Site URL and Redirect URLs = " + (siteUrl || "the site address"));
 }
 
 // 4. Ключи сборщику в Sashboard.
@@ -182,15 +182,15 @@ if (accessToken) {
     mkdirSync(dataDir, { recursive: true });
     const file = resolve(dataDir, "amestat.json");
     writeFileSync(file, JSON.stringify({ url, serviceKey: service }, null, 2) + "\n");
-    console.log(`→ ключи сборщика: ${file}`);
+    console.log(`→ collector keys: ${file}`);
   } else {
-    manual.push("Сборщик: адрес и service_role ввести в Sashboard → ⚙ → «amestat — сборщик»");
+    manual.push("Collector: enter the URL and service_role in Sashboard → ⚙ → \"amestat — collector\"");
   }
 }
 
 if (manual.length > 0) {
-  console.log("\nОсталось руками в панели Supabase:");
+  console.log("\nLeft to do by hand in the Supabase dashboard:");
   for (const line of manual) console.log(`  • ${line}`);
 }
-console.log("\n✓ готово. Проверка: npm run dev → http://localhost:3000/login/" + (loginEmail ? ` → вход ${loginEmail}` : ""));
+console.log("\n✓ done. Check: npm run dev → http://localhost:3000/login/" + (loginEmail ? ` → log in as ${loginEmail}` : ""));
 void anon;

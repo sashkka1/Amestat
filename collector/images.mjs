@@ -60,22 +60,22 @@ async function download(sourceUrl) {
     });
     if (!res.ok) return { error: `HTTP ${res.status}` };
     const type = (res.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
-    if (!type.startsWith("image/")) return { error: `не картинка (${type || "тип не назван"})` };
+    if (!type.startsWith("image/")) return { error: `not an image (${type || "type not stated"})` };
     const declared = Number(res.headers.get("content-length"));
-    if (Number.isFinite(declared) && declared > MAX_BYTES) return { error: `${Math.round(declared / 1024)} КБ — больше потолка` };
-    if (!res.body) return { error: "пустой ответ" };
+    if (Number.isFinite(declared) && declared > MAX_BYTES) return { error: `${Math.round(declared / 1024)} KB — over the limit` };
+    if (!res.body) return { error: "empty response" };
     // Считаем по ходу, а не по заголовку: `content-length` бывает и не назван.
     const chunks = [];
     let size = 0;
     for await (const chunk of res.body) {
       size += chunk.length;
-      if (size > MAX_BYTES) return { error: `больше ${MAX_BYTES / 1024 / 1024} МБ — не берём` };
+      if (size > MAX_BYTES) return { error: `over ${MAX_BYTES / 1024 / 1024} MB — skipped` };
       chunks.push(chunk);
     }
-    if (size === 0) return { error: "пустой ответ" };
+    if (size === 0) return { error: "empty response" };
     return { bytes: Buffer.concat(chunks), type };
   } catch (e) {
-    return { error: ctrl.signal.aborted ? `не ответил за ${TIMEOUT_MS / 1000} с` : String(e?.message ?? e).split("\n")[0] };
+    return { error: ctrl.signal.aborted ? `no response in ${TIMEOUT_MS / 1000} s` : String(e?.message ?? e).split("\n")[0] };
   } finally {
     clearTimeout(timer);
   }
@@ -115,20 +115,20 @@ export async function rehostImage(sourceUrl, path, { log } = {}) {
   try {
     env = loadEnv();
   } catch (e) {
-    log?.(`  картинка ${path}: ${String(e?.message ?? e).split("\n")[0]}`);
+    log?.(`  image ${path}: ${String(e?.message ?? e).split("\n")[0]}`);
     return null;
   }
   const got = await download(sourceUrl);
   if (got.error) {
     // В лог идёт путь в бакете, а не исходный адрес: подписанный адрес Instagram длиной в экран.
-    log?.(`  картинка ${path}: не скачалась — ${got.error}`);
-    notice("images", `${path}: не скачалась — ${got.error}`);
+    log?.(`  image ${path}: download failed — ${got.error}`);
+    notice("images", `${path}: download failed — ${got.error}`);
     return null;
   }
   const bad = await upload(path, got.bytes, got.type, env).catch((e) => String(e?.message ?? e).split("\n")[0]);
   if (bad) {
-    log?.(`  картинка ${path}: не залилась — ${bad}`);
-    notice("images", `${path}: не залилась — ${bad}`);
+    log?.(`  image ${path}: upload failed — ${bad}`);
+    notice("images", `${path}: upload failed — ${bad}`);
     return null;
   }
   return publicUrl(path, env.supabaseUrl);

@@ -31,7 +31,7 @@ const opt = (name, fallback = null) => {
 const has = (name) => argv.includes(name);
 
 if (has("--help") || has("-h")) {
-  console.log("node run.mjs [--creator <uuid>] [--depth all|week|month|range] [--from ГГГГ-ММ-ДД --to ГГГГ-ММ-ДД] [--only-ours] [--max-videos N] [--failed-only] [--no-comments] [--no-replies] [--all-videos] [--trigger manual|schedule|catchup|retry]");
+  console.log("node run.mjs [--creator <uuid>] [--depth all|week|month|range] [--from YYYY-MM-DD --to YYYY-MM-DD] [--only-ours] [--max-videos N] [--failed-only] [--no-comments] [--no-replies] [--all-videos] [--trigger manual|schedule|catchup|retry]");
   process.exit(0);
 }
 
@@ -50,17 +50,17 @@ const videos = has("--only-ours") ? "ours" : "all";
 // подменённое «без потолка» выглядело бы как исправная работа (то же правило, что у периода).
 const maxVideos = videoCap(opt("--max-videos"));
 if (has("--max-videos") && maxVideos === null) {
-  console.error(`✗ --max-videos требует целое число больше нуля, а не «${opt("--max-videos") ?? ""}»`);
+  console.error(`✗ --max-videos needs a whole number greater than zero, not "${opt("--max-videos") ?? ""}"`);
   process.exit(2);
 }
 const trigger = opt("--trigger", "manual");
 if (!["manual", "schedule", "catchup", "retry"].includes(trigger)) {
-  console.error(`✗ --trigger бывает только manual, schedule, catchup или retry, а не «${trigger}»`);
+  console.error(`✗ --trigger is only manual, schedule, catchup or retry, not "${trigger}"`);
   process.exit(2);
 }
 const depth = opt("--depth", "all");
 if (!["all", "week", "month", "range"].includes(depth)) {
-  console.error(`✗ --depth бывает только all, week, month или range, а не «${depth}»`);
+  console.error(`✗ --depth is only all, week, month or range, not "${depth}"`);
   process.exit(2);
 }
 // Края периода. Даты местные и целыми сутками — разбирает чистая `dayRange` (`scope.mjs`),
@@ -71,13 +71,13 @@ let depthFrom = null, depthTo = null;
 if (depth === "range") {
   const range = dayRange(opt("--from"), opt("--to"));
   if (!range) {
-    console.error("✗ --depth range требует --from и --to (ГГГГ-ММ-ДД, начало периода раньше конца)");
+    console.error("✗ --depth range needs --from and --to (YYYY-MM-DD, the start of the range earlier than the end)");
     process.exit(2);
   }
   depthFrom = range.from;
   depthTo = range.to;
 } else if (opt("--from") || opt("--to")) {
-  console.error(`✗ --from и --to бывают только у --depth range, а глубина здесь «${depth}»`);
+  console.error(`✗ --from and --to belong to --depth range only, and the depth here is "${depth}"`);
   process.exit(2);
 }
 
@@ -93,7 +93,7 @@ try {
 
 const seconds = ((Date.now() - started) / 1000).toFixed(0);
 console.log(
-  `\n${result.ok ? "✓" : "✗"} обход #${result.runId ?? "?"}: собрано ${result.done}, с ошибкой ${result.failed}, за ${seconds} с` +
-  (result.error ? `\n  первая ошибка: ${result.error}` : ""),
+  `\n${result.ok ? "✓" : "✗"} run #${result.runId ?? "?"}: collected ${result.done}, failed ${result.failed}, in ${seconds} s` +
+  (result.error ? `\n  first error: ${result.error}` : ""),
 );
 process.exit(result.ok ? 0 : 1);

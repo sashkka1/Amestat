@@ -76,7 +76,7 @@ export function groupRequests(rows) {
     // ⚠️ Границы читаются в обоих написаниях: прямо из базы (`depth_from`) и из очереди
     // резидента, где просьба уже разобрана (`depthFrom`). Та же беда, что была с `all_videos`.
     const { depth, from, to } = normalizeDepth(r.depth, r.depth_from ?? r.depthFrom ?? null, r.depth_to ?? r.depthTo ?? null);
-    const key = `${creatorId ?? "все"}|${depth}|${from ?? ""}|${to ?? ""}`;
+    const key = `${creatorId ?? "all"}|${depth}|${from ?? ""}|${to ?? ""}`;
     const fresh = !groups.has(key);
     const g = groups.get(key) ?? { creatorId, depth, depthFrom: from, depthTo: to, requestedBy: r.requested_by ?? null, videos: "ours", maxVideos: null, comments: false, replies: false, allVideos: false, ids: [] };
     g.ids.push(r.id);

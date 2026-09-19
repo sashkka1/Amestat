@@ -48,7 +48,7 @@ async function externalIp(address, browserChoice) {
       // Ответ не json — бывает у прокси со своей страницей-заглушкой: покажем как есть.
       ip = body.trim().slice(0, 60);
     }
-    if (!ip) throw new Error(`ответ без адреса (код ${res?.status() ?? "?"})`);
+    if (!ip) throw new Error(`response without an address (code ${res?.status() ?? "?"})`);
     return { ip, ms: Date.now() - started };
   } finally {
     await cleanup();
@@ -80,29 +80,29 @@ async function main() {
   // Только для этой команды — обход настройки из окружения не берёт вовсе (`env.mjs` читает файл).
   const fromEnv = (process.env.AMESTAT_PROXIES ?? "").trim();
   const addresses = fromEnv ? addressList(parseProxies(fromEnv), { home: env.proxyHome }) : env.proxyAddresses;
-  if (fromEnv) console.log("адреса взяты из переменной окружения AMESTAT_PROXIES (в .env.local не заглядываем)");
+  if (fromEnv) console.log("addresses taken from the AMESTAT_PROXIES environment variable (.env.local is not read)");
   const handle = args.handle || env.proxyCheckHandle;
 
-  console.log(`Адресов в пуле: ${addresses.length} (домашний ${env.proxyHome ? "участвует" : "выключен"}, прокси ${addresses.filter((a) => a.id > 0).length})`);
+  console.log(`Addresses in the pool: ${addresses.length} (home ${env.proxyHome ? "in rotation" : "off"}, proxies ${addresses.filter((a) => a.id > 0).length})`);
   let bad = 0;
   for (const address of addresses) {
     try {
       const { ip, ms } = await externalIp(address, env.browser);
-      console.log(`адрес #${address.id} ${address.label} → внешний IP ${ip}, ${ms} мс`);
+      console.log(`address #${address.id} ${address.label} → external IP ${ip}, ${ms} ms`);
     } catch (e) {
       bad++;
-      console.log(`адрес #${address.id} ${address.label} → не вышло: ${short(e)}`);
+      console.log(`address #${address.id} ${address.label} → failed: ${short(e)}`);
     }
   }
 
   if (args.tiktok) {
-    console.log(`\nСписок видео @${handle} через каждый адрес:`);
+    console.log(`\nVideo list for @${handle} through each address:`);
     for (const address of addresses) {
       try {
         const count = await tiktokList(address, env.browser, handle);
-        console.log(`адрес #${address.id} ${address.label} → видео ${count}`);
+        console.log(`address #${address.id} ${address.label} → videos ${count}`);
       } catch (e) {
-        console.log(`адрес #${address.id} ${address.label} → не вышло: ${short(e)}`);
+        console.log(`address #${address.id} ${address.label} → failed: ${short(e)}`);
       }
     }
   }

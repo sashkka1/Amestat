@@ -70,7 +70,7 @@ async function hit(url, { referer, accept = "application/json", timeoutMs = DIRE
     });
     const text = await res.text();
     const ms = Date.now() - started;
-    if (!res.ok) return { ok: false, status: res.status, text: "", ms, why: `ответ ${res.status}` };
+    if (!res.ok) return { ok: false, status: res.status, text: "", ms, why: `HTTP ${res.status}` };
     return { ok: true, status: res.status, text, ms, why: null };
   } catch (e) {
     return { ok: false, status: null, text: "", ms: Date.now() - started, why: short(e) };
@@ -90,19 +90,19 @@ async function hit(url, { referer, accept = "application/json", timeoutMs = DIRE
 export function parseComments(text) {
   const empty = { comments: [], replies: [], hasMore: false, cursor: null, total: null };
   const raw = String(text ?? "");
-  if (raw.trim() === "") return { ok: false, why: "пустое тело", ...empty };
+  if (raw.trim() === "") return { ok: false, why: "empty body", ...empty };
   let json = null;
   try {
     json = JSON.parse(raw);
   } catch {
-    return { ok: false, why: "тело не JSON", ...empty };
+    return { ok: false, why: "body is not JSON", ...empty };
   }
   // `status_code` у TikTok: 0 — всё в порядке, всё остальное — отказ (и текст в `status_msg`).
   const code = json?.status_code;
   if (code !== undefined && code !== null && Number(code) !== 0) {
     return { ok: false, why: `status_code ${code}${json?.status_msg ? `: ${String(json.status_msg).slice(0, 80)}` : ""}`, ...empty };
   }
-  if (!Array.isArray(json?.comments)) return { ok: false, why: "в ответе нет comments[]", ...empty };
+  if (!Array.isArray(json?.comments)) return { ok: false, why: "no comments[] in response", ...empty };
   const batch = parseTikTokComments(json);
   return {
     ok: true,
@@ -144,21 +144,21 @@ export function parseReplies(text, parentId = null) {
  */
 export function parseProfileHtml(html) {
   const raw = String(html ?? "");
-  if (raw.trim() === "") return { ok: false, why: "пустой HTML", profile: null };
+  if (raw.trim() === "") return { ok: false, why: "empty HTML", profile: null };
   const match = raw.match(/<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/);
-  if (!match) return { ok: false, why: "в HTML нет __UNIVERSAL_DATA_FOR_REHYDRATION__", profile: null };
+  if (!match) return { ok: false, why: "no __UNIVERSAL_DATA_FOR_REHYDRATION__ in HTML", profile: null };
   let info = null;
   try {
     info = JSON.parse(match[1])?.__DEFAULT_SCOPE__?.["webapp.user-detail"]?.userInfo ?? null;
   } catch {
-    return { ok: false, why: "данные страницы не разобрались", profile: null };
+    return { ok: false, why: "page data did not parse", profile: null };
   }
-  if (!info) return { ok: false, why: "на странице нет userInfo", profile: null };
+  if (!info) return { ok: false, why: "no userInfo on the page", profile: null };
   const num = (x) => (x === null || x === undefined || x === "" ? null : Number(x));
   const s2 = info.statsV2 ?? {}, s1 = info.stats ?? {}, user = info.user ?? {};
   const followers = num(s2.followerCount ?? s1.followerCount);
   // Профиль без числа подписчиков — это не профиль, а обрезок: счётчики снимка были бы пустыми.
-  if (followers === null) return { ok: false, why: "в userInfo нет счётчиков", profile: null };
+  if (followers === null) return { ok: false, why: "no counters in userInfo", profile: null };
   return {
     ok: true,
     why: null,
@@ -185,7 +185,7 @@ export function parseProfileHtml(html) {
  */
 export async function fetchComments(awemeId, handle, { max = 100, expected = null, pauseMs = 500, log } = {}) {
   const id = String(awemeId ?? "");
-  if (!id) return { ok: false, why: "у видео нет id", comments: [], pages: 0, ms: 0, total: null };
+  if (!id) return { ok: false, why: "video has no id", comments: [], pages: 0, ms: 0, total: null };
   const referer = videoUrl(handle, id);
   const started = Date.now();
   const roots = new Map();
@@ -213,10 +213,10 @@ export async function fetchComments(awemeId, handle, { max = 100, expected = nul
   // ⚠️ `total` площадки считает и ответы тоже, поэтому сверять его с числом корней нельзя:
   // у видео с 62 «комментариями» корней бывает 33. Отказом считается только ПУСТОТА.
   if (roots.size === 0 && Number.isFinite(want) && want > 0) {
-    return { ok: false, why: `ноль комментариев при счётчике ${want}`, comments: [], pages, ms, total };
+    return { ok: false, why: `zero comments while the counter says ${want}`, comments: [], pages, ms, total };
   }
   const list = [...roots.values()].slice(0, max);
-  log?.(`    прямой запрос: корневых ${list.length} (страниц ${pages}, ${ms} мс, счётчик площадки ${total ?? "?"})`);
+  log?.(`    direct request: roots ${list.length} (pages ${pages}, ${ms} ms, platform counter ${total ?? "?"})`);
   return { ok: true, why: null, comments: list, free: [...free.values()], pages, ms, total };
 }
 
@@ -226,7 +226,7 @@ export async function fetchComments(awemeId, handle, { max = 100, expected = nul
  */
 export async function fetchReplies(awemeId, commentId, handle, { max = 20, pauseMs = 500 } = {}) {
   const id = String(awemeId ?? ""), cid = String(commentId ?? "");
-  if (!id || !cid) return { ok: false, why: "нет id видео или комментария", replies: [], pages: 0, ms: 0 };
+  if (!id || !cid) return { ok: false, why: "no video or comment id", replies: [], pages: 0, ms: 0 };
   const referer = videoUrl(handle, id);
   const started = Date.now();
   const out = new Map();
@@ -253,7 +253,7 @@ export async function fetchReplies(awemeId, commentId, handle, { max = 20, pause
  */
 export async function fetchProfile(handle) {
   const who = String(handle ?? "").replace(/^@/, "");
-  if (!who) return { ok: false, why: "пустой handle", profile: null, ms: 0 };
+  if (!who) return { ok: false, why: "empty handle", profile: null, ms: 0 };
   const started = Date.now();
   const res = await hit(profileUrl(who), {
     referer: "https://www.tiktok.com/",

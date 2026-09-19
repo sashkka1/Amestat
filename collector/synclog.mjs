@@ -34,15 +34,15 @@ let failed = 0;
 let say = console.log;
 
 // Ошибка креатора или обхода: строка полосы «  ошибка: …» и беды самого обхода.
-const ERROR_RE = /(^|\s)ошибка:|обход прерван|обход не начался|обход не удался|не запустился|сорвал/i;
+const ERROR_RE = /(^|\s)error:|run was interrupted|run did not start|run failed|crashed/i;
 // Замечания владельцу, ожидания и обходные пути — всё, что не беда, но и не «всё хорошо».
 // ⚠️ «в паузе» — про адрес пула (`proxies.mjs`): «прокси #1 в паузе до 13:40: …». Это не беда
 // обхода, но и не «всё хорошо»: владелец должен видеть, что адрес выбыл на полчаса.
-const WARN_RE = /замечани|ждём паузу|в паузе|стоп-экран|капча|признаки истёкшей сессии|не отдал|не открыл|не поднял|не встал|не закрыл|не записал|не спросил|не помеч|не переложил|не скачал|не залил|не удалось/i;
+const WARN_RE = /notices \(|notices were not sent|captcha|stop screen|pause[d]? until|expired session|did not (?:open|start|close|return|respond|shut)|(?:was|were) not (?:written|cleared|marked|sent|saved)|could not (?:be|read|check|find)|(?:download|upload) failed/i;
 // ⚠️ «не вышло» само по себе на уровень не тянет: итоговые строки шага пишут его ВСЕГДА, и
 // «обложек не вышло 0» — это как раз «всё хорошо». Считаем за беду только ненулевой счётчик
 // (и строку, где после «не вышло» числа нет вовсе).
-const WARN_COUNT_RE = /не вышло(?!\s+0(\D|$))/i;
+const WARN_COUNT_RE = /failed (?!0(\D|$))\d/i;
 
 /**
  * Уровень строки журнала по её тексту. Чистая функция: её проверяют тесты.
@@ -112,7 +112,7 @@ export async function flushSyncLog() {
       await insertMany("sync_log", rows);
     } catch (e) {
       // Одна строка на первый сбой: база и так уже под вопросом, а обход из-за журнала не встаёт.
-      if (failed++ === 0) say(`журнал обхода не пишется: ${String(e?.message ?? e).split("\n")[0]}`);
+      if (failed++ === 0) say(`the run log is not being written: ${String(e?.message ?? e).split("\n")[0]}`);
     }
   });
   await flushing;
@@ -135,7 +135,7 @@ export async function logSystem(text, { level = null, handle = null } = {}) {
     await insertMany("sync_log", [logRow(text, { runId: null, source: "system", handle, level })]);
     return true;
   } catch (e) {
-    if (failed++ === 0) say(`журнал обхода не пишется: ${String(e?.message ?? e).split("\n")[0]}`);
+    if (failed++ === 0) say(`the run log is not being written: ${String(e?.message ?? e).split("\n")[0]}`);
     return false;
   }
 }

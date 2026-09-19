@@ -34,17 +34,25 @@
 //     «ещё N креаторов с прежними ошибками». Память переживает перезапуск: `logs/notices-state.json`.
 //   • Одинаковые замечания склеиваются в «текст (×N)»; длинное режется, всё сообщение — не
 //     длиннее 3500 знаков, лишнее считается строкой «… и ещё K».
+//   • Язык (владелец, 2026-09-17): замечания копятся, сравниваются и пишутся в лог ПО-АНГЛИЙСКИ,
+//     а в Telegram уходит русский текст того же письма — `telegram-ru.mjs`, последним шагом.
 //
 // Словарь кодов (не закрыт, дополняется по месту; тот же список — в README):
 //   creator — креатор не собрался           list     — TikTok не отдал список (защита по адресу)
 //   stop    — стоп-экран или капча          limit    — площадка ограничила запросы
 //   photo   — пришлось идти по /photo/      comments — комментарии видео не снялись
 //   replies — ответы не снялись             images   — картинка не переложилась
+//   missing — пришло меньше, чем лежит в базе: ноль публикаций или недобор видео
+//   direct  — прямой запрос не дал, пошли браузером (данные в итоге собраны)
 //   session — из-за входа что-то не собралось (мягкие признаки — `sessionHint`, только лог)
 //   browser — браузер не встал с первого раза
 //   slow    — креатор собирался дольше 3 минут                db  — база не ответила
 //   realtime — Realtime отвалился/вернулся  poll     — просьба поймана опросом, а не Realtime
 //   retry   — назначен повтор               run      — обход сорвался целиком
+//
+// 🔴 Какие из них дают письмо — решает `LOST_CODES` ниже, и список там ЗАКРЫТЫЙ наоборот:
+// письмо не дают только перечисленные в `KEPT_CODES`, всё остальное беспокоит владельца
+// (владелец, 2026-09-16: «боязливая система… при любом странном поведении сразу пинговать»).
 //
 // ⚠️ Накопитель обхода один на модуль — и это верно ровно потому, что одновременно идёт не
 // больше одного обхода (очередь в `sync.mjs`). Появятся два разом — замечания перемешаются.
@@ -55,6 +63,8 @@ import { loadEnv, collectorDir } from "./env.mjs";
 import { sendTelegram } from "./telegram.mjs";
 // ⚠️ `scope.mjs` ни от кого не зависит вовсе — кольца импортов отсюда не будет.
 import { depthLabel } from "./scope.mjs";
+// Письмо в Telegram — по-русски (владелец, 2026-09-17), лог и память повторов — по-английски.
+import { itemsRu, moreRu, residentHeadRu, runHeadRu } from "./telegram-ru.mjs";
 
 const MAX_CHARS = 3500;       // потолок сообщения: у Telegram 4096, остальное — запас
 const TAIL_ROOM = 24;         // место под хвост «… и ещё K»
@@ -104,10 +114,11 @@ function push(list, code, text) {
 
 /**
  * Сообщение из заголовка и замечаний: строка на замечание, `[код] текст`.
- * Длиннее потолка — лишнее не режется молча, а считается: «… и ещё K».
+ * Длиннее потолка — лишнее не режется молча, а считается: «… and K more» в логе,
+ * «… и ещё K» в письме (`more` — хвост словами).
  * Чистая функция, отдельно от отправки: её проверяют тесты.
  */
-export function buildMessage(head, items, limit = MAX_CHARS) {
+export function buildMessage(head, items, limit = MAX_CHARS, more = (k) => `… and ${k} more`) {
   const lines = [String(head)];
   let used = lines[0].length;
   let shown = 0;
@@ -118,7 +129,7 @@ export function buildMessage(head, items, limit = MAX_CHARS) {
     used += 1 + line.length;
     shown++;
   }
-  if (shown < items.length) lines.push(`… и ещё ${items.length - shown}`);
+  if (shown < items.length) lines.push(more(items.length - shown));
   return lines.join("\n");
 }
 
@@ -178,6 +189,130 @@ export function realtimeStep(state, ok, now) {
   return { state: { downSince: null, told: false }, say };
 }
 
+/**
+ * Пропавшие видео: о ком письмо ещё не уходило, а о ком уже.
+ *
+ * Правило владельца (2026-09-16): «если один раз заподозрил, что видео удалено, — пишет это в
+ * сообщении и в логе, но повторно на то же видео, если оно снова не нашлось, сообщение писаться
+ * не должно: если оно удалено, значит, один раз отправляем и всё».
+ * Поэтому память здесь не суточная, как у `squashKnown`: удалённое видео через сутки само не
+ * вернётся, и напоминать о нём незачем. Живёт запись ровно до тех пор, пока видео снова не
+ * встретится в списке, — тогда её стирает `forgetReturned` (владелец, тот же день: «было удалено,
+ * потом возвращено и снова удалено — писать»).
+ *
+ * `ids` — id пропавших на этом обходе; `memory` — `{ id: когда впервые написали }`.
+ * Отдаёт `{ fresh, known, memory }`: `fresh` — о них пишем сейчас, `known` — о них уже писали
+ * (только лог), `memory` — новая память с добавленными `fresh`.
+ * Чистая функция: её проверяют тесты.
+ */
+export function splitVanished(ids, memory, now = Date.now()) {
+  const next = { ...(memory ?? {}) };
+  const fresh = [], known = [];
+  for (const raw of ids ?? []) {
+    if (raw === null || raw === undefined) continue;
+    const id = String(raw);
+    if (next[id] !== undefined) {
+      known.push(id);
+    } else {
+      next[id] = now;
+      fresh.push(id);
+    }
+  }
+  return { fresh, known, memory: next };
+}
+
+/**
+ * Видео, о пропаже которых уже писали, снова встретились в списке — забыть их.
+ * Владелец, 2026-09-16: «если видео было удалено, потом возвращено и потом снова удалено — писать».
+ * Без этого вернувшееся видео так и числилось бы «о нём уже писали», и вторая пропажа прошла бы
+ * молча.
+ * 🔴 Годится ЛЮБОЙ список, даже недочитанный: пропажу по нему судить нельзя, а вот присутствие —
+ * можно, видео в списке точно есть в профиле.
+ * `memory` — `{ id: когда впервые написали }`; `seenIds` — id всего, что пришло в списке.
+ * Отдаёт `{ memory, returned }`: новая память и id вернувшихся (порядок — как в памяти).
+ * Чистая функция: её проверяют тесты.
+ */
+export function forgetReturned(memory, seenIds) {
+  const seen = new Set();
+  for (const id of seenIds ?? []) if (id !== null && id !== undefined) seen.add(String(id));
+  const next = {};
+  const returned = [];
+  for (const [id, at] of Object.entries(memory ?? {})) {
+    if (seen.has(id)) returned.push(id);
+    else next[id] = at;
+  }
+  return { memory: next, returned };
+}
+
+/**
+ * «Список кончился раньше, чем обещал профиль» — одно письмо на эпизод.
+ *
+ * Владелец, 2026-09-17: «если один раз пришло, то второй не нужно». Прежде это замечание глушилось
+ * сутками по тексту (`squashKnown`) и приходило каждый день, пока расхождение стоит; а новое видео
+ * меняет оба числа в тексте — и письмо уходило бы ещё и в тот же день.
+ * Эпизод кончается, когда законченный список догнал профиль: память стирается, и новое расхождение
+ * снова даёт письмо — то же правило, что у пропавших видео (`forgetReturned`).
+ *
+ * `memory` — `{ creatorId: когда впервые написали }`; `short` — расхождение есть на этом обходе;
+ * `healed` — список законченный и не короче профиля. Ни то ни другое (список недочитан, профиль
+ * молчит) — память не трогается: судить не по чему.
+ * Отдаёт `{ say, memory }`. Чистая функция: её проверяют тесты.
+ */
+export function shortOnce(memory, key, { short = false, healed = false, now = Date.now() } = {}) {
+  const next = { ...(memory ?? {}) };
+  const id = String(key);
+  if (short) {
+    if (next[id] !== undefined) return { say: false, memory: next };
+    next[id] = now;
+    return { say: true, memory: next };
+  }
+  if (healed) delete next[id];
+  return { say: false, memory: next };
+}
+
+export const SESSION_STALE_MS =3 * 24 * 60 * 60_000;   // сессию не продлевали трое суток — тревога
+export const SESSION_SOON_MS = 14 * 24 * 60 * 60_000;   // до конца её срока меньше двух недель
+
+/**
+ * Сторож входа по сроку жизни cookie `sessionid`.
+ *
+ * Зачем (разбор 2026-09-16): пометки `login_required` в ответах Instagram сигналом быть не могут —
+ * они горят и при живой сессии. А вот срок cookie не врёт: Instagram продлевает `sessionid`
+ * КАЖДЫМ удачным заходом, и в тот же день было видно, как `expires` уехал на год вперёд прямо
+ * во время обхода. Перестал двигаться — значит площадка нас больше вошедшими не считает, и
+ * сказать об этом надо ДО того, как пропадут данные.
+ *
+ * `state` — `{ expiresMs, movedAt, told }` (told: 'stale' | 'soon' | null); `expiresMs` — срок
+ * cookie сейчас, `null` — cookie нет вовсе (этот случай ловят сами коллекторы, сторож молчит).
+ * Отдаёт `{ state, say }`, где `say` — `null` или `{ kind: 'stale'|'soon', days }`.
+ * Каждая беда говорится ОДИН раз: пока причина та же, письма больше не будет, а продлившаяся
+ * cookie сбрасывает память и возвращает сторожу голос.
+ * Чистая функция: её проверяют тесты.
+ */
+export function sessionWatch(state, { expiresMs = null, now = Date.now(), staleMs = SESSION_STALE_MS, soonMs = SESSION_SOON_MS } = {}) {
+  const prev = state ?? {};
+  const was = Number.isFinite(Number(prev.expiresMs)) ? Number(prev.expiresMs) : null;
+  const told = prev.told ?? null;
+  const at = Number.isFinite(Number(expiresMs)) && Number(expiresMs) > 0 ? Number(expiresMs) : null;
+  if (at === null) return { state: { ...prev }, say: null };
+  // Первая встреча или cookie продлилась — запоминаем и молчим: это и есть здоровье.
+  if (was === null || at > was) return { state: { expiresMs: at, movedAt: now, told: null }, say: null };
+
+  const movedAt = Number.isFinite(Number(prev.movedAt)) ? Number(prev.movedAt) : now;
+  const next = { expiresMs: at, movedAt, told };
+  const days = (ms) => Math.max(1, Math.round(ms / (24 * 60 * 60_000)));
+  // Сначала близкий конец срока: он важнее застоя и виден раньше.
+  if (at - now <= soonMs) {
+    if (told === "soon") return { state: next, say: null };
+    return { state: { ...next, told: "soon" }, say: { kind: "soon", days: days(at - now) } };
+  }
+  if (now - movedAt >= staleMs) {
+    if (told === "stale") return { state: next, say: null };
+    return { state: { ...next, told: "stale" }, say: { kind: "stale", days: days(now - movedAt) } };
+  }
+  return { state: next, say: null };
+}
+
 /** Сторож пяти минут сработал: подписки всё ещё нет — вот теперь это событие. */
 export function realtimeDown(state, now, downMs = REALTIME_DOWN_MS) {
   const downSince = state?.downSince ?? null;
@@ -185,11 +320,21 @@ export function realtimeDown(state, now, downMs = REALTIME_DOWN_MS) {
   return { state: { downSince, told: true }, say: { kind: "down", since: downSince } };
 }
 
+// Коды, которые повторяются слово в слово из обхода в обход: беда стоит на месте, а письмо
+// про неё владелец уже читал. Они и глушатся сутками. ⚠️ `missing` и `list` здесь ровно затем,
+// чтобы боязливость (2026-09-16) не превратилась в два письма в день об одном и том же:
+// удалённые пять видео `@orandocom.lis` дают одну и ту же строку каждый обход.
+const REPEATING_CODES = new Set(["creator", "missing", "list"]);
+
 /**
- * Убирает из письма обхода замечания `creator`, которые слово в слово уходили за последние сутки:
- * демо-креаторы не находятся каждый обход, и владелец эти четыре строки уже читал.
- * Отдаёт новый список (с итоговой строкой вместо убранных), обновлённую память и число убранных.
- * ⚠️ Только `creator`: у остальных кодов текст меняется от раза к разу и склеивать нечего.
+ * Убирает из письма обхода замечания, которые слово в слово уходили за последние сутки:
+ * демо-креаторы не находятся каждый обход, удалённое видео не возвращается, и владелец эти
+ * строки уже читал. Отдаёт новый список (с итоговой строкой вместо убранных на каждый код),
+ * обновлённую память и число убранных.
+ * ⚠️ Только коды из `REPEATING_CODES`: у остальных текст меняется от раза к разу и склеивать
+ * нечего — там повтор сам по себе новость.
+ * `fresh` — сколько замечаний осталось НОВЫХ (без итоговых строк). Ноль при непустом входе —
+ * значит, обход не сказал ничего, чего владелец ещё не читал, и письма быть не должно.
  */
 export function squashKnown(items, memory, now, ttl = SAME_ERROR_MS) {
   const next = {};
@@ -198,24 +343,28 @@ export function squashKnown(items, memory, now, ttl = SAME_ERROR_MS) {
     if (Number.isFinite(at) && now - at < ttl) next[key] = at;
   }
   const kept = [];
-  let suppressed = 0;
+  const suppressedBy = new Map();   // код → сколько замечаний этого кода проглочено
   for (const item of items) {
-    if (item.code !== "creator") {
+    if (!REPEATING_CODES.has(item.code)) {
       kept.push(item);
       continue;
     }
     const key = `${item.code}|${item.text}`;
     if (next[key] !== undefined) {
-      suppressed += item.count ?? 1;
+      suppressedBy.set(item.code, (suppressedBy.get(item.code) ?? 0) + (item.count ?? 1));
       continue;
     }
     next[key] = now;
     kept.push(item);
   }
-  if (suppressed > 0) {
-    kept.push({ code: "creator", text: `ещё ${suppressed} креаторов с прежними ошибками (см. прошлые письма)` });
+  for (const [code, count] of suppressedBy) {
+    // Текст про креаторов остаётся прежним слово в слово: владелец читает эту строку с сентября.
+    kept.push(code === "creator"
+      ? { code, text: `${count} more creators with the same old errors (see earlier messages)` }
+      : { code, text: `${count} more old notices, all the same (see earlier messages)` });
   }
-  return { items: kept, memory: next, suppressed };
+  const suppressed = [...suppressedBy.values()].reduce((a, b) => a + b, 0);
+  return { items: kept, memory: next, suppressed, fresh: kept.length - suppressedBy.size };
 }
 
 // ------------------------------------------------------------------ память между запусками
@@ -238,7 +387,7 @@ function saveState(state) {
     writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
   } catch (e) {
     // Не записалось — письма пойдут чаще, чем надо, но работа не встаёт.
-    logLine(`память уведомлений не записалась: ${String(e?.message ?? e).split("\n")[0]}`);
+    logLine(`notice memory was not saved: ${String(e?.message ?? e).split("\n")[0]}`);
   }
 }
 
@@ -249,9 +398,9 @@ let warmUntil = 0;
  * Прогрев: `WARMUP_MS` замечания о сети (`realtime`, `db`, `poll`) идут только в лог.
  * Зовётся при старте резидента и когда часы «прыгнули» — компьютер спал.
  */
-export function startWarmup(reason = "старта", ms = WARMUP_MS, now = Date.now()) {
+export function startWarmup(reason = "start", ms = WARMUP_MS, now = Date.now()) {
   warmUntil = now + ms;
-  logLine(`прогрев после ${reason}: ${Math.round(ms / 1000)} с замечания о сети идут только в лог`);
+  logLine(`warmup after ${reason}: for ${Math.round(ms / 1000)} s network notices go to the log only`);
 }
 
 // ------------------------------------------------------------------ мягкие признаки сессии
@@ -264,6 +413,90 @@ export function sessionHint(where, text) {
   const key = String(where);
   const was = hints.get(key) ?? { count: 0, text: "" };
   hints.set(key, { count: was.count + 1, text: was.text || clean(text) });
+}
+
+/**
+ * Срок cookie входа, замеченный на этом обходе, — в память и, если надо, в письмо.
+ * Сторона с побочными действиями: чистое правило живёт в `sessionWatch`, здесь только файл
+ * состояния и `notice`. `where` — площадка с профилем («instagram (profile-opera)»),
+ * `expiresMs` — когда истекает cookie `sessionid` (`null` — её нет, тогда молчим: пустую
+ * cookie ловят сами коллекторы и роняют креатора).
+ */
+export function noteSessionCookie(where, expiresMs, { now = Date.now(), log } = {}) {
+  const key = String(where);
+  const state = loadState();
+  const sessions = state.sessions ?? {};
+  const { state: next, say } = sessionWatch(sessions[key] ?? null, { expiresMs, now });
+  saveState({ ...state, sessions: { ...sessions, [key]: next } });
+  if (!say) return null;
+  const text = say.kind === "soon"
+    ? `${key}: the login cookie expires in ${say.days} d — log in to Opera again and take a fresh profile copy`
+    : `${key}: the login has not been renewed for ${say.days} d — the platform seems to no longer treat us as logged in`;
+  (log ?? logLine)(`  ⚠ session: ${text}`);
+  notice("session", text);
+  return say;
+}
+
+/**
+ * Вернувшиеся видео — стереть из памяти пропавших, чтобы новая пропажа снова дала письмо.
+ * Сторона с побочными действиями к `forgetReturned`. Файл пишется, только если кто-то вернулся:
+ * обход идёт по каждому креатору, и переписывать память впустую незачем.
+ * Письма о возвращении нет — только строка в лог (о нём владелец не просил).
+ * Отдаёт число вернувшихся.
+ */
+export function noteReturned(handle, seenIds, { log } = {}) {
+  const state = loadState();
+  const { memory, returned } = forgetReturned(state.vanished ?? {}, seenIds);
+  if (returned.length === 0) return 0;
+  saveState({ ...state, vanished: memory });
+  (log ?? logLine)(`  ${returned.length} videos we already reported as missing are back in the profile (${returned.join(", ")}) — if they vanish again, I will report again`);
+  return returned.length;
+}
+
+/**
+ * Сторона с побочными действиями к `shortOnce`: память `logs/notices-state.json` → `shortfall`.
+ * Отдаёт, слать ли замечание. Файл пишется, только если память изменилась: зовётся на каждого
+ * креатора, и переписывать её впустую незачем.
+ */
+export function noteShort(key, { short = false, healed = false, now = Date.now() } = {}) {
+  const state = loadState();
+  const was = state.shortfall ?? {};
+  const { say, memory } = shortOnce(was, key, { short, healed, now });
+  if (JSON.stringify(memory) !== JSON.stringify(was)) saveState({ ...state, shortfall: memory });
+  return say;
+}
+
+/**
+ * Пропавшие видео креатора — в лог каждый раз, в письмо только те, о ком ещё не писали.
+ * Сторона с побочными действиями: правило живёт в `splitVanished`, здесь файл памяти и `notice`.
+ * `gone` — `[{ id, publishedAt, url }]` новые сверху (так их отдаёт `vanishedVideos`).
+ * Отдаёт `{ fresh, known }` — сколько ушло в письмо и сколько только в лог.
+ */
+export function noteVanished(handle, gone, { now = Date.now(), log } = {}) {
+  const say = log ?? logLine;
+  const list = gone ?? [];
+  if (list.length === 0) return { fresh: 0, known: 0 };
+  const state = loadState();
+  const { fresh, known, memory } = splitVanished(list.map((v) => v.id), state.vanished ?? {}, now);
+  saveState({ ...state, vanished: memory });
+
+  const day = (v) => (v.publishedAt ? String(v.publishedAt).slice(0, 10) : "no date");
+  // Лог — всегда и полностью, со ссылками: письмо короткое, а разбираться будут по логу.
+  say(`  ${list.length} videos vanished from the profile (the list ended and they are not in it) — ${fresh.length} for the first time, ${known.length} already reported:`);
+  const freshSet = new Set(fresh);
+  for (const v of list) say(`    ${freshSet.has(v.id) ? "new " : "known"} ${day(v)} ${v.url ?? v.id}`);
+
+  if (fresh.length > 0) {
+    // В письме — даты: по ним видео узнаётся глазом, а ссылки съели бы весь предел строки.
+    const dates = list.filter((v) => freshSet.has(v.id)).map((v) => {
+      const d = day(v);
+      return d.length === 10 ? `${d.slice(8, 10)}.${d.slice(5, 7)}` : d;
+    });
+    // Дат больше десятка — хвост считается, а не режется посреди слова пределом строки.
+    const shown = dates.length > 10 ? `${dates.slice(0, 10).join(", ")} and ${dates.length - 10} more` : dates.join(", ");
+    notice("missing", `@${handle}: not found in the profile, looks deleted — ${fresh.length} videos from ${shown}; links are in the run log, I will not report these videos again`);
+  }
+  return { fresh: fresh.length, known: known.length };
 }
 
 /**
@@ -301,18 +534,44 @@ export function notice(code, text) {
  * Конец обхода: одно сообщение владельцу, если замечания были. Отдаёт, ушло ли оно.
  * Исключений не бросает: звонок владельцу не имеет права свалить обход (как и в `telegram.mjs`).
  */
+// Коды, при которых чего-то НЕ ХВАТАЕТ: данные не пришли, пришли не все или их некуда было
+// записать. Каждый из них — письмо (владелец, 2026-09-16: «боязливая система — при любом
+// странном поведении, когда чего-то не хватает, сразу пинговать и говорить, что не обновилось»).
+export const LOST_CODES = new Set([
+  "run",       // обход не начался или сорвался целиком
+  "creator",   // креатор не собрался (обычно вместе с `failed`, но пусть код решает и сам)
+  "missing",   // пришло меньше, чем лежит в базе: ноль публикаций или недобор видео
+  "session",   // из-за входа что-то не собралось
+  "list",      // площадка не отдала список
+  "stop",      // стоп-экран или капча
+  "limit",     // площадка ограничила запросы
+  "comments",  // тексты комментариев не снялись
+  "replies",   // ветки ответов не раскрылись
+  "images",    // картинка не переложилась к нам
+  "db",        // база не ответила посреди обхода — писали или читали вслепую
+]);
+
+// Коды, которые письма не дают: работа сделана, данные на месте, а строка — про то, КАК они
+// дались. Список закрытый ровно затем, чтобы новый код по забывчивости попадал в письмо, а не
+// терялся в логе: боязливой системе лучше лишний раз сказать, чем промолчать.
+export const KEPT_CODES = new Set(["photo", "direct", "browser", "slow", "realtime", "poll", "retry"]);
+
 /**
  * Потеряны ли данные обхода — только тогда владельцу нужно письмо.
  * Владелец, 2026-09-13: «сообщение в Telegram должно приходить, только если случилась проблема,
  * из-за которой не обновились данные; если обновление прошло штатно — отчёт не нужен».
- * Потеря = хоть один креатор не собрался (`failed > 0`) или обход не начался / сорвался
- * целиком (замечание `run`). Всё прочее — медленно, откат прямого запроса на браузер, повтор
- * пустого списка, частично снятые комментарии — данные в итоге дошли, и это только лог.
+ * Владелец, 2026-09-16 — то же правило, но пугливее: «чего-то не хватает» это тоже проблема,
+ * даже когда обход дошёл до конца и ни один креатор не упал. Причина — разбор того же дня:
+ * при мёртвой сессии Instagram шапка профиля читается, а лента нет, и обход выходил зелёным с
+ * нулём публикаций. Потеря теперь = `failed > 0` ИЛИ любой код из `LOST_CODES`.
  * Чистая функция: её проверяют тесты.
  */
 export function dataLost({ failed = 0, items = [] } = {}) {
   if (Number(failed) > 0) return true;
-  return (items ?? []).some((i) => String(i?.code) === "run");
+  // 🔴 Решает НЕ список потерь, а список молчунов: код, которого нет ни там ни там (новый,
+  // забытый, написанный по месту), беспокоит владельца. `LOST_CODES` остаётся описанием того,
+  // что мы считаем потерей сегодня, и его читают README и тесты.
+  return (items ?? []).some((i) => i?.code !== undefined && i?.code !== null && !KEPT_CODES.has(String(i.code)));
 }
 
 export async function reportRun({ runId = null, trigger = "manual", depth = "all", depthFrom = null, depthTo = null, done = 0, failed = 0, slotLabel = null, log } = {}) {
@@ -322,31 +581,46 @@ export async function reportRun({ runId = null, trigger = "manual", depth = "all
   if (!dataLost({ failed, items: all })) {
     // Замечания остаются в логе обхода: на сайте видно, что было, но телефон не беспокоим.
     const say = log ?? logLine;
-    say(`замечания (${all.length}) — только в лог: данные обновились полностью, письма нет`);
+    say(`notices (${all.length}) — log only: the data was fully updated, no message sent`);
     for (const i of all) say(`  [${i.code}] ${i.text}${i.count > 1 ? ` ×${i.count}` : ""}`);
     return false;
   }
   const now = Date.now();
   const state = loadState();
-  const { items, memory, suppressed } = squashKnown(all, state.creatorErrors ?? {}, now);
+  const { items, memory, suppressed, fresh } = squashKnown(all, state.creatorErrors ?? {}, now);
   saveState({ ...state, creatorErrors: memory });
+  // 🔴 Всё сказанное — прежнее: письма нет (владелец, 2026-09-16, после письма #135, в котором
+  // была одна строка «ещё 1 прежних замечаний, всё те же»: «если понял, что замечания все те же,
+  // не нужно, чтобы оно приходило»). Прежде решение «слать» принималось ДО отсева прежних, и от
+  // письма оставалась одна итоговая строка. ⚠️ Упавший креатор без единого замечания письмо
+  // по-прежнему даёт: сравнивать там не с чем, и молчание было бы потерей, а не повтором.
+  if (all.length > 0 && fresh === 0) {
+    const say = log ?? logLine;
+    say(`notices (${all.length}) — all of them old and already reported: no message sent`);
+    for (const i of all) say(`  [${i.code}] ${i.text}${i.count > 1 ? ` ×${i.count}` : ""}`);
+    return false;
+  }
   // `slotLabel` ставит только неудавшийся повтор: отдельного письма «не удался дважды» больше
   // нет (владелец получал два письма об одном событии), и эта строка — всё, что от него осталось.
   // Глубина словом — одной функцией на весь сборщик (`scope.mjs`): «всё», «неделя», «месяц»,
   // «период 01.09–09.09». Свой тернарник здесь стоил бы четвёртого места, где про «месяц» забыли.
-  const head = `Amestat, обход #${runId ?? "?"} (${trigger}, ${depthLabel(depth, depthFrom, depthTo)}): собрано ${done}, с ошибкой ${failed}`
-    + (slotLabel ? `\nвторая неудача подряд после слота ${slotLabel}` : "");
+  const head = `Amestat, run #${runId ?? "?"} (${trigger}, ${depthLabel(depth, depthFrom, depthTo)}): collected ${done}, failed ${failed}`
+    + (slotLabel ? `\nsecond failure in a row after slot ${slotLabel}` : "");
   const text = buildMessage(head, items);
   const say = log ?? logLine;
   // Текст уходит и в лог обхода: сообщение в телефоне живёт своей жизнью, а `sync_runs.log`
   // на сайте должен показывать, о чём владельцу сказали и почему.
-  say(`замечания (${items.length}${suppressed > 0 ? `, прежних за сутки не повторено ${suppressed}` : ""}) — сообщение владельцу:\n${text}`);
-  // `sendTelegram` при неудаче пишет текст в лог сам — второй раз он там не нужен.
-  const quiet = (line) => { if (line !== text) say(line); };
+  say(`notices (${items.length}${suppressed > 0 ? `, ${suppressed} old ones not repeated within a day` : ""}) — message to the owner:\n${text}`);
+  // В телефон — то же письмо по-русски (владелец, 2026-09-17). Отбор выше шёл по английскому
+  // тексту и не меняется: переводится только то, что уже решено отправить.
+  const ru = buildMessage(runHeadRu({ runId, trigger, depth, depthFrom, depthTo, done, failed, slotLabel }), itemsRu(items), MAX_CHARS, moreRu);
+  // `sendTelegram` при неудаче пишет текст в лог сам. Русский туда не нужен: английский уже
+  // записан строкой выше, а лог обхода — английский.
+  const quiet = (line) => { if (line !== ru) say(line); };
   try {
-    return await sendTelegram(text, { log: quiet });
+    return await sendTelegram(ru, { log: quiet });
   } catch (e) {
-    say(`замечания не отправились: ${String(e?.message ?? e).split("\n")[0]}`);
+    say(`notices were not sent: ${String(e?.message ?? e).split("\n")[0]}`);
     return false;
   }
 }
@@ -373,11 +647,11 @@ const RESIDENT_ALERT_CODES = new Set(["run"]);
 export function residentNotice(code, text, now = Date.now()) {
   if (muted(code)) return;
   if (!RESIDENT_ALERT_CODES.has(String(code))) {
-    logLine(`[${code}] ${clean(text)} — только в лог`);
+    logLine(`[${code}] ${clean(text)} — log only`);
     return;
   }
   if (isWarm(now, warmUntil) && WARM_CODES.has(String(code))) {
-    logLine(`прогрев: [${code}] ${clean(text)} — только в лог`);
+    logLine(`warmup: [${code}] ${clean(text)} — log only`);
     return;
   }
   push(waiting, code, text);
@@ -411,10 +685,12 @@ function flush(now = Date.now()) {
   if (ready.length === 0) return;
   lastSentAt = now;
   const total = ready.reduce((n, i) => n + (i.count ?? 1), 0);
-  const text = buildMessage(`Amestat, резидент: замечаний ${total}`, ready);
-  logLine(`замечания резидента (${ready.length}) — сообщение владельцу:\n${text}`);
-  const quiet = (line) => { if (line !== text) logLine(line); };
+  const text = buildMessage(`Amestat, resident: ${total} notices`, ready);
+  logLine(`resident notices (${ready.length}) — message to the owner:\n${text}`);
+  // В телефон — по-русски, в лог — английский текст выше (как и у письма обхода).
+  const ru = buildMessage(residentHeadRu(total), itemsRu(ready), MAX_CHARS, moreRu);
+  const quiet = (line) => { if (line !== ru) logLine(line); };
   // Ждать отправку некому: резидент живёт дальше, а неудача и так уйдёт строкой в лог.
-  Promise.resolve(sendTelegram(text, { log: quiet }))
-    .catch((e) => logLine(`замечания резидента не отправились: ${String(e?.message ?? e).split("\n")[0]}`));
+  Promise.resolve(sendTelegram(ru, { log: quiet }))
+    .catch((e) => logLine(`resident notices were not sent: ${String(e?.message ?? e).split("\n")[0]}`));
 }

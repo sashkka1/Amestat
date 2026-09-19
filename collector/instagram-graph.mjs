@@ -36,15 +36,15 @@ async function ask(handle, { token, userId, withViews, after }) {
   try {
     json = text ? JSON.parse(text) : null;
   } catch {
-    throw new Error(`Instagram: ответ Graph API не разобран (HTTP ${res.status})`);
+    throw new Error(`Instagram: Graph API response is not JSON (HTTP ${res.status})`);
   }
   if (json?.error) {
     const e = json.error;
-    return { error: { message: e.message ?? "без текста", code: e.code ?? null, sub: e.error_subcode ?? null } };
+    return { error: { message: e.message ?? "no text", code: e.code ?? null, sub: e.error_subcode ?? null } };
   }
-  if (!res.ok) throw new Error(`Instagram: Graph API ответил HTTP ${res.status}`);
+  if (!res.ok) throw new Error(`Instagram: Graph API returned HTTP ${res.status}`);
   const bd = json?.business_discovery;
-  if (!bd) throw new Error(`Instagram: профиль не найден или не бизнес-аккаунт: @${handle}`);
+  if (!bd) throw new Error(`Instagram: profile not found or not a business account: @${handle}`);
   return { bd };
 }
 
@@ -60,10 +60,10 @@ const looksLikeUnknownViewCount = (err) => /view_count/i.test(err.message ?? "")
  * Отдаёт ту же форму, что и TikTok: `{ profile, videos }`.
  */
 export async function collectInstagramGraph(creator, { token = "", userId = "", depth = "all", bounds = null, log } = {}) {
-  if (!token) throw new Error("Instagram: нет IG_ACCESS_TOKEN — впиши токен в .env.local или переключи IG_SOURCE на web");
-  if (!userId) throw new Error("Instagram: нет IG_USER_ID — нужен id нашего бизнес-аккаунта в .env.local");
+  if (!token) throw new Error("Instagram: no IG_ACCESS_TOKEN — put the token in .env.local or switch IG_SOURCE to web");
+  if (!userId) throw new Error("Instagram: no IG_USER_ID — our business account id is required in .env.local");
   const handle = String(creator.handle || "").replace(/^@/, "");
-  if (!handle) throw new Error("у креатора пустой handle");
+  if (!handle) throw new Error("creator has an empty handle");
   // Публикации приходят от новых к старым, поэтому нижняя граница — ранний выход из пагинации:
   // страница кончилась публикацией старше неё — следующую не просим. Верхняя (только у периода)
   // пагинацию не обрывает: свежее лежит в начале, сквозь него надо пройти.
@@ -79,12 +79,12 @@ export async function collectInstagramGraph(creator, { token = "", userId = "", 
     if (res.error) {
       if (withViews && looksLikeUnknownViewCount(res.error)) {
         // Эта версия API поля не знает — повторяем без него, просмотры останутся пустыми.
-        log?.("  Graph API не знает view_count — повтор без просмотров");
+        log?.("  Graph API does not know view_count — retrying without views");
         withViews = false;
         round--;
         continue;
       }
-      throw new Error(`Instagram: Graph API отказал (${res.error.code ?? "?"}): ${res.error.message}`);
+      throw new Error(`Instagram: Graph API refused (${res.error.code ?? "?"}): ${res.error.message}`);
     }
     head = head ?? res.bd;
     const media = res.bd.media ?? {};
@@ -130,7 +130,7 @@ export async function collectInstagramGraph(creator, { token = "", userId = "", 
     saves: null,
   }));
 
-  log?.(`  Instagram Graph: подписчиков ${profile.followers}, публикаций по профилю ${profile.videosCount}, собрано ${taken.length}${withViews ? "" : " (без просмотров)"}`);
-  if (since !== null || until !== null) log?.(`  за ${depthWord(depth)}: ${videos.length} из ${taken.length} пришедших`);
+  log?.(`  Instagram Graph: followers ${profile.followers}, posts on profile ${profile.videosCount}, collected ${taken.length}${withViews ? "" : " (no views)"}`);
+  if (since !== null || until !== null) log?.(`  for ${depthWord(depth)}: ${videos.length} of ${taken.length} received`);
   return { profile, videos };
 }

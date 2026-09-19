@@ -19,43 +19,43 @@ const at = (min, address) => ({ at: NOW - min * MIN, address });
 // Пул из домашнего адреса и одного прокси.
 const POOL = addressList(parseProxies("http://1.1.1.1:8080"), { home: true });
 
-test("запусков меньше лимита — идём сразу", () => {
+test("fewer launches than the limit — go right away", () => {
   assert.deepEqual(launchAllowed([], NOW, 6, WINDOW), { ok: true, waitMs: 0 });
   assert.deepEqual(launchAllowed(ago(1, 2, 3, 4, 5), NOW, 6, WINDOW), { ok: true, waitMs: 0 });
 });
 
-test("шесть запусков за 15 минут — ждём, пока истечёт самый старый", () => {
+test("six launches in 15 minutes — wait until the oldest expires", () => {
   const { ok, waitMs } = launchAllowed(ago(14, 12, 10, 8, 6, 4), NOW, 6, WINDOW);
   assert.equal(ok, false);
-  assert.equal(waitMs, 1 * MIN, "самой старой метке 14 минут — место освободится через минуту");
+  assert.equal(waitMs, 1 * MIN, "the oldest stamp is 14 minutes old — a slot frees up in a minute");
 });
 
-test("старые метки в счёт не идут вовсе", () => {
+test("old stamps do not count at all", () => {
   const { ok } = launchAllowed(ago(40, 30, 20, 16, 15.5, 3), NOW, 6, WINDOW);
-  assert.equal(ok, true, "свежая метка одна — окно почти пустое");
+  assert.equal(ok, true, "only one fresh stamp — the window is almost empty");
 });
 
-test("мусор в файле и метки из будущего расчёт не ломают", () => {
-  assert.deepEqual(launchAllowed([null, "вчера", NaN], NOW, 6, WINDOW), { ok: true, waitMs: 0 });
+test("garbage in the file and stamps from the future do not break the calculation", () => {
+  assert.deepEqual(launchAllowed([null, "yesterday", NaN], NOW, 6, WINDOW), { ok: true, waitMs: 0 });
   assert.deepEqual(launchAllowed([NOW + 5 * MIN], NOW, 1, WINDOW), { ok: true, waitMs: 0 });
 });
 
-test("лимит единица: ждём ровно окно с прошлого запуска", () => {
+test("limit of one: wait exactly one window since the previous launch", () => {
   const { ok, waitMs } = launchAllowed(ago(2), NOW, 1, WINDOW);
   assert.equal(ok, false);
   assert.equal(waitMs, 13 * MIN);
 });
 
-test("метки чужих адресов в счёт не идут: лимит у каждого свой", () => {
+test("stamps of other addresses do not count: each has its own limit", () => {
   const stamps = [at(1, 1), at(2, 1), at(3, 1), at(4, 1), at(5, 1), at(6, 1)];
-  assert.equal(launchAllowed(stamps, NOW, 6, WINDOW, 1).ok, false, "у прокси #1 окно занято");
-  assert.equal(launchAllowed(stamps, NOW, 6, WINDOW, 0).ok, true, "домашнего это не касается");
+  assert.equal(launchAllowed(stamps, NOW, 6, WINDOW, 1).ok, false, "proxy #1 has its window taken");
+  assert.equal(launchAllowed(stamps, NOW, 6, WINDOW, 0).ok, true, "this does not concern home");
 });
 
-test("старые записи без адреса считаются домашними", () => {
+test("old records without an address count as home", () => {
   const stamps = ago(14, 12, 10, 8, 6, 4);
-  assert.equal(launchAllowed(stamps, NOW, 6, WINDOW, 0).ok, false, "шесть прежних меток — это домашний адрес");
-  assert.equal(launchAllowed(stamps, NOW, 6, WINDOW, 1).ok, true, "прокси #1 к ним отношения не имеет");
+  assert.equal(launchAllowed(stamps, NOW, 6, WINDOW, 0).ok, false, "six previous stamps belong to the home address");
+  assert.equal(launchAllowed(stamps, NOW, 6, WINDOW, 1).ok, true, "proxy #1 has nothing to do with them");
   assert.deepEqual(readLaunchesOf([NOW - MIN]), [{ at: NOW - MIN, address: 0 }]);
 });
 
@@ -71,21 +71,21 @@ function readLaunchesOf(raw) {
   }
 }
 
-test("свободное окно — метка ложится в файл с адресом, ждать не пришлось", async () => {
+test("free window — the stamp lands in the file with its address, no waiting", async () => {
   const dir = mkdtempSync(join(tmpdir(), "amestat-gate-"));
   const file = join(dir, "tiktok-launches.json");
   const stateFile = join(dir, "proxies-state.json");
   try {
     const res = await takeLaunchSlot({ limit: 2, windowMs: WINDOW, file, stateFile, now: () => NOW, sleepFn: async () => {} });
     assert.equal(res.waited, 0);
-    assert.equal(res.address.id, 0, "пула нет — идём с домашнего");
-    assert.deepEqual(readLaunches(file), [{ at: NOW, address: 0 }], "запуск отмечен");
+    assert.equal(res.address.id, 0, "no pool — we go from home");
+    assert.deepEqual(readLaunches(file), [{ at: NOW, address: 0 }], "the launch is stamped");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("окно занято — ждём, говорим об этом один раз и уходим, когда место освободилось", async () => {
+test("window taken — wait, say so once and leave when a slot frees up", async () => {
   const dir = mkdtempSync(join(tmpdir(), "amestat-gate-"));
   const file = join(dir, "tiktok-launches.json");
   const stateFile = join(dir, "proxies-state.json");
@@ -103,18 +103,18 @@ test("окно занято — ждём, говорим об этом один 
       sleepFn: async (ms) => { clock += ms; },
       onWait: (until) => waits.push(until.getTime()),
     });
-    assert.equal(waits.length, 1, "об ожидании говорим один раз, а не на каждый круг");
-    assert.equal(waits[0], NOW + 1 * MIN, "самой старой метке 14 минут");
-    assert.ok(res.waited >= MIN, `прождали ${res.waited} мс`);
+    assert.equal(waits.length, 1, "we announce the wait once, not on every round");
+    assert.equal(waits[0], NOW + 1 * MIN, "the oldest stamp is 14 minutes old");
+    assert.ok(res.waited >= MIN, `waited ${res.waited} ms`);
     const stamps = readLaunches(file);
-    assert.equal(stamps.length, 2, "метка старше окна вычищена, новая записана");
+    assert.equal(stamps.length, 2, "the stamp older than the window is cleaned out, a new one written");
     assert.equal(stamps.at(-1).at, clock);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("два адреса: занятый домашний не держит обход — идём с прокси", async () => {
+test("two addresses: a busy home does not hold up the run — we go via the proxy", async () => {
   const dir = mkdtempSync(join(tmpdir(), "amestat-gate-"));
   const file = join(dir, "tiktok-launches.json");
   const stateFile = join(dir, "proxies-state.json");
@@ -125,18 +125,18 @@ test("два адреса: занятый домашний не держит о�
       limit: 2, windowMs: WINDOW, addresses: POOL, file, stateFile,
       now: () => NOW, sleepFn: async () => {}, onWait: (until) => waits.push(until),
     });
-    assert.equal(res.waited, 0, "ждать не пришлось вовсе");
+    assert.equal(res.waited, 0, "no waiting at all");
     assert.equal(waits.length, 0);
     assert.equal(res.address.id, 1);
-    assert.equal(res.address.label, "прокси #1 1.1.1.1:8080");
+    assert.equal(res.address.label, "proxy #1 1.1.1.1:8080");
     assert.deepEqual(readLaunches(file).at(-1), { at: NOW, address: 1 });
-    assert.equal(readProxyState(stateFile).cursor, 0, "круг провернулся: следующим снова домашний");
+    assert.equal(readProxyState(stateFile).cursor, 0, "the rotation advanced: home is next again");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("адрес в паузе не берётся, а когда все заняты — ждём ближайшего", async () => {
+test("a paused address is not taken, and when all are busy we wait for the nearest", async () => {
   const dir = mkdtempSync(join(tmpdir(), "amestat-gate-"));
   const file = join(dir, "tiktok-launches.json");
   const stateFile = join(dir, "proxies-state.json");
@@ -152,15 +152,15 @@ test("адрес в паузе не берётся, а когда все зан�
       onWait: (until, ms, info) => waits.push({ until: until.getTime(), ms, info }),
     });
     assert.equal(waits.length, 1);
-    assert.equal(waits[0].until, NOW + MIN, "домашний освободится через минуту — он ближе паузы прокси");
-    assert.equal(waits[0].info.addresses, 2, "строка лога должна знать, что адресов больше одного");
+    assert.equal(waits[0].until, NOW + MIN, "home frees up in a minute — sooner than the proxy pause");
+    assert.equal(waits[0].info.addresses, 2, "the log line must know there is more than one address");
     assert.equal(res.address.id, 0);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("исключили все адреса — второй попытки не будет", async () => {
+test("all addresses excluded — there will be no second attempt", async () => {
   const dir = mkdtempSync(join(tmpdir(), "amestat-gate-"));
   const file = join(dir, "tiktok-launches.json");
   const stateFile = join(dir, "proxies-state.json");
@@ -171,19 +171,19 @@ test("исключили все адреса — второй попытки н�
     });
     assert.equal(res.address, null);
     assert.equal(res.waited, 0);
-    assert.deepEqual(readLaunches(file), [], "холостой заход метку не пишет");
+    assert.deepEqual(readLaunches(file), [], "an idle pass writes no stamp");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("испорченный файл отметок — как будто запусков не было", () => {
+test("a corrupted stamp file reads as if there were no launches", () => {
   const dir = mkdtempSync(join(tmpdir(), "amestat-gate-"));
   const file = join(dir, "tiktok-launches.json");
-  writeFileSync(file, "{не json", "utf8");
+  writeFileSync(file, "{not json", "utf8");
   try {
     assert.deepEqual(readLaunches(file), []);
-    assert.equal(readFileSync(file, "utf8"), "{не json", "чтение файл не трогает");
+    assert.equal(readFileSync(file, "utf8"), "{not json", "reading does not touch the file");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

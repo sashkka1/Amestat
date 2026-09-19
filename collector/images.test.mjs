@@ -8,19 +8,19 @@ import { avatarPath, coverPath, publicUrl, isOurs } from "./images.mjs";
 const BASE = "https://proba.supabase.co";
 const CREATOR = "25140778-7dea-4380-a5c9-7f7148e871ef";
 
-test("пути в бакете: аватар у креатора один, обложка — по id видео", () => {
+test("bucket paths: one avatar per creator, cover keyed by video id", () => {
   assert.equal(avatarPath(CREATOR), `instagram/${CREATOR}/avatar.jpg`);
   assert.equal(coverPath(CREATOR, "3712345678901234567"), `instagram/${CREATOR}/3712345678901234567.jpg`);
 });
 
-test("публичный адрес складывается из адреса проекта и пути", () => {
+test("public URL is the project URL plus the path", () => {
   assert.equal(
     publicUrl(avatarPath(CREATOR), BASE),
     `${BASE}/storage/v1/object/public/avatars/instagram/${CREATOR}/avatar.jpg`,
   );
 });
 
-test("isOurs: наш адрес — да, Instagram и пустое — нет", () => {
+test("isOurs: our URL yes, Instagram and empty no", () => {
   assert.equal(isOurs(publicUrl(avatarPath(CREATOR), BASE), BASE), true);
   assert.equal(isOurs("https://instagram.fhel1-1.fna.fbcdn.net/v/t51.jpg?stp=x&oh=y", BASE), false);
   assert.equal(isOurs("https://scontent-hel3-1.cdninstagram.com/v/t51.jpg", BASE), false);
