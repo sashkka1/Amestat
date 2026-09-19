@@ -624,7 +624,7 @@ export const en = {
     stateFinal: "Ready to pay",
     statePending: "In window",
     stateNoData: "No payout",
-    stateNoDataHint: "The video was first seen long after the window closed, so there is no way to know its views at the mark — nothing to pay for",
+    stateNoDataHint: "The video was first seen more than an hour after its window closed, so its views at the mark are unknown — nothing to pay for",
     stateGone: "Deleted",
     stateGoneHint: "The video looks deleted from the platform — the amount is shown, but not paid",
     statePaid: "Paid",

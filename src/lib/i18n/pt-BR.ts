@@ -604,7 +604,7 @@ export const ptBR: Dict = {
     stateFinal: "Pronto para pagar",
     statePending: "Na janela",
     stateNoData: "Sem pagamento",
-    stateNoDataHint: "O vídeo só foi visto muito depois de a janela fechar, então não há como saber as visualizações na marca — não há o que pagar",
+    stateNoDataHint: "O vídeo só foi visto mais de uma hora depois de a janela fechar, então as visualizações na marca são desconhecidas — não há o que pagar",
     stateGone: "Excluído",
     stateGoneHint: "O vídeo parece excluído da plataforma — o valor aparece, mas não é pago",
     statePaid: "Pago",
