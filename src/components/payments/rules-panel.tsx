@@ -11,6 +11,7 @@ import { DEFAULT_RULES, fmtMoney } from "@/lib/payment";
 import { fmtNum } from "@/lib/format";
 import { useT, type TKey } from "@/lib/i18n";
 import type { PaymentRules, PaymentRulesUpdate } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 // Ставки одного креатора. Общих на весь сайт нет: у каждого своя строка (владелец,
 // 2026-09-19: «все личные у каждого креатора… в случае чего я поменяю»). Кнопка «Reset»
@@ -33,9 +34,10 @@ const FIELDS: Field[] = [
   { key: "videos_threshold", label: "payments.threshold", hint: "payments.thresholdHint", kind: "count" },
 ];
 
-type Draft = Record<keyof typeof DEFAULT_RULES, string>;
+export type RulesDraft = Record<keyof typeof DEFAULT_RULES, string>;
+type Draft = RulesDraft;
 
-function draftOf(rules: PaymentRules): Draft {
+export function draftOf(rules: PaymentRules): Draft {
   return {
     base: String(rules.base),
     bonus: String(rules.bonus),
@@ -47,7 +49,7 @@ function draftOf(rules: PaymentRules): Draft {
   };
 }
 
-function defaultsDraft(): Draft {
+export function defaultsDraft(): Draft {
   return {
     base: String(DEFAULT_RULES.base),
     bonus: String(DEFAULT_RULES.bonus),
@@ -67,7 +69,7 @@ function num(text: string): number | null {
 
 // Проверка ровно та же, что стоит ограничением `payment_rules_sane` в базе: отказ от базы
 // приходит без внятного текста, и ловить такое лучше на экране.
-function parse(draft: Draft): PaymentRulesUpdate | null {
+export function parseRules(draft: Draft): PaymentRulesUpdate | null {
   const base = num(draft.base);
   const bonus = num(draft.bonus);
   const minViews = num(draft.min_bonus_views);
@@ -110,7 +112,7 @@ export function RulesPanel({
   }
 
   async function save() {
-    const values = parse(draft);
+    const values = parseRules(draft);
     if (!values) {
       toast.error(t("payments.badNumbers"));
       return;
@@ -127,20 +129,6 @@ export function RulesPanel({
       onSaved();
     } finally {
       setBusy(false);
-    }
-  }
-
-  function shown(field: Field): string {
-    const value = rules[field.key];
-    switch (field.kind) {
-      case "money":
-        return fmtMoney(value);
-      case "views":
-        return fmtNum(value);
-      case "hours":
-        return t("payments.hours", { n: value });
-      default:
-        return fmtNum(value);
     }
   }
 
@@ -167,27 +155,68 @@ export function RulesPanel({
           </Button>
         )}
       </PanelHead>
-      <dl className="flex flex-col gap-2 border-t px-4 py-3">
-        {FIELDS.map((field) => (
-          <div key={field.key} className="flex items-baseline justify-between gap-3">
-            <div className="min-w-0">
-              <dt className="text-sm">{t(field.label)}</dt>
-              <dd className="text-xs text-muted-foreground">{t(field.hint)}</dd>
-            </div>
-            {editing ? (
-              <Input
-                value={draft[field.key]}
-                inputMode="decimal"
-                onChange={(e) => setDraft((d) => ({ ...d, [field.key]: e.target.value }))}
-                className="h-8 w-28 text-right tabular-nums"
-                aria-label={t(field.label)}
-              />
-            ) : (
-              <span className="shrink-0 text-sm font-medium tabular-nums">{shown(field)}</span>
-            )}
-          </div>
-        ))}
-      </dl>
+      <RulesFields
+        rules={rules}
+        draft={editing ? draft : undefined}
+        onChange={setDraft}
+        className="border-t px-4 py-3"
+      />
     </Panel>
+  );
+}
+
+// Семь ставок строками: слева название с подсказкой, справа значение или поле ввода. Один
+// компонент на две стороны — панель креатора на «Payments» и окно создания креатора (владелец,
+// 2026-09-19: «в менюшке создания тоже должен быть блок с этими параметрами, предзаполненный
+// нашими системными, но который можно изменить»). Вторая копия списка полей разошлась бы с
+// первой при первой же новой ставке.
+// `draft` передан — строки редактируются; нет — показываются значения из `rules`.
+export function RulesFields({
+  rules,
+  draft,
+  onChange,
+  className,
+}: {
+  rules?: PaymentRules;
+  draft?: RulesDraft;
+  onChange?: (next: RulesDraft) => void;
+  className?: string;
+}) {
+  const t = useT();
+
+  function shown(field: Field): string {
+    const value = rules ? rules[field.key] : DEFAULT_RULES[field.key];
+    switch (field.kind) {
+      case "money":
+        return fmtMoney(value);
+      case "hours":
+        return t("payments.hours", { n: value });
+      default:
+        return fmtNum(value);
+    }
+  }
+
+  return (
+    <dl className={cn("flex flex-col gap-2", className)}>
+      {FIELDS.map((field) => (
+        <div key={field.key} className="flex items-baseline justify-between gap-3">
+          <div className="min-w-0">
+            <dt className="text-sm">{t(field.label)}</dt>
+            <dd className="text-xs text-muted-foreground">{t(field.hint)}</dd>
+          </div>
+          {draft && onChange ? (
+            <Input
+              value={draft[field.key]}
+              inputMode="decimal"
+              onChange={(e) => onChange({ ...draft, [field.key]: e.target.value })}
+              className="h-8 w-28 shrink-0 text-right tabular-nums"
+              aria-label={t(field.label)}
+            />
+          ) : (
+            <span className="shrink-0 text-sm font-medium tabular-nums">{shown(field)}</span>
+          )}
+        </div>
+      ))}
+    </dl>
   );
 }

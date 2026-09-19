@@ -13,7 +13,6 @@ import { AuthGate } from "@/components/auth-gate";
 import { Avatar } from "@/components/avatar";
 import { CreatorLabel } from "@/components/creator-label";
 import { GONE_IMAGE_CLASS } from "@/components/gone-mark";
-import { LocalTime } from "@/components/local-time";
 import { Page, PageError, PageSkeleton } from "@/components/page";
 import { Panel, PanelHead, Empty } from "@/components/stats/panel";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -40,9 +39,10 @@ import { cn } from "@/lib/utils";
 // Числа берутся из `payment_stats` (миграция v37), а деньги считает `lib/payment.ts` — одна
 // формула на весь сайт.
 
-// Граница двух половин таблицы: слева начисления, справа деньги. Одна константа на шапку и
-// на строки — разъехаться им нельзя.
-const GROUP_EDGE = "border-l pl-5";
+// Отступ между двумя половинами таблицы: слева начисления, справа деньги. Черты нет
+// (владелец, 2026-09-19: «вертикальную линию правее Extra убери») — половины разделяет только
+// воздух. Одна константа на шапку и на строки — разъехаться им нельзя.
+const GROUP_EDGE = "pl-8";
 
 type Data = {
   creators: Creator[];
@@ -153,9 +153,10 @@ function PaymentsScreen() {
               <Table className="border-t">
                 <TableHeader>
                   <TableRow>
-                    {/* Две половины таблицы, разделённые чертой (владелец, 2026-09-19):
-                        слева — за что начислено, справа — деньги. Черту рисует GROUP_EDGE
-                        на первой колонке правой половины; она же стоит в строках. */}
+                    {/* Две половины таблицы (владелец, 2026-09-19): слева — за что
+                        начислено, справа — деньги. Отступ даёт GROUP_EDGE на первой колонке
+                        правой половины; он же стоит в строках. Даты последней выплаты нет —
+                        владелец убрал колонку, история выплат живёт в попапе. */}
                     <TableHead>{t("payments.colCreator")}</TableHead>
                     <TableHead className="text-right">{t("payments.colVideos")}</TableHead>
                     <TableHead className="text-right">{t("payments.colBase")}</TableHead>
@@ -164,7 +165,6 @@ function PaymentsScreen() {
                     <TableHead className={cn("text-right", GROUP_EDGE)}>{t("payments.colDue")}</TableHead>
                     <TableHead className="text-right">{t("payments.colPending")}</TableHead>
                     <TableHead className="text-right">{t("payments.colPaid")}</TableHead>
-                    <TableHead>{t("payments.colLastPaid")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -263,9 +263,6 @@ function CreatorRow({
       </TableCell>
       <TableCell className="text-right tabular-nums text-muted-foreground">
         {fmtMoney(money.paidTotal)}
-      </TableCell>
-      <TableCell className="whitespace-nowrap text-muted-foreground">
-        {money.lastPaidAt ? <LocalTime iso={money.lastPaidAt} mode="date" /> : t("payments.never")}
       </TableCell>
     </TableRow>
   );

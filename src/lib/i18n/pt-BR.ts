@@ -251,6 +251,8 @@ export const ptBR: Dict = {
   },
 
   addCreator: {
+    rulesHint: "Preenchida com os padrões do sistema — altere se este criador for pago de outro jeito",
+    rulesFailed: "O criador foi adicionado, mas a estrutura de pagamento não foi salva — ficou no padrão, altere em Pagamentos. {message}",
     button: "Adicionar manualmente",
     title: "Novo criador",
     description:
@@ -566,8 +568,6 @@ export const ptBR: Dict = {
     colPaid: "Pago",
     colPending: "Em espera",
     colDue: "A pagar",
-    colLastPaid: "Último pagamento",
-    never: "nunca",
     empty: "Ainda não há criadores.",
     gateClosed: "Os pagamentos começam com {n} vídeos publicados",
     structure: "Estrutura de pagamento",

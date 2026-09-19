@@ -131,7 +131,6 @@ export type CreatorMoney = {
   pendingTotal: number;
   // Заработано за всё время: выплаченное плюс то, что ещё должны.
   earnedTotal: number;
-  lastPaidAt: string | null;
 };
 
 // Один креатор: его видео, его ставки, его выплаты.
@@ -184,11 +183,6 @@ export function creatorMoney(
   const due = cents(gateOpen ? payableTotal + carry : carry);
   const pendingTotal = cents(gateOpen ? pendingOwn : pendingOwn + payableTotal);
 
-  const lastPaidAt = payments.reduce<string | null>(
-    (last, p) => (last === null || p.paid_at > last ? p.paid_at : last),
-    null,
-  );
-
   return {
     creatorId,
     rules: r,
@@ -207,7 +201,6 @@ export function creatorMoney(
     due,
     pendingTotal,
     earnedTotal: cents(paidTotal + due + pendingTotal),
-    lastPaidAt,
   };
 }
 

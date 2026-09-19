@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { BanknoteIcon, ClockIcon, VideoIcon, WalletIcon } from "lucide-react";
 import { Avatar } from "@/components/avatar";
 import { CreatorLabel } from "@/components/creator-label";
@@ -83,7 +84,12 @@ export function CreatorPaymentSheet({
               {/* Кнопка выплаты стоит здесь же, в правом нижнем углу блока с иконкой
                   (владелец, 2026-09-19), а не отдельной строкой над таблицей видео. */}
               <div className="flex items-end justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-3">
+                {/* Иконка и имя ведут на карточку креатора у нас на сайте (владелец,
+                    2026-09-19) — тем же адресом, что и в остальных списках. */}
+                <Link
+                  href={`/creator/?id=${creator.id}`}
+                  className="flex min-w-0 items-center gap-3 rounded-md hover:underline"
+                >
                   <Avatar
                     src={creator.avatar_url}
                     name={name}
@@ -96,7 +102,7 @@ export function CreatorPaymentSheet({
                     handle={creator.handle}
                     className="text-base font-semibold"
                   />
-                </div>
+                </Link>
                 <Button
                   size="sm"
                   onClick={() => setPaying(true)}

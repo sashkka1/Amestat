@@ -18,7 +18,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { PlatformIcon } from "@/components/platform";
+import { RulesFields, defaultsDraft, parseRules, type RulesDraft } from "@/components/payments/rules-panel";
 import { createCreator, setCreatorAvatar } from "@/lib/api/creators";
+import { savePaymentRules } from "@/lib/api/payments";
 import { uploadAvatar } from "@/lib/avatar-upload";
 import { parseHandle } from "@/lib/handle";
 import { useT, type TKey } from "@/lib/i18n";
@@ -45,6 +47,10 @@ export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
   const [description, setDescription] = useState("");
   const [allOurs, setAllOurs] = useState(true);
   const [file, setFile] = useState<File | null>(null);
+  // Ставки оплаты — сразу при заведении (владелец, 2026-09-19: «в менюшке создания тоже должен
+  // быть блок с этими параметрами, предзаполненный нашими системными, но который можно
+  // изменить»). Окно открывается только у админа — ставки менеджеру и не показываются.
+  const [rules, setRules] = useState<RulesDraft>(defaultsDraft);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -64,6 +70,7 @@ export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
     setDescription("");
     setAllOurs(true);
     setFile(null);
+    setRules(defaultsDraft());
     setError(null);
   }
 
@@ -72,6 +79,12 @@ export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
     setError(null);
     if (!parsed) {
       setError(t("api.creatorParseError"));
+      return;
+    }
+    // Ставки проверяются ДО заведения: иначе креатор появился бы, а его ставки — нет.
+    const ruleValues = parseRules(rules);
+    if (!ruleValues) {
+      setError(t("payments.badNumbers"));
       return;
     }
     setBusy(true);
@@ -88,6 +101,13 @@ export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
         return;
       }
       const id = created.data.id;
+
+      // Строку ставок с умолчаниями база уже завела триггером (миграция v37) — здесь в неё
+      // ложатся значения из окна. Пишутся всегда, даже нетронутые: что владелец видел в окне,
+      // то и хранится, даже если умолчания в базе когда-нибудь разойдутся с сайтовыми.
+      // Не записались — креатор всё равно заведён, ставки у него системные; говорим об этом.
+      const saved = await savePaymentRules(id, ruleValues);
+      if (!saved.ok) toast.error(t("addCreator.rulesFailed", { message: saved.error }));
 
       if (file) {
         const up = await uploadAvatar(id, file);
@@ -125,7 +145,7 @@ export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
           {t("addCreator.button")}
         </Button>
       </DialogTrigger>
-      {/* Семь полей не влезают в низкое окно: диалог не выше экрана, внутри прокрутка. */}
+      {/* Полей много, а со ставками — тем более: диалог не выше экрана, внутри прокрутка. */}
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
         <form onSubmit={submit} className="flex flex-col gap-4">
           <DialogHeader>
@@ -206,6 +226,15 @@ export function AddCreatorDialog({ onAdded }: { onAdded: () => void }) {
               </Label>
               <p className="text-xs text-muted-foreground">{t("addCreator.allOursHint")}</p>
             </div>
+          </div>
+
+          {/* Ставки оплаты: предзаполнены системными, правятся здесь же. */}
+          <div className="flex flex-col gap-2 rounded-lg border p-3">
+            <div>
+              <p className="text-sm font-medium">{t("payments.structure")}</p>
+              <p className="text-xs text-muted-foreground">{t("addCreator.rulesHint")}</p>
+            </div>
+            <RulesFields draft={rules} onChange={setRules} />
           </div>
 
           <div className="flex flex-col gap-1.5">

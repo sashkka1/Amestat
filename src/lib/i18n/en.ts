@@ -265,6 +265,8 @@ export const en = {
   },
 
   addCreator: {
+    rulesHint: "Pre-filled with the system defaults — change them if this creator is paid differently",
+    rulesFailed: "The creator is added, but the payment structure was not saved — it stays at the defaults, change it on Payments. {message}",
     button: "Add manually",
     title: "New creator",
     description:
@@ -586,8 +588,6 @@ export const en = {
     colPaid: "Paid",
     colPending: "Pending",
     colDue: "To pay",
-    colLastPaid: "Last payment",
-    never: "never",
     empty: "No creators yet.",
     gateClosed: "Payouts start at {n} published videos",
     structure: "Payment structure",
