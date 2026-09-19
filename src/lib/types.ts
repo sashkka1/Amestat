@@ -502,6 +502,80 @@ export type CreatorOverview = {
   median_views_delta: number | null;
 };
 
+// ---------------------------------------------------------------------------------------
+// Оплата креаторам (миграция v37)
+// ---------------------------------------------------------------------------------------
+
+// Ставки одного креатора. Общих на весь сайт нет: у каждого своя строка, заведённая
+// значениями по умолчанию (владелец, 2026-09-19). Деньги в базе — `numeric(12,2)`; PostgREST
+// отдаёт их обычными числами JSON, поэтому разбирать на стороне сайта нечего.
+export type PaymentRules = {
+  creator_id: string;
+  base: number;
+  bonus: number;
+  min_bonus_views: number;
+  max_bonus_views: number;
+  extra_bonus: number;
+  window_hours: number;
+  videos_threshold: number;
+  updated_at: string;
+  updated_by: string | null;
+};
+
+export type PaymentRulesUpdate = Partial<Omit<PaymentRules, "creator_id" | "updated_at" | "updated_by">>;
+
+// Записанная выплата. `amount` — сколько владелец заплатил на самом деле, `covered_total` —
+// на сколько было закрыто видео в тот момент: разница между ними остаётся в балансе долга.
+export type Payment = {
+  id: number;
+  creator_id: string;
+  paid_at: string;
+  amount: number;
+  covered_total: number;
+  doc_path: string;
+  doc_name: string;
+  note: string;
+  created_by: string | null;
+  created_by_login: string;
+  created_at: string;
+};
+
+// Суммы видео, замороженные платежом. Их не пересчитывают: ставку креатора можно поменять
+// задним числом, и без заморозки уже оплаченное молча подорожало бы.
+export type PaymentVideo = {
+  payment_id: number;
+  video_id: string;
+  base: number;
+  bonus: number;
+  extra: number;
+  total: number;
+  views: number | null;
+};
+
+// Результат RPC payment_stats (миграция v37): наше видео с просмотрами на отметке окна.
+//
+// `views_window` / `window_at` — первый снимок НА отметке «публикация + окно» или после неё
+// (владелец, 2026-09-19); null — обхода после отметки ещё не было, сумма не окончательная.
+// `has_early` — был ли снимок внутри окна. false значит «видео не сняли вовремя»: в деньги
+// оно не идёт вовсе, но в порог `videos_threshold` входит.
+export type PaymentStat = {
+  video_id: string;
+  creator_id: string;
+  published_at: string;
+  caption: string;
+  cover_url: string | null;
+  url: string;
+  gone_at: string | null;
+  window_hours: number;
+  mark_at: string;
+  views_window: number | null;
+  window_at: string | null;
+  has_early: boolean;
+  views_now: number | null;
+  now_at: string | null;
+  payment_id: number | null;
+};
+
 type Relationships = [];
 
 // Схема в форме, которую понимает supabase-js: типизированные запросы и RPC.
@@ -532,6 +606,16 @@ export type Database = {
         Update: never;
         Relationships: Relationships;
       };
+      // Оплата (миграция v37). Ставки правятся с сайта, выплаты пишет только
+      // `record_payment` — поэтому Insert у них закрыт.
+      payment_rules: {
+        Row: PaymentRules;
+        Insert: never;
+        Update: PaymentRulesUpdate;
+        Relationships: Relationships;
+      };
+      payments: { Row: Payment; Insert: never; Update: never; Relationships: Relationships };
+      payment_videos: { Row: PaymentVideo; Insert: never; Update: never; Relationships: Relationships };
     };
     Views: {
       creator_latest: { Row: CreatorLatest; Relationships: Relationships };
@@ -651,6 +735,23 @@ export type Database = {
       login_taken: {
         Args: { p_login: string };
         Returns: boolean;
+      };
+      // Оплата (миграция v37): числа для расчёта и запись выплаты.
+      payment_stats: {
+        Args: { p_creator?: string | null; p_limit?: number };
+        Returns: PaymentStat[];
+      };
+      record_payment: {
+        Args: {
+          p_creator: string;
+          p_amount: number;
+          p_doc_path: string;
+          p_doc_name: string;
+          p_note: string;
+          // [{ video_id, base, bonus, extra, total, views }] — суммы, замороженные платежом.
+          p_videos: unknown;
+        };
+        Returns: number;
       };
     };
     Enums: Record<never, never>;

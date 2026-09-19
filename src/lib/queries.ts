@@ -10,6 +10,10 @@ import type {
   CreatorTag,
   CrossStats,
   DailyViews,
+  Payment,
+  PaymentRules,
+  PaymentStat,
+  PaymentVideo,
   Platform,
   Tag,
   VideoComment,
@@ -312,6 +316,43 @@ export async function videoCommentsSyncedAt(videoId: string): Promise<string | n
     .maybeSingle();
   fail(error);
   return data?.comments_synced_at ?? null;
+}
+
+// ---------------------------------------------------------------------------------------
+// Оплата (миграция v37). Всё это видит только администратор — RLS отдаёт остальным пустоту.
+// ---------------------------------------------------------------------------------------
+
+// Просмотры на отметке окна по каждому нашему видео. Срока у вкладки «Payment» нет: долг
+// считается за всё время, а не за выбранный период.
+export async function paymentStats(creatorId: string | null = null): Promise<PaymentStat[]> {
+  const { data, error } = await createClient().rpc("payment_stats", {
+    p_creator: creatorId,
+    p_limit: VIDEO_LIMIT,
+  });
+  fail(error);
+  return data ?? [];
+}
+
+export async function listPaymentRules(): Promise<PaymentRules[]> {
+  const { data, error } = await createClient().from("payment_rules").select("*");
+  fail(error);
+  return data ?? [];
+}
+
+export async function listPayments(): Promise<Payment[]> {
+  const { data, error } = await createClient()
+    .from("payments")
+    .select("*")
+    .order("paid_at", { ascending: false });
+  fail(error);
+  return data ?? [];
+}
+
+// Какие видео закрыл каждый платёж и почём — история «за что» в попапе креатора.
+export async function listPaymentVideos(): Promise<PaymentVideo[]> {
+  const { data, error } = await createClient().from("payment_videos").select("*").limit(PAGE);
+  fail(error);
+  return data ?? [];
 }
 
 export async function creatorsOverview(

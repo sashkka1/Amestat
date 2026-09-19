@@ -20,6 +20,9 @@ const ADMIN_NAV: { href: string; label: TKey }[] = [
   { href: "/creators/", label: "nav.creators" },
   { href: "/managers/", label: "nav.managers" },
   { href: "/archive/", label: "nav.archive" },
+  // Оплата — только у админа (владелец, 2026-09-19: «сразу протестим сами, а потом дадим
+  // доступ менеджеру»). Менеджерам вкладки нет вовсе, и база им её данных не отдаёт.
+  { href: "/payments/", label: "nav.payments" },
 ];
 
 const MANAGER_NAV: { href: string; label: TKey }[] = [{ href: "/creators/", label: "nav.creators" }];
