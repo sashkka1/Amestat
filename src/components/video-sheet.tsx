@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { createPortal } from "react-dom";
 import Link from "next/link";
 import { XIcon } from "lucide-react";
 import { CreatorLabel } from "@/components/creator-label";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { VideoPanel, activeRows, panelMedians, type MetricKey } from "@/components/creator/video-panel";
 import type { OursMark } from "@/components/creator/video-comments";
@@ -21,12 +21,10 @@ import type { VideoState } from "@/lib/video-state";
 // Видео в выдвижной шторке справа — на ВСЕХ страницах (владелец, 2026-09-12: «видео всегда
 // открывается шторкой справа»). Содержимое — тот же `VideoPanel`: разъехаться им нечем.
 //
-// 🔴 Шторка — простая панель в портале, а НЕ `Dialog` радикса (владелец, 2026-09-29: в
-// шторке не переводился выделенный комментарий). Модальный Dialog, пока открыт, вешает
-// `aria-hidden` на всю остальную страницу, `pointer-events: none` на body, запирает фокус
-// в себе и закрывается от нажатия на любой чужой элемент — значок переводчика рядом с
-// выделением от этого не работает. Здесь из поведения Dialog оставлено только нужное:
-// затемнение (клик по нему закрывает), Escape и запрет прокрутки страницы под шторкой.
+// ⚠️ Sheet в `components/ui/` нет, поэтому шторка — это `Dialog` радикса, поставленный на
+// правый край во всю высоту. Появится настоящий Sheet — меняется только эта обёртка.
+// Dialog там немодальный, чтобы в шторке работал переводчик выделенного текста — почему,
+// сказано в `ui/dialog.tsx`.
 //
 // Данные читаются лениво, при открытии: дашборд про креатора этого видео не знает ничего,
 // кроме id, а звать `video_stats_between` на всех подряд ради панели, которую могут и не
@@ -132,32 +130,6 @@ export function VideoSheet({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, creatorId, scope]);
 
-  // Escape закрывает шторку, как закрывал Dialog. Слои радикса внутри (меню, выпадашки)
-  // гасят Escape у себя и помечают событие `defaultPrevented` — тогда шторка остаётся.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !e.defaultPrevented) onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  // Страница под шторкой не прокручивается, как было при Dialog. Место полосы прокрутки
-  // держим отступом, иначе страница под затемнением прыгнет вбок на её ширину.
-  useEffect(() => {
-    if (!open) return;
-    const body = document.body;
-    const gap = window.innerWidth - document.documentElement.clientWidth;
-    const before = { overflow: body.style.overflow, paddingRight: body.style.paddingRight };
-    body.style.overflow = "hidden";
-    if (gap > 0) body.style.paddingRight = `${gap}px`;
-    return () => {
-      body.style.overflow = before.overflow;
-      body.style.paddingRight = before.paddingRight;
-    };
-  }, [open]);
-
   // Свои строки хозяина или свои же прочитанные — одно и то же для всего, что ниже.
   const current: Loaded | null = useMemo(
     () => (rows ? { key: "own", rows } : key !== null && loaded?.key === key ? loaded : null),
@@ -178,72 +150,74 @@ export function VideoSheet({
     };
   }, [current, video, range]);
 
-  if (!open || !video || !creator) return null;
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
+      {open && video && creator && (
+        <DialogContent
+          showCloseButton={false}
+          aria-describedby={undefined}
+          /* Ширина: около половины широкого монитора, на узком — почти весь экран
+             (владелец, 2026-09-12). Оба ограничителя `max-w` из `DialogContent` сняты:
+             иначе `sm:max-w-sm` ужал бы шторку до 24rem на всём, что шире телефона. */
+          className="inset-y-0 right-0 left-auto top-0 flex h-full w-[min(48rem,92vw)] max-w-none flex-col translate-x-0 translate-y-0 gap-0 rounded-none rounded-l-xl p-0 data-open:slide-in-from-right data-closed:slide-out-to-right sm:max-w-none"
+        >
+          {/* Шапка шторки: чей ролик и куда идти за подробностями по креатору. */}
+          <div className="flex items-center justify-between gap-2 border-b px-4 py-3">
+            <DialogTitle asChild>
+              <Link
+                href={`/creator/?id=${creator.id}&video=${video.id}`}
+                className="min-w-0 hover:underline"
+                title={t("videoSheet.openCreator")}
+              >
+                <CreatorLabel
+                  platform={creator.platform}
+                  name={creator.display_name}
+                  handle={creator.handle}
+                />
+              </Link>
+            </DialogTitle>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={onClose}
+              title={t("common.close")}
+              aria-label={t("common.close")}
+            >
+              <XIcon />
+            </Button>
+          </div>
 
-  return createPortal(
-    <>
-      {/* Затемнение — то же, что у `DialogOverlay`; клик по нему закрывает шторку. */}
-      <div
-        className="fixed inset-0 isolate z-50 bg-black/10 supports-backdrop-filter:backdrop-blur-xs"
-        onClick={onClose}
-        aria-hidden="true"
-      />
-      <aside
-        aria-label={creator.display_name || creator.handle}
-        /* Ширина: около половины широкого монитора, на узком — почти весь экран
-           (владелец, 2026-09-12). */
-        className="fixed inset-y-0 right-0 z-50 flex h-full w-[min(48rem,92vw)] flex-col rounded-l-xl bg-popover text-sm text-popover-foreground ring-1 ring-foreground/10"
-      >
-        {/* Шапка шторки: чей ролик и куда идти за подробностями по креатору. */}
-        <div className="flex items-center justify-between gap-2 border-b px-4 py-3">
-          <Link
-            href={`/creator/?id=${creator.id}&video=${video.id}`}
-            className="min-w-0 font-heading text-base leading-none font-medium hover:underline"
-            title={t("videoSheet.openCreator")}
-          >
-            <CreatorLabel
-              platform={creator.platform}
-              name={creator.display_name}
-              handle={creator.handle}
-            />
-          </Link>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={onClose}
-            title={t("common.close")}
-            aria-label={t("common.close")}
-          >
-            <XIcon />
-          </Button>
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          {error ? (
-            <p className="text-sm text-destructive">{t("videoSheet.loadError", { error })}</p>
-          ) : shown ? (
-            <VideoPanel
-              plain
-              row={shown.row}
-              state={video.state}
-              onState={(next) => onState(video.id, next, video.state)}
-              medians={shown.missing ? NO_MEDIANS : shown.medians}
-              platform={creator.platform}
-              refreshKey={refreshKey}
-              note={shown.missing ? t("videoSheet.notInRange") : null}
-              cross={cross}
-              mark={mark}
-            />
-          ) : (
-            <div className="flex flex-col gap-4" aria-busy="true">
-              <Skeleton className="h-20 w-full" />
-              <Skeleton className="h-40 w-full" />
-              <Skeleton className="h-36 w-full" />
-            </div>
-          )}
-        </div>
-      </aside>
-    </>,
-    document.body,
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            {error ? (
+              <p className="text-sm text-destructive">{t("videoSheet.loadError", { error })}</p>
+            ) : shown ? (
+              <VideoPanel
+                plain
+                row={shown.row}
+                state={video.state}
+                onState={(next) => onState(video.id, next, video.state)}
+                medians={shown.missing ? NO_MEDIANS : shown.medians}
+                platform={creator.platform}
+                refreshKey={refreshKey}
+                note={shown.missing ? t("videoSheet.notInRange") : null}
+                cross={cross}
+                mark={mark}
+              />
+            ) : (
+              <div className="flex flex-col gap-4" aria-busy="true">
+                <Skeleton className="h-20 w-full" />
+                <Skeleton className="h-40 w-full" />
+                <Skeleton className="h-36 w-full" />
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      )}
+    </Dialog>
   );
 }

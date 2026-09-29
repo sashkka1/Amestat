@@ -7,10 +7,18 @@ import { Dialog as DialogPrimitive } from "radix-ui"
 import { Button } from "@/components/ui/button"
 import { XIcon } from "lucide-react"
 
+// 🔴 Все окна сайта — НЕмодальный Dialog радикса (владелец, 2026-09-29: выделенный текст
+// должен переводиться везде, а в окнах значок переводчика у выделения не работал).
+// Модальный Dialog, пока открыт, вешает `aria-hidden` на всю остальную страницу,
+// `pointer-events: none` на body, запирает фокус и закрывается от нажатия на любой чужой
+// элемент — в том числе на значок переводчика. Что нужно от модального, сделано здесь же:
+// затемнение (нажатие на него закрывает), запрет прокрутки страницы под окном. Escape,
+// порядок слоёв и возврат фокуса радикс держит и без модальности.
 function Dialog({
+  modal = false,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Root>) {
-  return <DialogPrimitive.Root data-slot="dialog" {...props} />
+  return <DialogPrimitive.Root data-slot="dialog" modal={modal} {...props} />
 }
 
 function DialogTrigger({
@@ -31,13 +39,12 @@ function DialogClose({
   return <DialogPrimitive.Close data-slot="dialog-close" {...props} />
 }
 
-function DialogOverlay({
-  className,
-  ...props
-}: React.ComponentProps<typeof DialogPrimitive.Overlay>) {
+// Затемнение — свой div: `DialogPrimitive.Overlay` у немодального окна не рисуется вовсе.
+function DialogOverlay({ className, ...props }: React.ComponentProps<"div">) {
   return (
-    <DialogPrimitive.Overlay
+    <div
       data-slot="dialog-overlay"
+      aria-hidden="true"
       className={cn(
         "fixed inset-0 isolate z-50 bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
         className
@@ -47,17 +54,45 @@ function DialogOverlay({
   )
 }
 
+// Страница под окном не прокручивается, как было при модальном Dialog; место полосы
+// прокрутки держим отступом, иначе страница под затемнением прыгнет вбок. Счётчик — на
+// случай двух окон разом (попап креатора на Payments и окно выплаты поверх него).
+let scrollLocks = 0
+let scrollSaved = { overflow: "", paddingRight: "" }
+
+function ScrollLock() {
+  React.useEffect(() => {
+    const body = document.body
+    if (scrollLocks++ === 0) {
+      const gap = window.innerWidth - document.documentElement.clientWidth
+      scrollSaved = { overflow: body.style.overflow, paddingRight: body.style.paddingRight }
+      body.style.overflow = "hidden"
+      if (gap > 0) body.style.paddingRight = `${gap}px`
+    }
+    return () => {
+      if (--scrollLocks === 0) {
+        body.style.overflow = scrollSaved.overflow
+        body.style.paddingRight = scrollSaved.paddingRight
+      }
+    }
+  }, [])
+  return null
+}
+
 function DialogContent({
   className,
   children,
   showCloseButton = true,
+  onPointerDownOutside,
+  onFocusOutside,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
 }) {
+  const overlay = React.useRef<HTMLDivElement>(null)
   return (
     <DialogPortal>
-      <DialogOverlay />
+      <DialogOverlay ref={overlay} />
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
@@ -65,7 +100,21 @@ function DialogContent({
           className
         )}
         {...props}
+        /* Без `tabIndex`, который радикс ставит окну: иначе щелчок по тексту отдаёт фокус
+           самому окну, а не странице, как везде на сайте. */
+        tabIndex={undefined}
+        /* Закрывает окно только нажатие на его затемнение. Чужие элементы поверх
+           страницы (значок переводчика, тосты, окно выплаты над попапом) — не повод. */
+        onPointerDownOutside={(e) => {
+          onPointerDownOutside?.(e)
+          if (e.target !== overlay.current) e.preventDefault()
+        }}
+        onFocusOutside={(e) => {
+          onFocusOutside?.(e)
+          e.preventDefault()
+        }}
       >
+        <ScrollLock />
         {children}
         {showCloseButton && (
           <DialogPrimitive.Close data-slot="dialog-close" asChild>
